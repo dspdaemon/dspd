@@ -1,0 +1,10 @@
+MODULES
+=======
+mod_alsaudev:	 Udev hotplug support for alsa
+mod_ossdspioctl: /dev/dsp style ioctls for client stream
+mod_ossmixerioctl: /dev/mixer style ioctl
+mod_alsaioctl: alsa+sndio pcm ioctls
+mod_osscompat: use CUSE to implement oss ioctls
+mod_socksrv: socket server.  pass through various commands
+	     with remote bit set.
+

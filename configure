@@ -1,0 +1,427 @@
+#!/bin/bash
+#TODO: Add --disable-MODULENAME, --disable-modules, --enable-modules options
+#TODO: Add --enable-multilib and --disable-multilib.  Automatically
+#detect it by default.  Only supported in separate build directory.
+#Need to advertise this while configuring (detect it and show whether it
+#is possible then don't do it if not in a separate build directory.
+
+function print_help {
+    echo "  --enable-option=option     Enable an option
+  --disable-option=option    Disable an option
+  Supported options: 
+       sse3:  Use SSE3 instructions (not compatible with old systems)
+       speex: Speex samplerate conversion
+       libsamplerate: another samplerate converter
+       alsa: ALSA hardware support
+       udev: UDEV hotplugging support
+       socketserver: Unix domain socket server
+       oss: OSSv4 emulation.  Requires CUSE kernel module.
+
+"
+
+}
+
+function have_multilib {
+    echo '#include <stdio.h>' >"$TMPFILE"
+    echo 'int main(void){printf("TEST\n");return 0;}' >>"$TMPFILE"
+    if ! "$CC" -m32 -o /dev/null $TCFLAGS "$TMPFILE" 2>&4; then
+	return 1
+    fi
+    if ! "$CC" -m64 -o /dev/null $TCFLAGS "$TMPFILE" 2>&4; then
+	return 1
+    fi
+    return 0
+}
+
+function multilib_type {
+    if [ -d "$SYSROOT/lib32" ] && [ -d "$SYSROOT/lib64" ]; then
+	echo "unknown"
+    elif [ -d "$SYSROOT/lib64" ] && [ -d "$SYSROOT/lib" ]; then
+	echo "lib64"
+    elif [ -d "$SYSROOT/lib32" ] && [ -d "$SYSROOT/lib" ]; then
+	echo "lib32"
+    else
+	echo "unknown"
+    fi
+}
+
+
+
+function read_list {
+    cd "$2"
+    while read line; do
+	dn="$(dirname "$line")"
+	mkdir -p "$dn"
+	src="$1/$line"
+	if [ ! -d "$src" ]; then
+	    test -e "$line" || ln -s "$src" "$dn"
+	fi
+    done
+}
+
+function create_links {
+    cd "$1"
+    find . | grep -v '~$' | read_list "$1" "$2"
+    return 0
+}
+function printsrc {
+    for f in $@; do
+	echo "#include <$f>" 
+    done
+    echo 'int main(void){return 0; }'
+}
+function log {
+    if [ "$1" = "-n" ]; then
+	shift
+	echo -n $1
+    else
+	echo $1
+    fi
+    echo $1 >&4
+}
+function is_enabled {
+    local f
+    if [ $ENABLED_ALL -eq 1 ]; then
+	if is_disabled "$1"; then
+	    return 1
+	fi
+	return 0
+    fi
+    for f in ${ENABLED[@]}; do
+	if [ "$f" = "$1" ]; then
+	    return 0
+	fi
+    done
+    return 1
+}
+function is_disabled {
+    local f
+    if [ $DISABLED_ALL -eq 1 ]; then
+	if is_enabled2 "$1"; then
+	    return 1
+	fi
+	return 0
+    fi
+    
+    for f in ${DISABLED[@]}; do
+	if [ "$f" = "$1" ]; then
+	    return 0
+	fi
+    done
+    return 1
+}
+
+function is_enabled2 {
+    local f
+    for f in ${ENABLED[@]}; do
+	if [ "$f" = "$1" ]; then
+	    return 0
+	fi
+    done
+    return 1
+}
+
+function have_sse3 {
+    echo 'static inline long _float2int(double f)
+{  long i; __asm__ __volatile__ ( "fisttpl %0" : "=m" (i) : "t" (f) : "st" ); return i;}
+int main(void) { return _float2int(0.0); }' >"$TMPFILE" 
+    $CC -O0 "$TMPFILE" >&4 2>&1
+    if [ "$1" = "-t" ]; then
+	if ! ./a.out >/dev/null 2>&1; then
+	    return 1
+	else
+	    return 0
+	fi
+    fi
+    return $?
+}
+
+
+OWD="$PWD"
+MYDIR="$(dirname "$0")"
+cd "$MYDIR"
+MYDIR="$PWD"
+cd "$OWD"
+WORKDIR="$PWD"
+
+
+
+if [ "$WORKDIR" = "$MYDIR" ]; then
+    echo WARNING: Building from the source directory is not recommended.
+    echo Configure should be started from another working directory.
+    echo
+fi
+
+if [ "$1" == "--help" ]; then
+    print_help >&2
+    exit 0
+fi
+
+DISABLED_COUNT=0
+ENABLED_COUNT=0
+DISABLED_ALL=0
+ENABLED_ALL=1
+DEBUG=0
+SRCF=""
+SYSROOT=/
+LIBSUFFIX=""
+NOLIBSUFFIX=0
+PREFIX="/usr"
+for arg in $@; do
+    
+    if [ "${arg:0:10}" = "--disable-" ]; then
+	val="${arg:10}"
+	if [ "$val" = "all" ]; then
+	    DISABLED_ALL=1
+	    ENABLED_ALL=0
+	fi
+	DISABLED[$DISABLED_COUNT]="$val"
+	DISABLED_COUNT=$[$DISABLED_COUNT+1]
+    elif [ "${arg:0:9}" = "--enable-" ]; then
+	val="${arg:9}"
+	if [ "$val" = "all" ]; then
+	    ENABLED_ALL=1
+	    DISABLED_ALL=0
+	fi
+	ENABLED[$ENABLED_COUNT]="$val"
+	ENABLED_COUNT=$[$ENABLED_COUNT+1]
+    elif [ "$arg" = "--debug" ]; then
+	DEBUG=1
+    elif [ "${arg:15}" = "--with-sysroot=" ]; then
+	SYSROOT="${arg:15}"
+	SRCF="--sysroot=$SYSROOT -Wl,--sysroot=$SYSROOT"
+    elif [ "${arg:0:12}" = "--libsuffix=" ]; then
+	LIBSUFFIX="${arg:12}"
+    elif [ "${arg:0:15}" = "--no-libsuffix" ]; then
+	NOLIBSUFFIX=1
+    elif [ "${arg:0:9}" = "--prefix=" ]; then
+	PREFIX="${arg:9}"
+    fi
+done
+
+BUILDDIR=0
+if [ ! "$MYDIR" = "$PWD" ]; then
+    create_links "$MYDIR" "$WORKDIR" || exit 1
+    cd "$WORKDIR"
+    rm -f config.makefile 2>/dev/null
+    BUILDDIR=1
+fi
+
+cd "$WORKDIR"
+
+> config.makefile
+exec 3>config.makefile
+if [ $DEBUG -eq 1 ]; then
+    TCFLAGS="-Wall -O0 -ggdb -fPIC -L../lib -pthread $SRCF"
+else
+    TCFLAGS="-Wall -O2 -ggdb -fPIC -L../lib -pthread $SRCF"
+fi
+
+
+
+DEFAULT_CFLAGS='$(XCFLAGS) '"$TCFLAGS"
+TCFLAGS="$TCFLAGS $CFLAGS"
+
+
+if [ ! "$CC" = "" ]; then
+    echo "CC=$CC" >&3
+else
+    CC=cc
+fi
+
+
+
+
+LOGFILE="$WORKDIR/config.log"
+>"$LOGFILE"
+exec 4>"$LOGFILE"
+
+TMPFILE=/tmp/configure-$$.tmp.c
+if ! touch "$TMPFILE"; then
+    echo Could not create temporary file
+fi
+
+
+log -n "Checking for SSE3..."
+#Is SSE3 disabled?
+if is_disabled sse3; then
+    SSE3="no"
+#Is SSE3 available
+elif have_sse3; then
+#Does the compiler have it enabled by default
+    if $CC -dM -E $CFLAGS - < /dev/null | grep -q "__SSE3__"; then
+	SSE3="yes"
+#Does the user want SSE3?
+    elif is_enabled2 sse3; then
+	SSE3="yes"
+#Does this system support SSE3?
+    elif have_sse3 -t; then
+	SSE3="yes"
+    else
+	SSE3="no"
+    fi
+else
+    SSE3="no"
+fi
+log "$SSE3"
+if [ "$SSE3" = "yes" ]; then
+    TCFLAGS="$TCFLAGS -msse3"
+fi
+
+
+MODULES="none"
+
+if is_enabled socketserver; then
+    log -n "Checking for sockets..."
+    printsrc unistd.h sys/types.h sys/socket.h sys/un.h stdlib.h string.h sys/stat.h sys/types.h >"$TMPFILE"
+    if ! "$CC" $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="socketserver"
+    fi
+fi
+
+if is_enabled udev; then
+    log -n "Checking for udev..."
+    printsrc libudev.h >"$TMPFILE"
+    if ! "$CC" -ludev $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="$MODULES udev"
+    fi
+fi
+
+
+if is_enabled alsa; then
+    log -n "Checking for alsa..."
+    printsrc alsa/asoundlib.h >"$TMPFILE"
+    if ! $CC -lasound $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="$MODULES alsahw alsacfgfile"
+    fi
+fi
+
+if is_enabled libsamplerate; then
+    log -n "Checking for libsamplerate..."
+    printsrc samplerate.h >"$TMPFILE"
+    if ! $CC -lsamplerate $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="$MODULES libsamplerate"
+    fi
+fi
+
+if is_enabled speex; then
+    log -n "Checking for speex resampler..."
+    printsrc stdint.h speex/speex_resampler.h >"$TMPFILE"
+    if ! $CC -lspeexdsp $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="$MODULES speex"
+    fi
+fi
+
+if is_enabled oss; then
+    log -n "Checking for fuse headers for OSS emulation..."
+    printsrc linux/fuse.h fuse.h >"$TMPFILE"
+    if ! $CC $TCFLAGS -D_FILE_OFFSET_BITS=64 "$TMPFILE" -o /dev/null 2>&4; then
+	echo no
+    else
+	log yes
+	MODULES="$MODULES osscuse"
+    fi
+fi
+
+
+mtype="no"
+if is_enabled multilib; then
+    log -n "Checking for multilib..."
+    printsrc stdio.h >"$TMPFILE"
+    if ! have_multilib; then
+	echo no
+    else
+	if [ $BUILDDIR -eq 1 ]; then
+	    mtype=$(multilib_type)
+	    if [ "$mtype" = "unknown" ]; then
+		mtype="no"
+		log 'no (unknown type - not lib64 or lib32)'
+	    else
+		log "yes ($mtype)"
+		mkdir -p m32
+		create_links "$MYDIR" "$WORKDIR/m32"
+		cd "$WORKDIR/m32"
+		if [ "$mtype" = "lib32" ]; then
+		    args='--libsuffix=32'
+		else
+		    echo 'LIBSUFFIX=64' >&3
+		    LIBSUFFIX=64
+		    args=""
+		fi
+		echo 'M32DIR=m32' >&3
+		echo Configuring 32 bit libraries...
+		rm -f config.makefile 2>/dev/null
+		if [ "$SSE3" = "yes" ]; then
+		    args="$args --enable-sse3"
+		else
+		    args="$args --disable-sse3"
+		fi
+		env CFLAGS="$CFLAGS -m32" "$MYDIR/configure" --disable-all $args || exit 1
+		echo
+	    fi
+	else
+	    echo 'no (requires separate build directory)'
+	fi
+    fi
+fi
+if [ ! "$mtype" = "no" ]; then
+    echo 'INSTALL_TARGETS=install-lib install-bin install32' >&3
+fi
+
+
+
+LIBDIR="lib${LIBSUFFIX}"
+if [ "$mtype" = "no" ] && [ "$LIBSUFFIX" = "" ]; then
+    log -n "Checking for lib directory..."
+    if [ $NOLIBSUFFIX -eq 1 ]; then
+	LIBDIR="lib"
+    else
+	printsrc "stdio.h" >"$TMPFILE"
+	if "$CC" $TCFLAGS "$TMPFILE" -o /tmp/a.out.$$ 2>&4; then
+	    if ldd /tmp/a.out.$$ | tee /tmp/ldd.log | grep -q ' => /lib64/'; then
+		LIBDIR="lib64"
+		LIBSUFFIX="64"
+	    elif ldd /tmp/a.out.$$ | grep -q ' => /lib32/'; then
+		LIBDIR="lib32"
+		LIBSUFFIX="32"
+	    fi
+	fi
+    fi
+    log -n "$LIBDIR"
+fi
+if [ ! "$LIBSUFFIX" = "" ]; then
+    echo "LIBSUFFIX=$LIBSUFFIX" >&3
+fi
+
+echo "MODULES=$MODULES" >&3
+
+if [ ! "$PREFIX" = "" ]; then
+    echo "PREFIX=$PREFIX" >&3
+fi
+
+echo "CFLAGS=$TCFLAGS -DLIBSUFFIX=\\\"$LIBSUFFIX\\\"" >&3
+
+echo
+echo CONFIGURATION
+echo "MODULES:  $MODULES"
+echo "CFLAGS:   $TCFLAGS"
+echo "CC:       $CC"
+echo "MULTILIB: $mtype"
+echo "LIBDIR:   $LIBDIR"
+echo "PREFIX:   $PREFIX"
+echo "SSE3:     $SSE3"

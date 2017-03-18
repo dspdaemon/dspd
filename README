@@ -1,0 +1,59 @@
+This is just an experiment I mess around with in my spare time.  If anyone has a use for 
+it then go ahead and use it.  If not, then I don't give a shit so whatever.
+
+
+General Information
+===================
+DSPD is a sound daemon that tries to emulate one or more sound cards that support
+multiple streams.  It isn't really complete right now but it works well enough
+that I don't need dmix or anything like that anymore.
+
+So far it supports clients for OSSv4 and ALSA as clients.  ALSA is the only 
+supported hardware interface for the server.
+
+So far this has been tested with ESS Allegro, HDA Intel (Nvidia, Intel, and
+AMD chipsets), Nvidia AC97, Creative Labs USB, and Griffin Firewave cards.
+
+
+
+Dependencies
+============
+The basic daemon requires nothing more than a recent glibc.  Everything else
+is optionally loaded from binaries.  It probably needs a 3.x or newer kernel.
+Only system timer based scheduling is supported so it won't work on systems
+too old to have a HPET, APIC, or something similar.
+
+The following are supported:
+
+ALSA
+Speex DSP
+udev
+CUSE (/dev/cuse kernel interface without libfuse)
+
+
+Building
+========
+Building in a separate directory from the source code is recommended.  By default,
+the build script will try to find the appropriate lib dir and build 32 bit client
+libraries on 64 bit systems if an appropriate toolchain is available.  It is also
+possible to build separate 32 bit and 64 bit builds and copy libraries as needed.
+In that case the server can be 64 bit or 32 bit and both types of clients will
+work.
+
+
+#Create a build directory (optional)
+mkdir build
+
+#Run configure
+cd build
+/path/to/dspd/source/configure
+
+#Build it
+make
+
+#Install
+make install
+
+
+
+
