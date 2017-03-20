@@ -93,7 +93,7 @@ int dspd_mbx_new(struct dspd_mbx_header **mbx,
   hdr = malloc(sizeof(*hdr)+s);
   if ( ! hdr )
     {
-      err = errno;
+      err = -errno;
       goto out;
     }
   err = dspd_mbx_init(hdr, blocksize, addr);

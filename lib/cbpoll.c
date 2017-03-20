@@ -462,26 +462,26 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
   ctx->epfd = epoll_create1(EPOLL_CLOEXEC);
   if ( ctx->epfd < 0 )
     {
-      ret = errno;
+      ret = -errno;
       goto out;
     }
   
   ctx->events = calloc(max_fds, sizeof(*ctx->events));
   if ( ! ctx->events )
     {
-      ret = errno;
+      ret = -errno;
       goto out;
     }
   ctx->fdata = calloc(max_fds, sizeof(*ctx->fdata));
   if ( ! ctx->fdata )
     {
-      ret = errno;
+      ret = -errno;
       goto out;
     }
 
   if ( pipe2(ctx->event_pipe, O_CLOEXEC) < 0 )
     {
-      ret = errno;
+      ret = -errno;
       goto out;
     }
 
@@ -518,7 +518,7 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
   free(ctx->fdata);
   free(ctx->events);
   
-  return ret * -1;
+  return ret;
 }
 
 int32_t cbpoll_start(struct cbpoll_ctx *ctx)
@@ -544,7 +544,7 @@ int32_t cbpoll_start(struct cbpoll_ctx *ctx)
 	  AO_store(&ctx->abort, 0);
 	}
     }
-  return ret;
+  return ret * -1;
 }
 
 void cbpoll_destroy(struct cbpoll_ctx *ctx)

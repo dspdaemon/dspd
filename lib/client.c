@@ -281,7 +281,7 @@ static int32_t dspd_client_release(struct dspd_client *cli)
       dspd_slist_entry_srvunlock(cli->list, cli->index);
     } else
     {
-      ret = ENOTCONN;
+      ret = -ENOTCONN;
     }
   return ret;
 }
@@ -550,44 +550,6 @@ static int32_t dspd_stream_setchannelmap(struct dspd_client *cli,
 	  ret = -EINVAL;
 	}
 
-      //Verify the new or existing channel map
-      /*      ret = dspd_stream_ctl(&dspd_dctx,
-			    cli->device,
-			    DSPD_SCTL_SERVER_GETCHANNELMAP,
-			    &sbit,
-			    sizeof(sbit),
-			    &stmp,
-			    sizeof(stmp),
-			    &br);
-      if ( ret == 0 )
-	{
-	  if ( chmap )
-	    {
-	      p = chmap;
-	    } else
-	    {
-	      if ( imap->channels == 0 )
-		dspd_chmap_getdefault(imap, stmp.map.channels);
-	      p = imap;
-	    }
-	  if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
-	    ret = dspd_chmap_getconv(p, &stmp.map, &ctmp.map);
-	  else
-	    ret = dspd_chmap_getconv(&stmp.map, p, &ctmp.map);
-	  if ( ret )
-	    {
-	      ret = 0;
-	      *schan = stmp.map.channels;
-	      memmove(imap, p, DSPD_CHMAP_SIZEOF(p->channels));
-	      memcpy(cmap, &ctmp, DSPD_CHMAP_SIZEOF(ctmp.map.channels));
-	      dspd_chmap_dump(cmap);
-	    } else
-	    {
-	      if ( chmap == NULL )
-		cmap->channels = 0;
-	      ret = -EINVAL;
-	    }
-	    }*/
     } else
     {
       if ( chmap )

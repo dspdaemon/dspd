@@ -621,13 +621,13 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
       return ret;
     }
   assert(map->addr);
-  //fprintf(stderr, "ATTACHED %p COUNT=%d\n", map->addr, (int)map->section_count);
+
   
   //Find sections and set up objects
   memset(&addr, 0, sizeof(addr));
   addr.section_id = DSPD_CLIENT_SECTION_MBX;
   ret = dspd_shm_get_addr(map, &addr);
-  //fprintf(stderr, "MBX %d\n", ret);
+
   if ( ret != 0 )
     {
       ret *= -1;
@@ -638,7 +638,7 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
       ret = -EINVAL;
       goto out;
     }
-  //fprintf(stderr, "MBX OK\n");
+
   ret = dspd_mbx_init(&stream->mbx, sizeof(struct dspd_pcm_status), addr.addr);
   if ( ret )
     {
@@ -894,12 +894,6 @@ int32_t dspd_rclient_write(struct dspd_rclient *client,
       ret = rclient_write(client, 
 			  (const char*)buf + (client->playback.frame_size * offset),
 			  length - offset);
-      if ( ret == 0 )
-	{
-	  uint32_t l;
-	  dspd_fifo_space(&client->playback.fifo, &l);
-	  fprintf(stderr, "SHORT: %d of %d %d\n", offset, length, l);
-	}
       if ( ret <= 0 )
 	break;
       offset += ret;
@@ -1175,7 +1169,8 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 	      avail = client->playback.params.bufsize - len;
 
 	      am = avail_min;
-	     
+	      if ( am > client->playback.params.bufsize )
+		am = client->playback.params.bufsize;
 	      if ( am == 0 )
 		{
 		  am = client->playback.params.latency;
@@ -1193,9 +1188,10 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 	      if ( avail < am )
 		{
 		  p = am - avail;
-	
+		  
 		  hw += p;
 		  diff = hw - client->playback.status.hw_ptr;
+
 		  n = diff / client->playback.params.latency;
 		  if ( diff % client->playback.params.latency )
 		    n++;
@@ -1242,8 +1238,9 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 	    return -EINVAL;
 	  avail = len;
 	  am = avail_min;
-	 
-
+	  if ( am > client->capture.params.bufsize )
+	    am = client->capture.params.bufsize;
+	  
 	  if ( am == 0 )
 	    {
 	      am = client->capture.params.latency;
@@ -1886,7 +1883,6 @@ int32_t dspd_rclient_drain(struct dspd_rclient *client)
       } while ( len > 0 );
     } else
     {
-      fprintf(stderr, "NOTREADY\n");
       err = -EBADFD;
     }
   return err;
@@ -1964,6 +1960,7 @@ int32_t dspd_rclient_avail_cl(struct dspd_rclient *client, uint32_t *avail_min, 
   if ( ret < 0 )
     return ret;
   avail = ret;
+  *avail_min = client->playback.params.fragsize;
   *delay = -1;
   if ( dspd_rclient_status(client, DSPD_PCM_SBIT_PLAYBACK, &status) == 0 )
     {
