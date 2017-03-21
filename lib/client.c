@@ -2290,6 +2290,7 @@ static int32_t client_syncgroup(struct dspd_rctx *context,
 	}
     } else if ( in != NULL && outbuf == NULL )
     {
+
       //Add to syncgroup
       if ( in->sgid )
 	{
@@ -2324,6 +2325,7 @@ static int32_t client_syncgroup(struct dspd_rctx *context,
 	}
       ret = dspd_req_reply_err(context, 0, 0);
     }
+
   return ret;
 }
 

@@ -112,7 +112,7 @@ static uint32_t sg_newid(struct dspd_sglist *sgl)
 	  if ( sgl->last_id == 0 )
 	    sgl->last_id++;
 	  ret = sgl->last_id << 8;
-	  ret &= i;
+	  ret |= i;
 	  break;
 	}
     }
@@ -160,8 +160,10 @@ int32_t dspd_sg_new(struct dspd_sglist *sgl, struct dspd_syncgroup **sg, uint32_
 
   dspd_rwlock_wrlock(&sgl->lock);
   sgid = sg_newid(sgl);
+
   if ( sgid )
     {
+      
       if ( sgp == NULL )
 	{
 	  if ( sgl->spare )
@@ -181,11 +183,22 @@ int32_t dspd_sg_new(struct dspd_sglist *sgl, struct dspd_syncgroup **sg, uint32_
 	      sgl->groups[sgid&0xFFU] = sgp;
 	      *sg = sgp;
 	    }
+	} else
+	{
+	  sgp->sgid = sgid;
+	  sgp->refcnt = 1;
+	  sgp->streams = streams;
+	  sgl->groups[sgid&0xFFU] = sgp;
+	  if ( sgp == sgl->spare )
+	    sgl->spare = NULL;
+	  *sg = sgp;
+	  ret = 0;
 	}
     }
   dspd_rwlock_unlock(&sgl->lock);
   if ( ret && sgp )
     dspd_sg_delete(sgp);
+
   return ret;
 }
 
@@ -240,7 +253,7 @@ void dspd_sg_put(struct dspd_sglist *sgl, uint32_t sgid)
 	  sgl->groups[sgid & 0xFF] = NULL;
 	}
     }
-  dspd_rwlock_wrlock(&sgl->lock);
+  dspd_rwlock_unlock(&sgl->lock);
 }
 
 void dspd_sg_add(struct dspd_syncgroup *sg, uint32_t idx)

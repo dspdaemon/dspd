@@ -1,5 +1,5 @@
 This is just an experiment I mess around with in my spare time.  If anyone has a use for 
-it then go ahead and use it.  If not, then I don't give a shit so whatever.
+it then go ahead and use it.
 
 
 General Information
@@ -56,4 +56,7 @@ make install
 
 
 
+Configurations are located in the configs directory.  All of them except
+asound.conf can be copied to /etc/dspd.  The default configs should work
+with any build.
 

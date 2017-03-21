@@ -342,7 +342,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   struct dspd_req *req = cli->pkt_in;
   int ret = 0;
   size_t len;
-
+  void *iptr, *optr;
 
   cli->rctx.user_data = NULL;
   cli->rctx.bytes_returned = 0;
@@ -361,15 +361,23 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   cli->rctx.flags = cli->pkt_flags;
   cli->rctx.flags &= ~(DSPD_REQ_FLAG_UNIX_FAST_IOCTL|DSPD_REQ_FLAG_UNIX_IOCTL);
   len = cli->pkt_size - sizeof(*cli->pkt_in);
+  if ( len == 0 )
+    iptr = NULL;
+  else
+    iptr = cli->pkt_in->pdata;
+  if ( cli->rctx.outbufsize == 0 )
+    optr = NULL;
+  else
+    optr = cli->rctx.outbuf;
   if ( req->stream == -1 )
     {
       //Socket server request
       cli->rctx.user_data = cli;
       ret = socksrv_dispatch_req(&cli->rctx,
 				 cli->pkt_cmd,
-				 cli->pkt_in->pdata,
+				 iptr,
 				 len,
-				 cli->rctx.outbuf,
+				 optr,
 				 cli->rctx.outbufsize);
     } else if ( req->stream == 0 )
     {
@@ -378,9 +386,9 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
       ret = dspd_slist_ctl(dspd_dctx.objects,
 			   &cli->rctx,
 			   cli->pkt_cmd,
-			   cli->pkt_in->pdata,
+			   iptr,
 			   len,
-			   cli->rctx.outbuf,
+			   optr,
 			   cli->rctx.outbufsize);
     } else if ( req->stream == cli->stream )
     {
@@ -388,9 +396,9 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
       ret = dspd_slist_ctl(dspd_dctx.objects,
 			   &cli->rctx,
 			   cli->pkt_cmd,
-			   cli->pkt_in->pdata,
+			   iptr,
 			   len,
-			   cli->rctx.outbuf,
+			   optr,
 			   cli->rctx.outbufsize);
     } else
     {
@@ -403,9 +411,9 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
 	      ret = dspd_slist_ctl(dspd_dctx.objects,
 				   &cli->rctx,
 				   cli->pkt_cmd,
-				   cli->pkt_in->pdata,
+				   iptr,
 				   len,
-				   cli->rctx.outbuf,
+				   optr,
 				   cli->rctx.outbufsize);
 	      dspd_daemon_unref(cli->rctx.index);
 	    } else
