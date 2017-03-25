@@ -265,15 +265,188 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
 	    }
 	} else
 	{
-	  //fprintf(stderr, "BADSIZE %ld %ld %ld %ld\n",
-	  //(long)inbufsize, (long)handler->inbufsize, (long)handler->outbufsize, (long)outbufsize);
-	  //fprintf(stderr, "OUT OF RANGE: nr=%ld count=%ld\n", (long)index, (long)count);
-
 	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
 	}
     }
   return ret;
 }
+
+static int32_t req_quit(struct dspd_rctx         *context,
+			uint32_t      req,
+			const void   *inbuf,
+			size_t        inbufsize,
+			void         *outbuf,
+			size_t        outbufsize)
+{
+  return dspd_req_reply_err(context, 0, 0);
+}
+static int32_t req_newcli(struct dspd_rctx         *context,
+			  uint32_t      req,
+			  const void   *inbuf,
+			  size_t        inbufsize,
+			  void         *outbuf,
+			  size_t        outbufsize)
+{
+  int32_t ret, idx;
+  void *ptr;
+  if ( inbufsize != 0 && inbufsize != sizeof(int32_t) )
+    {
+      ret = dspd_req_reply_err(context, 0, EINVAL);
+    } else
+    {
+      ret = dspd_client_new(dspd_dctx.objects, &ptr);
+      if ( ret == 0 )
+	{
+	  if ( inbuf != NULL && inbufsize == sizeof(int32_t) )
+	    {
+	      idx = *(int32_t*)inbuf;
+	      if ( idx > 0 )
+		dspd_daemon_unref(idx);
+	    }
+	  ret = dspd_req_reply_buf(context, 0, &ptr, sizeof(ptr));
+	} else
+	{
+	  ret = dspd_req_reply_err(context, 0, ret);
+	}
+    }
+  return ret;
+}
+static int32_t req_delcli(struct dspd_rctx         *context,
+			  uint32_t      req,
+			  const void   *inbuf,
+			  size_t        inbufsize,
+			  void         *outbuf,
+			  size_t        outbufsize)
+{
+  int32_t ret;
+  int32_t stream;
+  if ( inbuf == NULL )
+    {
+      ret = dspd_req_reply_err(context, 0, 0);
+    } else if ( inbufsize == sizeof(stream) )
+    {
+      stream = *(int32_t*)inbuf;
+      if ( stream > 0 )
+	dspd_daemon_unref(stream);
+      ret = dspd_req_reply_err(context, 0, 0);
+    } else
+    {
+      ret = dspd_req_reply_err(context, 0, EINVAL);
+    }
+  return ret;
+}
+
+static int32_t req_refsrv(struct dspd_rctx         *context,
+			  uint32_t      req,
+			  const void   *inbuf,
+			  size_t        inbufsize,
+			  void         *outbuf,
+			  size_t        outbufsize)
+{
+  int32_t odev = -1, ndev = -1;
+  int64_t val;
+  size_t br;
+  int32_t ret;
+  if ( inbufsize == sizeof(int64_t) )
+    {
+      val = *(int64_t*)inbuf;
+      odev = val >> 32U;
+      ndev = val & 0xFFFFFFFF;
+    } else if ( inbufsize == sizeof(int32_t) )
+    {
+      ndev = *(int32_t*)inbuf;
+    } else
+    {
+      return dspd_req_reply_err(context, 0, EINVAL);
+    }
+  if ( odev != ndev )
+    {
+      ret = dspd_daemon_ref(ndev, DSPD_DCTL_ENUM_TYPE_SERVER);
+      if ( ret == 0 && odev > 0 )
+	dspd_daemon_unref(odev);
+    } else
+    {
+      ret = 0;
+    }
+  if ( ret == 0 && outbufsize > 0 )
+    {
+      ret = dspd_stream_ctl(&dspd_dctx,
+			    ndev,
+			    DSPD_SCTL_SERVER_STAT,
+			    NULL,
+			    0,
+			    outbuf,
+			    outbufsize,
+			    &br);
+      if ( ret == 0 )
+	return dspd_req_reply_buf(context, 0, outbuf, br);
+    }
+  return dspd_req_reply_err(context, 0, ret);
+}
+
+static int32_t req_unrefsrv(struct dspd_rctx         *context,
+			    uint32_t      req,
+			    const void   *inbuf,
+			    size_t        inbufsize,
+			    void         *outbuf,
+			    size_t        outbufsize)
+{
+  int32_t ret;
+  int32_t idx;
+  if ( inbufsize == sizeof(int32_t) )
+    {
+      idx = *(int32_t*)inbuf;
+      if ( idx > 0 )
+	dspd_daemon_unref(idx);
+      ret = dspd_req_reply_err(context, 0, 0);
+    } else if ( inbufsize == 0 )
+    {
+      ret = dspd_req_reply_err(context, 0, 0);
+    } else
+    {
+      ret = dspd_req_reply_err(context, 0, EINVAL);
+    }
+  return ret;
+}
+
+static const struct dspd_req_handler srv_req_handlers[] = {
+  [DSPD_SOCKSRV_REQ_QUIT] = {
+    .handler = req_quit,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_NEWCLI] = {
+    .handler = req_newcli,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = sizeof(int32_t),
+  },
+  [DSPD_SOCKSRV_REQ_DELCLI] = {
+    .handler = req_delcli,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_REFSRV] = {
+    .handler = req_refsrv,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
+  },
+
+  [DSPD_SOCKSRV_REQ_UNREFSRV] = {
+    .handler = req_unrefsrv,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+};
 
 static int32_t dspd_daemon_obj_ctl(struct dspd_rctx *rctx,
 				   uint32_t             req,
@@ -283,18 +456,33 @@ static int32_t dspd_daemon_obj_ctl(struct dspd_rctx *rctx,
 				   size_t        outbufsize)
 {
   uint64_t r;
+  int32_t ret;
   //Index and request number are the same.
   r = req;
   r <<= 32;
   r |= req;
-  return dspd_daemon_dispatch_ctl(rctx,
-				  daemon_req_handlers,
-				  sizeof(daemon_req_handlers) / sizeof(daemon_req_handlers[0]),
-				  r,
-				  inbuf,
-				  inbufsize,
-				  outbuf,
-				  outbufsize);
+  if ( rctx->index == -1 )
+    {
+      ret = dspd_daemon_dispatch_ctl(rctx,
+				     srv_req_handlers,
+				     sizeof(srv_req_handlers) / sizeof(srv_req_handlers[0]),
+				     r,
+				     inbuf,
+				     inbufsize,
+				     outbuf,
+				     outbufsize);
+    } else
+    {
+      ret = dspd_daemon_dispatch_ctl(rctx,
+				     daemon_req_handlers,
+				     sizeof(daemon_req_handlers) / sizeof(daemon_req_handlers[0]),
+				     r,
+				     inbuf,
+				     inbufsize,
+				     outbuf,
+				     outbufsize);
+    }
+  return ret;
 }
 
 static int dspd_hotplug_init(struct dspd_daemon_ctx *ctx)

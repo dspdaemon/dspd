@@ -30,6 +30,7 @@ struct dspd_rclient {
   struct dspd_rclient_data data;
 
   uint32_t           trigger;
+  bool               playback_xfer;
   uint32_t           forced_events;
   uint32_t           last_events;
   
@@ -161,7 +162,9 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 			      int32_t stream,
 			      struct dspd_device_stat *info);
 
-int dspd_rclient_open(const char *addr, 
+
+int dspd_rclient_open(void *context,
+		      const char *addr, 
 		      const char *name,
 		      int stream,
 		      struct dspd_rclient **client);

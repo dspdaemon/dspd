@@ -2290,20 +2290,22 @@ static int32_t client_syncgroup(struct dspd_rctx *context,
 	}
     } else if ( in != NULL && outbuf == NULL )
     {
-
       //Add to syncgroup
       if ( in->sgid )
 	{
 	  s = dspd_sg_get(dspd_dctx.syncgroups, in->sgid);
 	  if ( s )
 	    {
-	      if ( cli->syncgroup )
+	      if ( cli->syncgroup != NULL && s != cli->syncgroup )
 		{
 		  dspd_sg_remove(cli->syncgroup, cli->index);
 		  dspd_sg_put(dspd_dctx.syncgroups, dspd_sg_id(cli->syncgroup));
 		}
-	      dspd_sg_add(s, cli->index);
-	      cli->syncgroup = s;
+	      if ( s != cli->syncgroup )
+		{
+		  dspd_sg_add(s, cli->index);
+		  cli->syncgroup = s;
+		}
 	      ret = 0;
 	    } else
 	    {

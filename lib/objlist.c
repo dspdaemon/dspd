@@ -622,6 +622,20 @@ int32_t dspd_slist_ctl(struct dspd_slist *list,
 		       outbuf,
 		       outbufsize);
 	}
+    } else if ( rctx->index == -1 )
+    {
+      e = &list->entries[0];
+      if ( e->used && e->ctl )
+	{
+	  rctx->user_data = e->data;
+	  handled = 1;
+	  ret = e->ctl(rctx,
+		       req,
+		       inbuf,
+		       inbufsize,
+		       outbuf,
+		       outbufsize);
+	}
     }
   if ( ! handled )
     ret = rctx->ops->reply_err(rctx, 0, EINVAL);

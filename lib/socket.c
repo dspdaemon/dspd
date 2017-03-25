@@ -38,8 +38,9 @@
 #include <sys/un.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
+#include <stdbool.h>
 #include "socket.h"
-
+#include "cfgread.h"
 int dspd_unix_sock_create(const char *addr, int flags)
 {
   struct sockaddr_un local;
@@ -55,6 +56,72 @@ int dspd_unix_sock_create(const char *addr, int flags)
     { err = -errno; close(fd); return err; }
   return fd;
 }
+
+int dspd_tcp_sock_create(const char *addr, int flags)
+{
+  union { 
+    struct sockaddr_in6 in6;
+    struct sockaddr_in  in4;
+  } sock;
+  int fd, len, err, on = 1;
+  uint16_t port;
+  char str[INET6_ADDRSTRLEN*2];
+  char *p, *a;
+  if ( strlen(addr) >= sizeof(str) )
+    return -EINVAL;
+  strcpy(str, addr);
+  memset(&sock, 0, sizeof(sock));
+  if ( strchr(str, '.') == NULL )
+    {
+      p = strchr(str, '[');
+      if ( p == NULL )
+	return -EINVAL;
+      a = &p[1];
+      p = strchr(str, ']');
+      if ( ! p )
+	return -EINVAL;
+      *p = 0;
+      p++;
+      if ( *p != ':' )
+	return -EINVAL;
+      p++;
+      if ( dspd_strtou16(p, &port, 10) < 0 )
+	return -EINVAL;
+      if ( ! inet_pton(AF_INET6, a, &sock.in6.sin6_addr) )
+	return -errno;
+      if ( (fd = socket(AF_INET6, SOCK_STREAM | flags, 0)) < 0 )
+	return -errno;
+      sock.in6.sin6_family = AF_INET6;
+      sock.in6.sin6_port = htons(port);
+      len = sizeof(sock);
+    } else
+    {
+      p = strchr(str, ':');
+      if ( ! p )
+	return -EINVAL;
+      *p = 0;
+      p++;
+      if ( dspd_strtou16(p, &port, 10) < 0 )
+	return -EINVAL;
+      if ( ! inet_pton(AF_INET, str, &sock.in4.sin_addr.s_addr) )
+	return -errno;
+      if ( (fd = socket(AF_INET, SOCK_STREAM | flags, 0)) < 0 )
+	return -errno;
+      sock.in4.sin_family = AF_INET;
+      sock.in4.sin_port = htons(port);
+      len = sizeof(sock);
+    }
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *)&on, sizeof(on)) < 0)
+    {
+      err = -errno;
+      close(fd);
+      return err;
+    }
+  if (bind(fd, (struct sockaddr *)&sock, len) == -1)
+    { err = -errno; close(fd); return err; }
+  return fd;
+}
+
 
 int dspd_unix_sock_connect(const char *addr, int flags)
 {
@@ -74,3 +141,4 @@ int dspd_unix_sock_connect(const char *addr, int flags)
   }
   return s;
 }
+

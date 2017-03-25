@@ -215,6 +215,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
   void *clptr;
   size_t br;
   uint32_t dev;
+  uint64_t val;
   struct dspd_client_cb cb;
   switch(req)
     {
@@ -276,14 +277,23 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
 	} else
 	{
-	  dev = *(uint32_t*)inbuf;
+	  //Compatibility with internal APIs
+	  if ( inbufsize == sizeof(uint64_t) )
+	    {
+	      val = *(uint64_t*)inbuf;
+	      dev = val & 0xFFFFFFFFU;
+	    } else
+	    {
+	      dev = *(uint32_t*)inbuf;
+	    }
 
 	  //Throw away the old reference
 	  if ( cli->device != dev )
 	    {
-	      if ( cli->device >= 0 )
-		dspd_daemon_unref(cli->device);
 	      ret = dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
+	      if ( ret == 0 && cli->device >= 0 )
+		dspd_daemon_unref(cli->device);
+
 	    } else if ( dev >= DSPD_MAX_OBJECTS )
 	    {
 	      ret = -EINVAL;

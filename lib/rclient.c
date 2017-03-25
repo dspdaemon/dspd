@@ -28,11 +28,39 @@
 #include <sys/eventfd.h>
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
+#include "daemon.h"
 #ifndef POLLRDHUP
 #define POLLRDHUP 0
 #endif
 #define PLAYBACK_ENABLED(_c) ((_c)->playback.enabled&&(_c)->playback.ready)
 #define CAPTURE_ENABLED(_c) ((_c)->capture.enabled&&(_c)->capture.ready)
+
+static void rclient_set_trigger(struct dspd_rclient *cli, int32_t bits)
+{
+  uint32_t len = 0;
+  if ( (bits & DSPD_PCM_SBIT_PLAYBACK) == 0 && (cli->trigger & DSPD_PCM_SBIT_PLAYBACK) != 0 && cli->playback.ready )
+    {
+      dspd_fifo_len(&cli->playback.fifo, &len);
+      if ( len == 0 )
+	cli->playback_xfer = 0;
+    }
+  cli->trigger = bits;
+}
+static void rclient_clr_trigger(struct dspd_rclient *cli, int32_t bits)
+{
+  uint32_t len = 0;
+  if ( (bits & DSPD_PCM_SBIT_PLAYBACK) && (cli->trigger & DSPD_PCM_SBIT_PLAYBACK) && cli->playback.ready )
+    {
+      dspd_fifo_len(&cli->playback.fifo, &len);
+      if ( len == 0 )
+	cli->playback_xfer = 0;
+    }
+  cli->trigger &= ~bits;
+}
+static void rclient_add_trigger(struct dspd_rclient *cli, int32_t bits)
+{
+  cli->trigger |= bits;
+}
 
 static void rclient_eventfd_set(struct dspd_rclient *client)
 {
@@ -124,8 +152,8 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
   char *mask;
   int32_t mtype = DSPD_DCTL_ENUM_TYPE_SERVER;
   ssize_t i, bits;
-  uint32_t dev;
-
+  uint32_t dev, prev = 0;
+  uint64_t d = 0;
   if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) || client->data.conn == NULL || client->data.device > 0 )
     return -EINVAL;
 
@@ -174,12 +202,16 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
        if ( ! dspd_test_bit((uint8_t*)mask, i) )
 	 continue;
        dev = i;
+       d = prev;
+       d <<= 32U;
+       d |= dev;
+
        //Create a reference, remove any existing references, and get the device information.
        err = dspd_stream_ctl(client->data.conn,
 			     -1,
 			     DSPD_SOCKSRV_REQ_REFSRV,
-			     &dev,
-			     sizeof(dev),
+			     &d,
+			     sizeof(d),
 			     &client->devinfo,
 			     sizeof(client->devinfo),
 			     &br);
@@ -192,6 +224,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 		 break;
 	     }
 	 }
+       prev = dev;
      }
    
    if ( devidx < 0 )
@@ -214,6 +247,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 
 void dspd_rclient_destroy(struct dspd_rclient *client)
 {
+  size_t br;
   if ( client->eventfd >= 0 )
     {
       close(client->eventfd);
@@ -223,8 +257,33 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
   dspd_rclient_detach(client, DSPD_PCM_SBIT_CAPTURE);
   if ( client->autoclose && client->data.conn )
     {
-      dspd_conn_delete(client->data.conn);
+      uint32_t t = *(int32_t*)client->data.conn;
+      if ( t == DSPD_OBJ_TYPE_DAEMON_CTX )
+	{
+	  dspd_stream_ctl(client->data.conn,
+			  0,
+			  DSPD_SOCKSRV_REQ_UNREFSRV,
+			  &client->data.device,
+			  sizeof(client->data.device),
+			  NULL,
+			  0,
+			  &br);
+	  dspd_stream_ctl(client->data.conn,
+			  0,
+			  DSPD_SOCKSRV_REQ_DELCLI,
+			  &client->data.client,
+			  sizeof(client->data.client),
+			  NULL,
+			  0,
+			  &br);
+	  
+	} else
+	{
+	  dspd_conn_delete(client->data.conn);
+	}
       client->data.conn = NULL;
+      client->data.client = -1;
+      client->data.device = -1;
     }
 }
 
@@ -491,9 +550,16 @@ int32_t dspd_rclient_avail(struct dspd_rclient *client, int32_t stream)
       if ( ret == 0 )
 	{
 	  if ( dspd_fifo_space(&client->playback.fifo, &avail) == 0 )
-	    ret = avail;
-	  else
-	    ret = -EPIPE;
+	    {
+	      if ( avail == client->playback.params.bufsize && 
+		   dspd_rclient_test_xrun(client, DSPD_PCM_SBIT_PLAYBACK) == true )
+		ret = -EPIPE;
+	      else
+		ret = avail;
+	    } else
+	    {
+	      ret = -EIO;
+	    }
 	}
     } else if ( stream == DSPD_PCM_SBIT_CAPTURE && CAPTURE_ENABLED(client) )
     {
@@ -501,9 +567,15 @@ int32_t dspd_rclient_avail(struct dspd_rclient *client, int32_t stream)
       if ( ret == 0 )
 	{
 	  if ( dspd_fifo_len(&client->capture.fifo, &avail) == 0 )
-	    ret = avail;
-	  else
-	    ret = -EPIPE;
+	    {
+	      if ( avail == 0 )
+		ret = -EPIPE;
+	      else
+		ret = avail;
+	    } else
+	    {
+	      ret = -EPIPE;
+	    }
 	}
     } else
     {
@@ -818,8 +890,11 @@ int32_t dspd_rclient_get_hw_ptr(struct dspd_rclient *client, int32_t stream, uin
 	  f = i - o;
 	  *ptr = o;
 	  if ( (( f == 0 && (client->trigger & DSPD_PCM_SBIT_PLAYBACK) && i > 0)) ||
-	       (f > client->playback.params.bufsize) )
-	    ret = -EPIPE;
+	       (f >= client->playback.params.bufsize) )
+	    {
+	      if ( dspd_rclient_test_xrun(client, DSPD_PCM_SBIT_PLAYBACK) )
+		ret = -EPIPE;
+	    }
 	} else
 	{
 	  ret = -EBADF;
@@ -899,7 +974,10 @@ int32_t dspd_rclient_write(struct dspd_rclient *client,
       offset += ret;
     }
   if ( offset > 0 )
-    ret = offset;
+    {
+      client->playback_xfer = true;
+      ret = offset;
+    }
   return ret;
 }
 
@@ -1201,7 +1279,7 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 		  if ( fr < diff )
 		    diff = fr;
 		  n = client->playback.params.bufsize / client->playback.params.fragsize;
-		  if ( n < 3 || avail > 0 || client->playback.status.tstamp == 0 )
+		  if ( n < 3 || client->playback.status.tstamp == 0 )
 		    diff /= 2;
 		  abstime = diff;
 		  abstime *= client->playback.sample_time;
@@ -1580,7 +1658,7 @@ static int32_t rclient_start(struct dspd_rclient *client,
       client->capture.trigger_tstamp = tstamps[DSPD_PCM_STREAM_CAPTURE];
       if ( client->capture.trigger_tstamp )
 	dspd_intrp_set(&client->capture_intrp, client->capture.trigger_tstamp, 0);
-      client->trigger |= *(uint32_t*)inbuf;
+      rclient_add_trigger(client, *(uint32_t*)inbuf);
       client->playback.ready = !! ( client->trigger & DSPD_PCM_SBIT_PLAYBACK );
       client->capture.ready = !! ( client->trigger & DSPD_PCM_SBIT_CAPTURE );
       dspd_update_timer(client, DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE);
@@ -1597,6 +1675,7 @@ static int32_t rclient_stop(struct dspd_rclient *client,
 {
   int32_t ret;
   size_t br;
+  int32_t bits = *(int32_t*)inbuf;
   *bytes_returned = 0;
   ret = dspd_stream_ctl(client->data.conn,
 			client->data.client,
@@ -1609,13 +1688,13 @@ static int32_t rclient_stop(struct dspd_rclient *client,
   if ( ret == 0 )
     {
       *bytes_returned = br;
-      client->trigger &= ~(*(uint32_t*)inbuf);
-      if ( (client->trigger & DSPD_PCM_SBIT_PLAYBACK) == 0 )
+      rclient_clr_trigger(client, bits);
+      if ( bits & DSPD_PCM_SBIT_PLAYBACK )
 	{
 	  client->playback.trigger_tstamp = 0;
 	  dspd_intrp_reset(&client->playback_intrp);
 	}
-      if ( (client->trigger & DSPD_PCM_SBIT_CAPTURE) == 0 )
+      if ( bits & DSPD_PCM_SBIT_CAPTURE )
 	{
 	  client->capture.trigger_tstamp = 0;
 	  dspd_intrp_reset(&client->capture_intrp);
@@ -1627,16 +1706,17 @@ static int32_t rclient_stop(struct dspd_rclient *client,
   return ret;
 }
 static int32_t rclient_settrigger(struct dspd_rclient *client,
-			       uint32_t      req,
-			       const void   *inbuf,
-			       size_t        inbufsize,
-			       void         *outbuf,
-			       size_t        outbufsize,
-			       size_t       *bytes_returned)
+				  uint32_t      req,
+				  const void   *inbuf,
+				  size_t        inbufsize,
+				  void         *outbuf,
+				  size_t        outbufsize,
+				  size_t       *bytes_returned)
 {
   dspd_time_t tstamps[2];
   int32_t ret;
   size_t br;
+  int32_t nbits = *(int32_t*)inbuf;
   *bytes_returned = 0;
   ret = dspd_stream_ctl(client->data.conn,
 			client->data.client,
@@ -1659,7 +1739,7 @@ static int32_t rclient_settrigger(struct dspd_rclient *client,
       client->capture.trigger_tstamp = tstamps[DSPD_PCM_STREAM_CAPTURE];
       if ( client->capture.trigger_tstamp )
 	dspd_intrp_set(&client->capture_intrp, client->capture.trigger_tstamp, 0);
-      client->trigger |= *(uint32_t*)inbuf;
+      rclient_set_trigger(client, nbits);
       client->playback.ready = !! ( client->trigger & DSPD_PCM_SBIT_PLAYBACK );
       client->capture.ready = !! ( client->trigger & DSPD_PCM_SBIT_CAPTURE );
       dspd_update_timer(client, DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE);
@@ -1701,7 +1781,10 @@ static int32_t rclient_setparams(struct dspd_rclient *client,
       *bytes_returned = br;
 
       if ( iparams->stream == DSPD_PCM_SBIT_PLAYBACK )
-	dspd_intrp_reset2(&client->playback_intrp, client->playback.params.rate);
+	{
+	  dspd_intrp_reset2(&client->playback_intrp, client->playback.params.rate);
+	  client->playback_xfer = false;
+	}
   
       if ( iparams->stream == DSPD_PCM_SBIT_CAPTURE )
 	dspd_intrp_reset2(&client->capture_intrp, client->capture.params.rate);
@@ -1745,7 +1828,7 @@ static int32_t rclient_synccmd(struct dspd_rclient *client,
 	   client->capture.trigger_tstamp = ocmd->tstamp;
 	   dspd_intrp_set(&client->capture_intrp, client->capture.trigger_tstamp, 0);
 	 }
-       client->trigger |= ocmd->streams;
+       rclient_add_trigger(client, ocmd->streams);
        client->playback.ready = !! ( client->trigger & DSPD_PCM_SBIT_PLAYBACK );
        client->capture.ready = !! ( client->trigger & DSPD_PCM_SBIT_CAPTURE );
     }
@@ -1845,7 +1928,7 @@ int32_t dspd_rclient_drain(struct dspd_rclient *client)
 {
   int32_t ret, err;
   uint64_t abstime, wt, diff;
-  uint32_t len, appl, hw, loops = 0;
+  uint32_t len, appl, hw;
   if ( PLAYBACK_ENABLED(client) && (client->trigger & DSPD_PCM_SBIT_PLAYBACK) )
     {
       do {
@@ -1863,10 +1946,7 @@ int32_t dspd_rclient_drain(struct dspd_rclient *client)
 	  break;
 	if ( len > 0 )
 	  {
-	    if ( loops > 0 )
-	      {
-		usleep(1);
-	      } else if ( err == -EAGAIN )
+	    if ( err == -EAGAIN )
 	      {
 		usleep((client->playback.sample_time * client->playback.params.fragsize) / 1000);
 	      } else
@@ -1879,8 +1959,8 @@ int32_t dspd_rclient_drain(struct dspd_rclient *client)
 		dspd_sleep(abstime, &wt);
 	      }
 	  }
-	loops++;
       } while ( len > 0 );
+      usleep((client->playback.sample_time * client->playback.params.latency) / 1000);
     } else
     {
       err = -EBADFD;
@@ -1913,6 +1993,7 @@ int32_t dspd_rclient_reset(struct dspd_rclient *client, int32_t stream)
 	  dspd_mbx_reset(&client->playback.mbx);
 	  dspd_intrp_reset(&client->playback_intrp);
 	  client->playback.trigger_tstamp = 0;
+	  client->playback_xfer = 0;
 	  memset(&client->playback.status, 0, sizeof(client->playback.status));
 	}
       if ( (stream & DSPD_PCM_SBIT_CAPTURE) && CAPTURE_ENABLED(client) )
@@ -2049,26 +2130,32 @@ int dspd_rclient_update_pollfd(struct dspd_rclient *client, uint32_t sbits, bool
   return 0;
 }
 
-int dspd_rclient_open(const char *addr, 
+int dspd_rclient_open(void *context,
+		      const char *addr, 
 		      const char *name,
 		      int stream,
 		      struct dspd_rclient **clptr)
 {
-  struct dspd_conn *conn;
+  struct dspd_conn *conn = NULL;
   struct dspd_rclient *client = NULL;
   int ret;
   struct dspd_rclient_data data;
   size_t br;
+
   memset(&data, 0, sizeof(data));
-  ret = dspd_conn_new(addr, &conn);
-  if ( ret )
-    return ret;
-  ret = dspd_rclient_new(&client);
-  if ( ret )
-    goto out;
-
-
-  data.conn = conn;
+  if ( context == NULL )
+    {
+      ret = dspd_conn_new(addr, &conn);
+      if ( ret )
+	return ret;
+      ret = dspd_rclient_new(&client);
+      if ( ret )
+	goto out;
+      data.conn = conn;
+    } else
+    {
+      data.conn = context;
+    }
   data.client = -1;
   data.device = -1;
   ret = dspd_rclient_bind(client, &data);
@@ -2090,8 +2177,8 @@ int dspd_rclient_open(const char *addr,
       ret = dspd_stream_ctl(client->data.conn,
 			    -1,
 			    DSPD_SOCKSRV_REQ_NEWCLI,
-			    NULL,
-			    0,
+			    &client->data.client,
+			    sizeof(client->data.client),
 			    &client->data.client,
 			    sizeof(client->data.client),
 			    &br);
@@ -2114,9 +2201,10 @@ int dspd_rclient_open(const char *addr,
 
   if ( ret < 0 )
     {
-      dspd_conn_delete(conn);
       if ( client )
 	dspd_rclient_delete(client);
+      else if ( conn )
+	dspd_conn_delete(conn);
     } else
     {
       *clptr = client;
@@ -2133,7 +2221,9 @@ bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits)
 {
   uint32_t len;
   bool ret = false;
-  if ( (sbits & DSPD_PCM_SBIT_PLAYBACK) && client->playback.params.channels )
+  if ( (sbits & DSPD_PCM_SBIT_PLAYBACK) && 
+       client->playback.enabled && client->playback_xfer && (client->trigger & DSPD_PCM_SBIT_PLAYBACK) &&
+       client->playback.params.channels )
     {
       if ( dspd_fifo_len(&client->playback.fifo, &len) == 0 )
 	if ( len == 0 )

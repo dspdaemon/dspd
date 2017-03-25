@@ -584,12 +584,16 @@ int dspd_conn_new(const char *addr, struct dspd_conn **ptr)
 
 void dspd_conn_delete(struct dspd_conn *conn)
 {
-  if ( conn->fd_in >= 0 )
-    close(conn->fd_in);
-  dspd_mutex_destroy(&conn->lock);
-  if ( conn->sock_fd >= 0 )
-    close(conn->sock_fd);
-  free(conn);
+  uint32_t t = *(int32_t*)conn;
+  if ( t == DSPD_OBJ_TYPE_IPC )
+    {
+      if ( conn->fd_in >= 0 )
+	close(conn->fd_in);
+      dspd_mutex_destroy(&conn->lock);
+      if ( conn->sock_fd >= 0 )
+	close(conn->sock_fd);
+      free(conn);
+    }
 }
 
 

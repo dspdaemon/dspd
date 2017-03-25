@@ -281,18 +281,20 @@ dspd_time_t dspd_sg_start(struct dspd_syncgroup *sg, const uint32_t *streams)
   else
     cmd.streams = sg->streams;
   cmd.cmd = SGCMD_START;
-  cmd.tstamp = dspd_get_time();
+  cmd.tstamp = dspd_get_time() + dspd_get_tick();
   for ( i = 0; i < ARRAY_SIZE(sg->mask); i++ )
     {
       if ( dspd_test_bit(sg->mask, i) )
-	(void)dspd_stream_ctl(&dspd_dctx,
-			      i,
-			      DSPD_SCTL_CLIENT_SYNCCMD,
-			      &cmd,
-			      sizeof(cmd),
-			      NULL,
-			      0,
-			      &br);
+	{
+	  (void)dspd_stream_ctl(&dspd_dctx,
+				i,
+				DSPD_SCTL_CLIENT_SYNCCMD,
+				&cmd,
+				sizeof(cmd),
+				NULL,
+				0,
+				&br);
+	}
       
     }
   dspd_mutex_unlock(&sg->lock);

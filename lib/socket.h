@@ -6,5 +6,5 @@
 #include <fcntl.h>
 int dspd_unix_sock_create(const char *addr, int flags);
 int dspd_unix_sock_connect(const char *addr, int flags);
-
+int dspd_tcp_sock_create(const char *addr, int flags);
 #endif
