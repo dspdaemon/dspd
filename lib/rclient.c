@@ -205,7 +205,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
        d = prev;
        d <<= 32U;
        d |= dev;
-
+       prev = 0;
        //Create a reference, remove any existing references, and get the device information.
        err = dspd_stream_ctl(client->data.conn,
 			     -1,
@@ -217,6 +217,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 			     &br);
        if ( err == 0 && br == sizeof(client->devinfo) )
 	 {
+	   prev = dev;
 	   if ( (client->devinfo.streams & stream) == stream )
 	     {
 	       devidx = i;
@@ -224,7 +225,6 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 		 break;
 	     }
 	 }
-       prev = dev;
      }
    
    if ( devidx < 0 )
@@ -241,8 +241,33 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
    
 
  out:
-  free(mask);
-  return err;
+
+   if ( err != 0 )
+     {
+       if ( devidx > 0 )
+	 {
+	   dspd_stream_ctl(client->data.conn,
+			   -1,
+			   DSPD_SOCKSRV_REQ_UNREFSRV,
+			   &devidx,
+			   sizeof(devidx),
+			   NULL,
+			   0,
+			   NULL);
+	 } else if ( prev > 0 )
+	 {
+	   dspd_stream_ctl(client->data.conn,
+			   -1,
+			   DSPD_SOCKSRV_REQ_UNREFSRV,
+			   &prev,
+			   sizeof(prev),
+			   NULL,
+			   0,
+			   NULL);
+	 }
+     }
+   free(mask);
+   return err;
 }
 
 void dspd_rclient_destroy(struct dspd_rclient *client)
