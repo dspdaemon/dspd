@@ -255,13 +255,15 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
     }
   dspd_rclient_detach(client, DSPD_PCM_SBIT_PLAYBACK);
   dspd_rclient_detach(client, DSPD_PCM_SBIT_CAPTURE);
+
   if ( client->autoclose && client->data.conn )
     {
       uint32_t t = *(int32_t*)client->data.conn;
       if ( t == DSPD_OBJ_TYPE_DAEMON_CTX )
 	{
+	  
 	  dspd_stream_ctl(client->data.conn,
-			  0,
+			  -1,
 			  DSPD_SOCKSRV_REQ_UNREFSRV,
 			  &client->data.device,
 			  sizeof(client->data.device),
@@ -269,7 +271,7 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
 			  0,
 			  &br);
 	  dspd_stream_ctl(client->data.conn,
-			  0,
+			  -1,
 			  DSPD_SOCKSRV_REQ_DELCLI,
 			  &client->data.client,
 			  sizeof(client->data.client),
@@ -2148,14 +2150,15 @@ int dspd_rclient_open(void *context,
       ret = dspd_conn_new(addr, &conn);
       if ( ret )
 	return ret;
-      ret = dspd_rclient_new(&client);
-      if ( ret )
-	goto out;
       data.conn = conn;
     } else
     {
       data.conn = context;
     }
+  ret = dspd_rclient_new(&client);
+  if ( ret )
+    goto out;
+
   data.client = -1;
   data.device = -1;
   ret = dspd_rclient_bind(client, &data);

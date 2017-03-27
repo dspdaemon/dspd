@@ -2,7 +2,7 @@ include ../config.makefile
 include ../rules.makefile
 
 MLIBS=$(LIBS) -ldspdc -ldspds
-MODDIR=$(REAL_LIBDIR)/dspd
+
 
 all: $(MODULES)
 
@@ -36,6 +36,8 @@ osscuse:
 
 udev:
 	$(CC) $(CFLAGS) $(MLIBS) -lasound -ludev -shared -o mod_udev.so mod_udev.c
+
+
 
 
 install:

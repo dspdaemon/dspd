@@ -121,6 +121,7 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
 		    int32_t  flags,
 		    uint32_t max_fds);
 int32_t cbpoll_start(struct cbpoll_ctx *ctx);
+int32_t cbpoll_run(struct cbpoll_ctx *ctx);
 void cbpoll_destroy(struct cbpoll_ctx *ctx);
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index);
 void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,

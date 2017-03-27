@@ -59,7 +59,12 @@ static const struct dspd_rcb daemon_rcb = {
   .reply_err = daemon_reply_err,
 };
 
-
+static int32_t req_delcli(struct dspd_rctx         *context,
+			  uint32_t      req,
+			  const void   *inbuf,
+			  size_t        inbufsize,
+			  void         *outbuf,
+			  size_t        outbufsize);
 static int32_t drh_get_objmask_size(struct dspd_rctx *context,
 				    uint32_t      req,
 				    const void   *inbuf,
@@ -218,7 +223,6 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
 				      outbuf,
 				      outbufsize);
 
-  //  fprintf(stderr, "DISPATCH INDEX %u\n", index);
 
   //The first handler is an optional filter.  If it returns -ENOSYS
   //then it should have not touched anything and the regular procedure
@@ -240,6 +244,7 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
 	{
 	  if ( ret == -ENOSYS )
 	    {
+	      
 	      handler = &handlers[index];
 	      if ( handler->handler != NULL &&
 		   (rctx->flags & handler->xflags) == 0 &&
@@ -257,8 +262,6 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
 					 outbufsize);
 		} else
 		{
-		  // fprintf(stderr, "BADSIZE0 %ld %ld %ld %ld %d %lld\n",
-		  //	  (long)inbufsize, (long)handler->inbufsize, (long)handler->outbufsize, (long)outbufsize, DSPD_SCTL_CLIENT_CONNECT - DSPD_SCTL_MIN, req);
 		  
 		  ret = dspd_req_reply_err(rctx, 0, EINVAL);
 		}
@@ -303,7 +306,8 @@ static int32_t req_newcli(struct dspd_rctx         *context,
 	      if ( idx > 0 )
 		dspd_daemon_unref(idx);
 	    }
-	  ret = dspd_req_reply_buf(context, 0, &ptr, sizeof(ptr));
+	  idx = dspd_client_get_index(ptr);
+	  ret = dspd_req_reply_buf(context, 0, &idx, sizeof(idx));
 	} else
 	{
 	  ret = dspd_req_reply_err(context, 0, ret);
@@ -320,7 +324,7 @@ static int32_t req_delcli(struct dspd_rctx         *context,
 {
   int32_t ret;
   int32_t stream;
-  if ( inbuf == NULL )
+  if ( inbufsize == 0 )
     {
       ret = dspd_req_reply_err(context, 0, 0);
     } else if ( inbufsize == sizeof(stream) )
@@ -1074,14 +1078,11 @@ static void dspd_hotplug_updatedefault(struct dspd_dict *sect)
   size_t br;
   char *n; int32_t dev_num = -1;
   int32_t dev_idx = -1; char *slot;
-  //  fprintf(stderr, "KEY=%s %p\n", dspd_dctx.default_device.key, dspd_dctx.default_dev_info);
   if ( sect == NULL && dspd_dctx.default_device.key != NULL )
     sect = dspd_dctx.default_dev_info;
   
   if ( sect && dspd_dctx.default_device.key )
     {
-      //char *c = NULL; dspd_dict_find_value(sect, "description", &c);
-      //fprintf(stderr, "CHECK VALUE %s=%s %s\n", dspd_dctx.default_device.key, dspd_dctx.default_device.value, c);
 	      
       if ( dspd_dict_test_value(sect, dspd_dctx.default_device.key, dspd_dctx.default_device.value) )
 	{
@@ -1101,7 +1102,7 @@ static void dspd_hotplug_updatedefault(struct dspd_dict *sect)
 	    }
 	}
     }
-  //fprintf(stderr, "DEV NUM %d %d\n", dev_num, dev_idx);
+
 
   dspd_slist_get_object_mask(dspd_dctx.objects,
 			     mask,
@@ -1155,7 +1156,7 @@ static void dspd_hotplug_updatedefault(struct dspd_dict *sect)
 	    }
 	}
     }
-  //fprintf(stderr, "FIDX %d\n", fidx);
+
   
   
   if ( fulldup == INT32_MAX )
@@ -1172,10 +1173,6 @@ static void dspd_hotplug_updatedefault(struct dspd_dict *sect)
 	dspd_dctx.default_dev_info = sect;
     }
 
-  /*fprintf(stderr, "p=%d c=%d f=%d\n",
-	  dspd_dctx.hotplug.default_fullduplex,
-	  dspd_dctx.hotplug.default_capture,
-	  dspd_dctx.hotplug.default_playback);*/
   if ( playback != INT32_MAX && dspd_dctx.hotplug.default_playback == -1 )
     dspd_dctx.hotplug.default_playback = pidx;
   if ( capture != INT32_MAX && dspd_dctx.hotplug.default_capture == -1 )

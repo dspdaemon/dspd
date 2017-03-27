@@ -241,6 +241,8 @@ static void *cbpoll_thread(void *p)
   return result;
 }
 
+
+
 void *cbpoll_get_extra_data(struct cbpoll_ctx *ctx)
 {
   return ctx->wq.extra_data;
@@ -546,6 +548,23 @@ int32_t cbpoll_start(struct cbpoll_ctx *ctx)
     }
   return ret * -1;
 }
+int32_t cbpoll_run(struct cbpoll_ctx *ctx)
+{
+  int32_t ret;
+  ret = dspd_thread_create(&ctx->wq.thread, 
+			   NULL,
+			   async_work_thread,
+			   ctx);
+  if ( ret == 0 )
+    {
+      ctx->thread.thread = pthread_self();
+      ctx->thread.init = true;
+      ret = (intptr_t)cbpoll_thread(ctx);
+      ctx->thread.init = false;
+    }
+  return ret * -1;
+}
+
 
 void cbpoll_destroy(struct cbpoll_ctx *ctx)
 {

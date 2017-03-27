@@ -1,7 +1,7 @@
 include config.makefile
 include rules.makefile
 LIBDIRS=lib alsa
-BINDIRS=modules daemon
+BINDIRS=modules daemon sndio
 SUBDIRS=$(LIBDIRS) $(BINDIRS) $(M32DIR)
 
 all:
