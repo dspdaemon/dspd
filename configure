@@ -16,6 +16,7 @@ function print_help {
        udev: UDEV hotplugging support
        socketserver: Unix domain socket server
        oss: OSSv4 emulation.  Requires CUSE kernel module.
+       sndio: sndio server protocol
 
 "
 
@@ -167,6 +168,7 @@ SYSROOT=/
 LIBSUFFIX=""
 NOLIBSUFFIX=0
 PREFIX="/usr"
+XBINDIRS=""
 for arg in $@; do
     
     if [ "${arg:0:10}" = "--disable-" ]; then
@@ -338,6 +340,14 @@ if is_enabled oss; then
     fi
 fi
 
+log -n "Checking for sndio emulation..."
+if is_enabled sndio; then
+    XBINDIRS="$XBINDIRS sndio"
+    SNDIO="yes"
+else
+    SNDIO="no"
+fi
+echo $SNDIO
 
 mtype="no"
 if is_enabled multilib; then
@@ -409,7 +419,7 @@ if [ ! "$LIBSUFFIX" = "" ]; then
 fi
 
 echo "MODULES=$MODULES" >&3
-
+echo "XBINDIRS=$XBINDIRS" >&3
 if [ ! "$PREFIX" = "" ]; then
     echo "PREFIX=$PREFIX" >&3
 fi
@@ -419,6 +429,7 @@ echo "CFLAGS=$TCFLAGS -DLIBSUFFIX=\\\"$LIBSUFFIX\\\"" >&3
 echo
 echo CONFIGURATION
 echo "MODULES:  $MODULES"
+echo "SNDIO:    $SNDIO"
 echo "CFLAGS:   $TCFLAGS"
 echo "CC:       $CC"
 echo "MULTILIB: $mtype"

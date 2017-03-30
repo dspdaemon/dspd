@@ -1,7 +1,7 @@
 include config.makefile
 include rules.makefile
 LIBDIRS=lib alsa
-BINDIRS=modules daemon sndio
+BINDIRS=modules daemon $(XBINDIRS)
 SUBDIRS=$(LIBDIRS) $(BINDIRS) $(M32DIR)
 
 all:
@@ -10,9 +10,11 @@ all:
 distclean:
 	sh -c 'OWD="$$PWD";for f in $(SUBDIRS); do cd $$OWD/$$f && make distclean; done'
 	sh -c '>config.makefile'
+	-rm -f config.log
 
 clean:
 	sh -c 'OWD="$$PWD";for f in $(SUBDIRS); do cd $$OWD/$$f && make clean; done'
+	-rm -f config.log
 
 #Install the daemon and required libraries (just modules for now)
 install-bin:
