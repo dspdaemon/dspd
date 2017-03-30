@@ -460,7 +460,7 @@ static snd_pcm_sframes_t dspd_pointer(snd_pcm_ioplug_t *io)
       ret = -EBADFD;
     } else if ( io->state == SND_PCM_STATE_XRUN && dspd->stream == dspd->client.trigger )
     {
-      //XRUN only if it was first triggered
+      //xrun only if it was first triggered
       dspd_rclient_poll_notify(&dspd->client, dspd->stream);
       ret = -EPIPE;
     } else
@@ -518,7 +518,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   cp.stream = dspd->stream;
   cp.flags = DSPD_CLI_FLAG_SHM;
  
-  //fprintf(stderr, "SETHWPARAMS\n");
+
 
   ret = snd_pcm_hw_params_get_buffer_size_min(params, &minbuf);
   if ( ret )
@@ -576,7 +576,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 	goto error;
       cp.bufsize = maxbuf;
     }
-  //fprintf(stderr, "SETTING\n");
+
 
   dir = 0;
   ret = snd_pcm_hw_params_get_channels(newparams, &ui);
@@ -606,11 +606,12 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   if ( ret )
     goto error;
   
-  //fprintf(stderr, "PARAMS: IN=%d,%d OUT=%d,%d\n", cp.bufsize, cp.fragsize, p.bufsize, p.fragsize);
+
 
   shm_fd = dspd_conn_recv_fd(dspd->conn);
-
-  //fprintf(stderr, "CONNECT\n");
+  if ( shm_fd < 0 )
+    goto error;
+  
   ret = dspd_stream_ctl(dspd->conn,
 			dspd->client_stream,
 			DSPD_SCTL_CLIENT_CONNECT,
@@ -621,13 +622,10 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 			&br);
 
   if ( ret )
-    {
-      //fprintf(stderr, "RET=%d %ld %ld\n", ret, (long)p.bufsize, (long)p.fragsize);
-      goto error;
-    }
+    goto error;
 
   
-  //fprintf(stderr, "ATTACH\n");
+
   struct dspd_rclient_data rd;
   rd.conn = dspd->conn;
   rd.client = dspd->client_stream;
@@ -640,7 +638,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   if ( ret )
     goto error;
-  //fprintf(stderr, "DATA %p %p %p\n", &dspd->client, dspd, dspd->conn);
+
 
   ret = snd_pcm_hw_params_set_buffer_size(dspd->io.pcm, newparams, p.bufsize);
   if ( ret )
@@ -1089,14 +1087,13 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   dspd->device = -1;
   dspd->io.nonblock = !!(mode & SND_PCM_NONBLOCK);
   dspd->client_stream = -1;
-  //The SND_PCM_IOPLUG_FLAG_MONOTONIC is not really implemented in libasound
+  //The SND_PCM_IOPLUG_FLAG_MONOTONIC flag is not really implemented in libasound
   //for ioplug.
   dspd->io.flags = SND_PCM_IOPLUG_FLAG_LISTED;
   dspd->io.version = SND_PCM_IOPLUG_VERSION;
   dspd->io.name = default_plugin_name;
   dspd->io.poll_fd = -1;
   dspd->io.mmap_rw = 0;
-  //fprintf(stderr, "CREATE %p\n", dspd);
 
   /*
     The original idea was to disable the translations and use "plug:" instead
