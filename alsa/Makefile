@@ -9,21 +9,21 @@ APLDFLAGS=-shared -lm -ldl -lpthread -lasound -lrt \
 MAKEOBJ=$(CC) $(APCFLAGS) -c
 
 
-all: devel dspd
+all: pcm_devel.o pcm_dspd.o
 
 skel:
 	$(MAKEOBJ) pcm_skel.c
 	$(CC) $(APLDFLAGS) $(APCFLAGS) -o libasound_module_pcm_skel.so \
 	pcm_skel.o
 
-devel:
+pcm_devel.o:
 	$(MAKEOBJ) pcm_devel.c
 	$(CC) -rdynamic -shared $(CFLAGS) $(LIBS) -pthread -o libasound_module_pcm_devel.so \
 	pcm_devel.o
 
 
 
-dspd:
+pcm_dspd.o:
 	$(MAKEOBJ) pcm_dspd.c
 	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so \
 	pcm_dspd.o
