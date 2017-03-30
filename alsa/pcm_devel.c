@@ -1,4 +1,18 @@
 /*
+  PCM_DEVEL - ALSA PCM IOPLUG DEVELOPMENT MODULE
+  
+  This module loads another pcm io plugin from an arbitrary location so
+  that a module can be quickly built and tested.
+
+  The following environment variables affect the operation of this plugin:
+
+  SND_PCM_DEVEL_LOAD:  The path and name of the library to load with dlopen()
+  SND_PCM_DEVEL_DEBUG: Enable debugging to stderr
+  
+
+*/
+
+/*
  *  
  *
  *
@@ -18,12 +32,7 @@
  *
  */
 
-/*
-  ALSA PCM IOPLUG DEVELOPMENT MODULE
-  
-  This module loads another pcm io plugin from an arbitrary location so
-  that a module can be quickly built and tested.
-*/
+
 
 #define _GNU_SOURCE
 
@@ -58,8 +67,6 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 	      snd_pcm_stream_t stream, int mode);
   const char *ptr;
   char *p;
-  if ( ! solib )
-    return -EINVAL;
   char str[256];
   char fname[256];
   static void *handle = NULL;
@@ -68,15 +75,20 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
   if ( p )
     debug = atoi(p);
   if ( debug )
-    fprintf(stderr, "Loaded dspd pcm development plugin\n");
+    fprintf(stderr, "pcm_devel: Loaded dspd pcm development plugin\n");
+  if ( ! solib )
+    {
+      fprintf(stderr, "pcm_devel: No library specified\n");
+      return -EINVAL;
+    }
+
   if ( ! handle )
     {
-      //fprintf(stderr, "dlopen(%s)\n", solib);
       handle = dlopen(solib, RTLD_NOW);
       if ( ! handle )
 	{
 	  if ( debug )
-	    fprintf(stderr, "DLOPEN: %s\n", dlerror());
+	    fprintf(stderr, "pcm_devel: dlopen: %s\n", dlerror());
 	  return -ELIBACC;
 	}
     }
@@ -92,13 +104,13 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 	} else
 	{
 	  if ( debug )
-	    fprintf(stderr, "Could not parse library location\n");
+	    fprintf(stderr, "pcm_devel: Could not parse library location\n");
 	  return -EINVAL;
 	}
     } else
     {
       if ( debug )
-	fprintf(stderr, "Invalid library name\n");
+	fprintf(stderr, "pcm_devel: Invalid library name\n");
       return -EINVAL;
     }
   strcpy(fname, &str[21]);
@@ -106,7 +118,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
   if ( ! p )
     {
       if ( debug )
-	fprintf(stderr, "Could not determine symbol name for library\n");
+	fprintf(stderr, "pcm_devel: Could not determine symbol name for library\n");
       return -EINVAL;
     }
   *p = 0;
@@ -116,7 +128,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
   if ( ! fptr )
     {
       if ( debug )
-	fprintf(stderr, "DLOPEN: %s\n", dlerror());
+	fprintf(stderr, "pcm_devel: dlopen: %s\n", dlerror());
       return -ENOSYS;
     }
   return fptr(pcmp, name, root, conf, stream, mode);
