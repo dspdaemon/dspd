@@ -132,6 +132,15 @@ static int skel_delay(snd_pcm_ioplug_t *io, snd_pcm_sframes_t *delayp)
   return 0;
 }
 
+static int skel_pause(snd_pcm_ioplug_t *io, int enable)
+{
+  return 0;
+}
+
+static int skel_resume(snd_pcm_ioplug_t *io)
+{
+  return 0;
+}
 
 static int skel_poll_revents(snd_pcm_ioplug_t *io,
 			     struct pollfd *pfd,
@@ -166,8 +175,8 @@ const snd_pcm_ioplug_callback_t dspd_playback_callback = {
   .prepare = skel_prepare,
   .drain = skel_drain,
   .delay = skel_delay,
-  .pause = NULL, //dspd_pause,
-  .resume = NULL, //dspd_resume,
+  .pause = skel_pause,
+  .resume = skel_resume,
   .poll_revents = skel_poll_revents,
   .poll_descriptors_count = skel_poll_descriptors_count,
   .poll_descriptors = skel_poll_descriptors,
@@ -184,8 +193,8 @@ const snd_pcm_ioplug_callback_t dspd_capture_callback = {
   .prepare = skel_prepare,
   .drain = skel_drain,
   .delay = skel_delay,
-  .pause = NULL, //dspd_pause,
-  .resume = NULL, //dspd_resume,
+  .pause = skel_pause,
+  .resume = skel_resume,
   .poll_revents = skel_poll_revents,
   .poll_descriptors_count = skel_poll_descriptors_count,
   .poll_descriptors = skel_poll_descriptors,
