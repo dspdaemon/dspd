@@ -2151,7 +2151,8 @@ static void *dspd_dev_thread(void *arg)
   struct dspd_pcm_device *dev = sched->udata;
   char name[32];
   sprintf(name, "dspd-io-%d", dev->key);
-  prctl(PR_SET_NAME, name, 0, 0, 0);
+  set_thread_name(name);
+
 
   dspd_pcm_device_register_tls(dev);
   memset(&act, 0, sizeof(act));

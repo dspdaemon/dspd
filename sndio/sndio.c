@@ -214,16 +214,32 @@ static bool client_timer_event2(struct sndio_client *cli)
   return true;
 }
 
+static void client_reset(struct sndio_client *cli)
+{
+   cli->running = false;
+   cli->flow_control_pending = 0;
+   cli->frames_written = 0;
+   cli->delta = 0;
+   cli->last_delay = 0;
+   cli->last_fill = 0;
+   cli->appl_ptr = 0;
+   cli->hw_ptr = 0;
+   
+}
+
 static int client_xrun(struct sndio_client *cli)
 {
   int ret = 0;
-  if ( cli->xrun_policy == SIO_ERROR )
+  if ( cli->running == true && cli->draining == false )
     {
-      shutdown(cli->fd, SHUT_RDWR);
-      ret = -1;
-    } else if ( cli->xrun_policy == SIO_SYNC )
-    {
-      //TODO: Synchronize stream
+      if ( cli->xrun_policy == SIO_ERROR )
+	{
+	  shutdown(cli->fd, SHUT_RDWR);
+	  ret = -1;
+	} else if ( cli->xrun_policy == SIO_SYNC )
+	{
+	  //TODO: Implement this
+	}
     }
   return ret;
 }
@@ -327,20 +343,38 @@ int client_check_buffers(struct sndio_client *cli)
 		ret = client_xrun(cli);
 	    } else
 	    {
-	      if ( ret > cli->write_window )
+	      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
 		{
-		  //This way works best because full duplex connections need buffer feedback to read
-		  //if the playback data runs out.
-		  cli->flow_control_pending = ret - cli->write_window;
+		  if ( ret > cli->write_window )
+		    {
+		      
+		      //This way works best because full duplex connections need buffer feedback to read
+		      //if the playback data runs out.
+		      cli->flow_control_pending = ret - cli->write_window;
+		    }
+		} else
+		{
+		  /*
+		    This is more efficient and prevents some clients, such as xine, from spinning.
+		   */
+		  if ( cli->write_window == 0 )
+		    cli->flow_control_pending = ret;
 		}
 	      if ( delay < cli->last_delay && delay > 0 )
 		{
 		  pdelta = cli->last_delay - delay;
+
+		  //This always seems to work and also tends to be more efficient.
+		  if ( ret == 0 )
+		    pdelta = 0;
+		  else
+		    cli->last_delay = delay;
+
 		  mdelta = cli->appl_ptr - cli->hw_ptr;
 		  if ( pdelta > mdelta )
 		    pdelta = mdelta;
 		  cli->hw_ptr += pdelta;
-		  cli->last_delay = delay;
+
 		}
 	      ret = 0;
 	    }
@@ -959,7 +993,8 @@ static int amsg_stop(struct sndio_client *cli)
 			     0,
 			     &br);
     }
-  
+  if ( ! cli->pclient )
+    client_reset(cli);
   cli->running = false;
   if ( ret == 0 && cli->draining == false )
     ret = send_ack(cli);
@@ -1473,6 +1508,9 @@ static int par2cli(const struct dspd_device_stat *info,
     clp->fragsize = clp->bufsize / 4;
   clp->latency = clp->fragsize;
   
+
+  
+
   dspd_time_t sample_time = 1000000000 / devpar->rate;
   dspd_time_t min_time = sample_time * devpar->min_latency;
   dspd_time_t max_time = sample_time * devpar->max_latency;
@@ -1490,6 +1528,8 @@ static int par2cli(const struct dspd_device_stat *info,
   clp->latency = par_time / (1000000000 / clp->rate);
   clp->fragsize = clp->latency;
   clp->bufsize = MAX((clp->fragsize * 4), clp->bufsize);
+  
+
   return 0;
 }
 static int cli2par(int mode,
@@ -1684,6 +1724,9 @@ int32_t dspd_sndio_start(struct sndio_ctx *ctx)
 {
   int32_t ret;
   size_t i;
+  ret = cbpoll_set_name(&ctx->cbctx, "dspd-sndiod");
+  if ( ret < 0 )
+    return ret;
   if ( ctx->fd >= 0 )
     {
       ret = listen(ctx->fd, MAX_CLIENTS);

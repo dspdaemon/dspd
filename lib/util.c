@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <sys/prctl.h>
 #include "sslib.h"
 
 
@@ -497,4 +498,12 @@ ssize_t dspd_readv(int fd, const struct iovec *iov, int niov, size_t *offset)
 	}
     }
   return DSPD_IOV_COMPLETE;
+}
+
+int set_thread_name(const char *name)
+{
+  int ret = prctl(PR_SET_NAME, name, 0, 0, 0);
+  if ( ret == -1 )
+    ret = -errno;
+  return ret;
 }

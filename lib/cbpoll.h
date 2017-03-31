@@ -89,6 +89,7 @@ struct cbpoll_ctx {
   void *arg;
   struct cbpoll_wq    wq;
   dspd_thread_t thread;
+  char *name;
 };
 void cbpoll_unref(struct cbpoll_ctx *ctx, int index);
 void cbpoll_ref(struct cbpoll_ctx *ctx, int index);
@@ -120,6 +121,7 @@ void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 int32_t cbpoll_init(struct cbpoll_ctx *ctx, 
 		    int32_t  flags,
 		    uint32_t max_fds);
+int32_t cbpoll_set_name(struct cbpoll_ctx *ctx, const char *threadname);
 int32_t cbpoll_start(struct cbpoll_ctx *ctx);
 int32_t cbpoll_run(struct cbpoll_ctx *ctx);
 void cbpoll_destroy(struct cbpoll_ctx *ctx);

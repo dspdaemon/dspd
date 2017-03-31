@@ -62,4 +62,5 @@ void *dspd_memdup(const void *ptr, size_t len);
 #define DSPD_IOV_COMPLETE 0
 ssize_t dspd_writev(int fd, const struct iovec *iov, int niov, size_t *offset);
 ssize_t dspd_readv(int fd, const struct iovec *iov, int niov, size_t *offset);
+int set_thread_name(const char *name);
 #endif

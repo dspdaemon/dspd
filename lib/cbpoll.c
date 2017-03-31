@@ -160,9 +160,10 @@ static void *cbpoll_thread(void *p)
   int32_t fd, idx, f;
   uint32_t len;
   struct cbpoll_fd *fdata;
-  char name[32];
-  sprintf(name, "dspdcbpoll");
-  prctl(PR_SET_NAME, name, 0, 0, 0);
+  if ( ! ctx->name )
+    set_thread_name("dspdcbpoll");
+  else
+    set_thread_name(ctx->name);
   while ( AO_load(&ctx->abort) == 0 )
     {
       if ( ctx->sleep )
@@ -254,6 +255,17 @@ static void *async_work_thread(void *p)
   struct cbpoll_work *work;
   struct cbpoll_fd *fd;
   uint32_t len;
+  if ( ctx->name )
+    {
+      char buf[256];
+      sprintf(buf, "%s-wq", ctx->name);
+      set_thread_name(buf);
+    } else
+    {
+      set_thread_name("dspdcbpoll-wq");
+    }
+
+    
   while ( AO_load(&ctx->abort) == 0 )
     {
       //Wait for incoming data
@@ -596,4 +608,13 @@ uint32_t cbpoll_refcnt(struct cbpoll_ctx *ctx, int index)
   else
     ret = ctx->fdata[index].refcnt;
   return ret;
+}
+
+int32_t cbpoll_set_name(struct cbpoll_ctx *ctx, const char *threadname)
+{
+  free(ctx->name);
+  ctx->name = strdup(threadname);
+  if ( ! ctx->name )
+    return -ENOMEM;
+  return 0;
 }
