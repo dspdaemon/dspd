@@ -17,10 +17,12 @@ function print_help {
        socketserver: Unix domain socket server
        oss: OSSv4 emulation.  Requires CUSE kernel module.
        sndio: sndio server protocol
-
+       libcap: POSIX capabilities library
 "
 
 }
+
+
 
 function have_multilib {
     echo '#include <stdio.h>' >"$TMPFILE"
@@ -340,6 +342,20 @@ if is_enabled oss; then
     fi
 fi
 
+
+if is_enabled libcap; then
+    log -n "Checking for libcap..."
+    printsrc sys/capability.h >"$TMPFILE"
+    if ! $CC $TCFLAGS "$TMPFILE" -o /dev/null 2>&4; then
+	log no
+	LIBCAP="no"
+    else
+	log yes
+	LIBCAP="yes"
+    fi
+fi
+
+
 log -n "Checking for sndio emulation..."
 if is_enabled sndio; then
     XBINDIRS="$XBINDIRS sndio"
@@ -347,7 +363,7 @@ if is_enabled sndio; then
 else
     SNDIO="no"
 fi
-echo $SNDIO
+log $SNDIO
 
 mtype="no"
 if is_enabled multilib; then
@@ -424,6 +440,12 @@ if [ ! "$PREFIX" = "" ]; then
     echo "PREFIX=$PREFIX" >&3
 fi
 
+if [ "$LIBCAP" = "yes" ]; then
+    TCFLAGS="$TCFLAGS -lcap"
+else
+    LIBCAP="no"
+fi
+
 echo "CFLAGS=$TCFLAGS -DLIBSUFFIX=\\\"$LIBSUFFIX\\\"" >&3
 
 echo
@@ -436,3 +458,4 @@ echo "MULTILIB: $mtype"
 echo "LIBDIR:   $LIBDIR"
 echo "PREFIX:   $PREFIX"
 echo "SSE3:     $SSE3"
+echo "LIBCAP:   $LIBCAP"

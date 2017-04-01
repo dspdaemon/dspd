@@ -25,6 +25,15 @@
 #include <sched.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/types.h>
+#include <grp.h>
+#include <sys/types.h>
+#include <pwd.h>
+#ifdef HAVE_LIBCAP
+#include <sys/capability.h>
+#endif
+#include <sys/prctl.h>
+
 #include "sslib.h"
 #include "daemon.h"
 #include "syncgroup.h"
@@ -609,6 +618,41 @@ static bool is_rt(void)
   return true;
 }
 
+static int set_caps(void)
+{
+#ifdef HAVE_LIBCAP
+  cap_t caps = cap_get_proc();
+  if ( ! caps )
+    return -ENOMEM;
+  cap_value_t newcaps[2] = { CAP_SYS_NICE, CAP_IPC_LOCK };
+  cap_set_flag(caps, CAP_PERMITTED, 2, newcaps, CAP_SET);
+  cap_set_proc(caps);
+  prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
+  cap_free(caps);
+#endif
+  return 0;
+}
+
+static int reset_caps(void)
+{
+#ifdef HAVE_LIBCAP
+  if ( dspd_dctx.uid > 0 )
+    {
+      cap_t caps = cap_get_proc();
+      if ( ! caps )
+	return -ENOMEM;
+      cap_value_t newcaps[2] = { CAP_SYS_NICE, CAP_IPC_LOCK };
+      cap_set_flag(caps, CAP_EFFECTIVE, 2, newcaps, CAP_SET);
+      cap_set_proc(caps);
+      cap_free(caps);
+      prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+    }
+#endif
+  return 0;
+}
+
+
+
 int dspd_daemon_init(int argc, char **argv)
 {
   int ret = -ENOMEM, result;
@@ -619,6 +663,10 @@ int dspd_daemon_init(int argc, char **argv)
   int pr, pf = 0, mxf, mnf, mxr, mnr, n;
   struct dspd_dict *dcfg;
   char *val;
+  char *pwbuf = NULL;
+  ssize_t pwsize = sysconf(_SC_GETPW_R_SIZE_MAX);
+  if ( pwsize == -1 )
+    pwsize = 16384;
   if ( ! tmp )
     return -ENOMEM;
  
@@ -628,7 +676,10 @@ int dspd_daemon_init(int argc, char **argv)
   dspd_dctx.rtio_priority = -1;
   dspd_dctx.rtsvc_priority = -1;
   dspd_dctx.glitch_correction = -1;
-
+  dspd_dctx.uid = getuid();
+  dspd_dctx.gid = getgid();
+  dspd_dctx.ipc_mode = 0660;
+  
   if ( have_sched_iso() )
     {
       dspd_dctx.rtio_policy = SCHED_ISO;
@@ -717,6 +768,8 @@ int dspd_daemon_init(int argc, char **argv)
 	    {
 	      dspd_dctx.rtio_priority = n;
 	      dspd_dctx.rtsvc_priority = n;
+	      if ( dspd_dctx.rtsvc_priority > 1 )
+		dspd_dctx.rtsvc_priority--;
 	    }
 	}
     }
@@ -792,6 +845,89 @@ int dspd_daemon_init(int argc, char **argv)
 		goto out;
 	    }
 	}
+    }
+  pwbuf = malloc(pwsize);
+  if ( ! pwbuf )
+    {
+      ret = -errno;
+      goto out;
+    }
+  struct passwd pwd;
+  struct passwd *pres;
+  if ( dspd_dict_find_value(dcfg, "user", &value) )
+    {
+      ret = getpwnam_r(value, &pwd, pwbuf, pwsize, &pres);
+      if ( pres == NULL )
+	{
+	  if ( ret == 0 )
+	    {
+	      fprintf(stderr, "Invalid user - %s\n", value);
+	      ret = -EPERM;
+	      goto out;
+	    } else
+	    {
+	      ret = -errno;
+	      perror("getpwnam_r");
+	      goto out;
+	    }
+	} else
+	{
+	  dspd_dctx.uid = pres->pw_uid;
+	  dspd_dctx.gid = pres->pw_gid;
+	  dspd_dctx.user = strdup(value);
+	  if ( ! dspd_dctx.user )
+	    {
+	      ret = -errno;
+	      goto out;
+	    }
+	}
+    }
+  struct group grp, *gres;
+  if ( dspd_dict_find_value(dcfg, "group", &value) )
+    {
+      ret = getgrnam_r(value, &grp, pwbuf, pwsize, &gres);
+      if ( gres == NULL )
+	{
+	  if ( ret == 0 )
+	    {
+	      fprintf(stderr, "Invalid group - %s\n", value);
+	      ret = -EPERM;
+	      goto out;
+	    } else
+	    {
+	      ret = -errno;
+	      perror("getgrnam_r");
+	      goto out;
+	    }
+	} else
+	{
+	  dspd_dctx.gid = gres->gr_gid;
+	}
+    }
+  if ( dspd_dctx.uid == 0 && dspd_dctx.gid == 0 )
+    dspd_dctx.ipc_mode = 0666;
+
+  if ( dspd_dict_find_value(dcfg, "ipc_mode", &value) )
+    {
+      int32_t m;
+      ret = dspd_strtoi32(value, &m, 8);
+      if ( ret < 0 )
+	{
+	  fprintf(stderr, "Invalid mode - %s\n", value);
+	  goto out;
+	}
+      dspd_dctx.ipc_mode = m;
+    }
+  
+  if ( (dspd_dctx.rtsvc_policy == SCHED_RR ||
+	dspd_dctx.rtsvc_policy == SCHED_FIFO ||
+	dspd_dctx.rtio_policy == SCHED_RR ||
+	dspd_dctx.rtio_policy == SCHED_FIFO) &&
+       dspd_dctx.uid > 0 )
+    {
+      ret = set_caps();
+      if ( ret < 0 )
+	goto out;
     }
 
   if ( dspd_dict_find_value(dcfg, "modules", &value) )
@@ -946,6 +1082,7 @@ int dspd_daemon_init(int argc, char **argv)
   
  out:
   free(tmp);
+  free(pwbuf);
   if ( ret != 0 )
     {
       //This is where cleanup should happen
@@ -1542,6 +1679,38 @@ int dspd_daemon_run(void)
   struct dspd_ll *curr, *prev = NULL;
   struct dspd_startup_callback *cb;
   int ret;
+  
+  if ( dspd_dctx.gid >= 0 )
+    {
+      if ( setgid(dspd_dctx.gid) < 0 )
+	{
+	  dspd_log(0, "Error %d while setting group id to %d\n", errno, dspd_dctx.gid);
+	  return -1;
+	}
+    }
+
+  if ( dspd_dctx.user )
+    initgroups(dspd_dctx.user, dspd_dctx.gid);
+  
+  if ( dspd_dctx.uid >= 0 )
+    {
+      if ( setuid(dspd_dctx.uid) < 0 )
+	{
+	  dspd_log(0, "Error %d while setting user id to %d\n", errno, dspd_dctx.uid);
+	  return -1;
+	}
+    }
+  
+
+
+  if ( (dspd_dctx.rtsvc_policy == SCHED_RR ||
+	dspd_dctx.rtsvc_policy == SCHED_FIFO ||
+	dspd_dctx.rtio_policy == SCHED_RR ||
+	dspd_dctx.rtio_policy == SCHED_FIFO) &&
+       dspd_dctx.uid > 0 )
+    reset_caps();
+
+  
   dspd_log(0, "Running startup commands...");
   for ( curr = dspd_dctx.startup_callbacks; curr; curr = curr->next )
     {
@@ -1552,6 +1721,8 @@ int dspd_daemon_run(void)
     }
   free(prev);
   dspd_dctx.startup_callbacks = NULL;
+
+
   dspd_log(0, "Starting main thread loop.");
   if ( ! dspd_dctx.mainthread_loop )
     {

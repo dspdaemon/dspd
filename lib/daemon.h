@@ -131,6 +131,10 @@ struct dspd_daemon_ctx {
   struct dspd_sglist *syncgroups;
 
   int debug;
+  uid_t uid;
+  gid_t gid;
+  char *user;
+  mode_t ipc_mode;
 };
 
 
@@ -195,4 +199,5 @@ dspd_time_t dspd_get_min_latency(void);
 const char *dspd_get_modules_dir(void);
 int32_t dspd_get_glitch_correction(void);
 bool dspd_daemon_queue_work(const struct dspd_wq_item *item);
+
 #endif

@@ -990,6 +990,14 @@ typedef struct
 #define SNDCTL_DSP_GETBLKSIZE		__SIOWR('P', 4, int)
 #define SNDCTL_DSP_SAMPLESIZE		SNDCTL_DSP_SETFMT
 #define SNDCTL_DSP_CHANNELS		__SIOWR('P', 6, int)
+
+  //Obsolete
+  /*#define SOUND_PCM_READ_RATE		_SIOR ('P', 2, int)
+#define SOUND_PCM_READ_CHANNELS		_SIOR ('P', 6, int)
+#define SOUND_PCM_READ_BITS		_SIOR ('P', 5, int)
+#define SOUND_PCM_READ_FILTER		_SIOR ('P', 7, int)*/
+
+
 #define SNDCTL_DSP_POST			__SIO  ('P', 8)
 #define SNDCTL_DSP_SUBDIVIDE		__SIOWR('P', 9, int)
 #define SNDCTL_DSP_SETFRAGMENT		__SIOWR('P',10, int)

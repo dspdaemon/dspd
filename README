@@ -4,7 +4,7 @@ it then go ahead and use it.
 
 General Information
 ===================
-DSPD is a sound daemon that tries to emulate one or more sound cards that support
+DSPD is a Linux sound daemon that tries to emulate one or more sound cards that support
 multiple streams.  It isn't really complete right now but it works well enough
 that I don't need dmix or anything like that anymore.
 
@@ -18,17 +18,19 @@ AMD chipsets), Nvidia AC97, Creative Labs USB, and Griffin Firewave cards.
 
 Dependencies
 ============
-The basic daemon requires nothing more than a recent glibc.  Everything else
-is optionally loaded from binaries.  It probably needs a 3.x or newer kernel.
-Only system timer based scheduling is supported so it won't work on systems
-too old to have a HPET, APIC, or something similar.
+The basic daemon requires nothing more than a recent glibc and libcap.  
+Everything else is optionally loaded from binaries.  It probably needs a 
+3.x or newer kernel.  Only system timer based scheduling is supported so it 
+won't work on systems too old to have a HPET, APIC, or something similar.  
+Clang and gcc compilers will both work.
 
-The following are supported:
+The following modules are supported:
 
 ALSA
 Speex DSP
 udev
-CUSE (/dev/cuse kernel interface without libfuse)
+CUSE OSS emulation (/dev/cuse kernel interface without libfuse)
+sndio
 
 
 Building
