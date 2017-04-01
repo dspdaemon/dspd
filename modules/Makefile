@@ -7,10 +7,10 @@ MLIBS=$(LIBS) -ldspdc -ldspds
 all: $(MODULES)
 
 clean:
-	-rm -f *.o *.so
+	-rm -f *.o *.so osscuse_cdev_helper
 
 distclean:
-	-rm -f *.o *.so \#* *~
+	-rm -f *.o *.so \#* *~ osscuse_cdev_helper
 
 none:
 	/bin/true
@@ -33,7 +33,7 @@ libsamplerate:
 
 osscuse:
 	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_osscuse.so mod_osscuse.c io_osscuse.c rtcuse.c
-
+	$(CC) $(CFLAGS) $(MLIBS) -o osscuse_cdev_helper osscuse_cdev_helper.c rtcuse.c
 udev:
 	$(CC) $(CFLAGS) $(MLIBS) -lasound -ludev -shared -o mod_udev.so mod_udev.c
 
@@ -43,7 +43,8 @@ udev:
 install:
 	mkdir -p -m755 $(MODDIR)
 	install -m555 *.so $(MODDIR)
+	test -e osscuse_cdev_helper && install -m555 osscuse_cdev_helper $(MODDIR)
 
 uninstall:
-	rm -R -f -- $(MODDIR)/
+	-rm -R -f -- $(MODDIR)/
 

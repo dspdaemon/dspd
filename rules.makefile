@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?=-Wall -O0 -ggdb -fPIC $(XCFLAGS) -L../lib -DLIBSUFFIX=\"\"
 MAKE_OBJ=$(CC) $(CFLAGS) $(XCFLAGS) -c
-LIBS ?=-lrt -pthread -lm -ldl
+LIBS ?=-lrt -pthread -lm -ldl $(XLIBS)
 ifeq ($(DESTDIR),)
 SYSCONFDIR=/etc
 else

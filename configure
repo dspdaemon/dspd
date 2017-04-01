@@ -159,7 +159,7 @@ if [ "$1" == "--help" ]; then
     print_help >&2
     exit 0
 fi
-
+XLIBS=""
 DISABLED_COUNT=0
 ENABLED_COUNT=0
 DISABLED_ALL=0
@@ -441,11 +441,13 @@ if [ ! "$PREFIX" = "" ]; then
 fi
 
 if [ "$LIBCAP" = "yes" ]; then
-    TCFLAGS="$TCFLAGS -lcap"
+    TCFLAGS="$TCFLAGS -DHAVE_LIBCAP"
+    XLIBS="$XLIBS -lcap"
 else
     LIBCAP="no"
 fi
 
+echo "XLIBS=$XLIBS" >&3
 echo "CFLAGS=$TCFLAGS -DLIBSUFFIX=\\\"$LIBSUFFIX\\\"" >&3
 
 echo

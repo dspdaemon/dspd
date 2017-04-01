@@ -60,6 +60,8 @@
 #include <linux/fuse.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../lib/cbpoll.h"
@@ -76,6 +78,13 @@ static void remove_cdev(struct oss_dsp_cdev *cdev);
 
 static void insert_cdev(struct oss_dsp_cdev *cdev);
 static int32_t cdev_ioctl(struct oss_cdev_client *cli);
+
+
+int osscuse_create_cdev(int devnum,
+			int devtype,
+			struct rtcuse_cdev_params *devp,
+			struct rtcuse_cdev **dev);
+
 static inline void set_ibit(int *bits, unsigned int num)
 {
   bits[num/4] |= (1 << (num%32));
@@ -1922,7 +1931,7 @@ static struct oss_dsp_cdev *cdev_new(int32_t device, const struct dspd_device_st
     dev->capture_index = device;
   else
     dev->capture_index = -1;
-  err = rtcuse_create_cdev(NULL, O_NONBLOCK, &params, &dev->cdev);
+  err = osscuse_create_cdev(dspnum, DEVTYPE_DSP, &params, &dev->cdev);
   if ( err != 0 )
     goto error;
   
@@ -2001,7 +2010,7 @@ static struct oss_dsp_cdev *ctl_new(int32_t device, const struct dspd_device_sta
   params.maxread = 4096;
   //Not really correct.
   params.minor += (dspnum * 2) + 1;
-  err = rtcuse_create_cdev(NULL, O_NONBLOCK, &params, &dev->cdev);
+  err = osscuse_create_cdev(dspnum, DEVTYPE_MIXER, &params, &dev->cdev);
   if ( err != 0 )
     goto error;
     
@@ -2425,6 +2434,143 @@ static void *dummy_thread(void *p)
   return NULL;
 }
 
+
+
+static ssize_t write_data(int fd, const void *ptr, size_t len)
+{
+  size_t offset = 0;
+  ssize_t ret;
+  while ( offset < len )
+    {
+      ret = write(fd, (const char*)ptr + offset, len - offset);
+      if ( ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR )
+	return -errno;
+      else if ( ret == 0 )
+	return -EIO;
+      offset += ret;
+    }
+  return 0;
+}
+static ssize_t read_data(int fd, void *ptr, size_t len)
+{
+  size_t offset = 0;
+  ssize_t ret;
+  while ( offset < len )
+    {
+      ret = read(fd, (char*)ptr + offset, len - offset);
+      if ( ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR )
+	return -errno;
+      else if ( ret == 0 )
+	return -EIO;
+      offset += ret;
+    }
+  return 0;
+}
+
+
+
+static void osscuse_start_helper(void)
+{
+  int sockets[2];
+  char path[PATH_MAX];
+  char uid[16], gid[16], fd[16];
+  struct stat fi;
+  if ( server_context.helper == OSSCUSE_DISABLE_HELPER )
+    return;
+  if ( server_context.helper != OSSCUSE_ENABLE_HELPER )
+    {
+      if ( dspd_dctx.uid <= 0 )
+	return;
+      if ( stat("/dev/cuse", &fi) == 0 )
+	{
+	  if ( (fi.st_mode & S_IROTH) && (fi.st_mode & S_IWOTH) )
+	    return;
+	  if ( (fi.st_gid == dspd_dctx.gid) && (fi.st_mode & S_IRGRP) && (fi.st_mode & S_IWGRP) )
+	    return;
+	  if ( (fi.st_uid == dspd_dctx.uid) && (fi.st_mode & S_IRUSR) && (fi.st_mode & S_IWUSR) )
+	    return;
+	}
+    }
+  
+  sprintf(path, "%s/osscuse_cdev_helper", dspd_get_modules_dir());
+  if ( access(path, X_OK) < 0 )
+    return;
+  int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, sockets);
+  if ( ret < 0 )
+    return;
+ 
+  sprintf(uid, "%d", dspd_dctx.uid);
+  sprintf(gid, "%d", dspd_dctx.gid);
+  sprintf(fd, "%d", sockets[1]);
+  ret = vfork();
+  if ( ret > 0 )
+    {
+      server_context.cuse_helper_fd = sockets[0];
+      close(sockets[1]);
+    } else if ( ret == 0 )
+    {
+      close(sockets[0]);
+      if ( execl(path, path, fd, uid, gid, NULL) < 0 )
+	exit(1);
+    } else
+    {
+      close(sockets[0]);
+      close(sockets[1]);
+    }
+}
+
+int osscuse_create_cdev(int devnum,
+			int devtype,
+			struct rtcuse_cdev_params *devp,
+			struct rtcuse_cdev **dev)
+{
+  if ( server_context.cuse_helper_fd < 0 )
+    return rtcuse_create_cdev(NULL, O_NONBLOCK, devp, dev);
+  struct osscuse_open_req req;
+  struct rtcuse_cdev *dptr;
+  struct iovec iov;
+  int ret, fd;
+  int32_t result;
+  dptr = calloc(1, sizeof(*dptr));
+  memset(&req, 0, sizeof(req));
+  req.params = *devp;
+  req.devnum = devnum;
+  req.devtype = devtype;
+  ret = write_data(server_context.cuse_helper_fd, &req, sizeof(req));
+  if ( ret < 0 )
+    goto out;
+  ret = read_data(server_context.cuse_helper_fd, &result, sizeof(result));
+  if ( ret < 0 )
+    goto out;
+  if ( result < 0 )
+    {
+      ret = result;
+      goto out;
+    }
+  iov.iov_len = sizeof(*dptr);
+  iov.iov_base = dptr;
+  ret = dspd_cmsg_recvfd(server_context.cuse_helper_fd, &iov);
+  if ( ret < 0 )
+    goto out;
+  fd = ret;
+  if ( iov.iov_len > 0 )
+    {
+      ret = read_data(server_context.cuse_helper_fd, iov.iov_base, iov.iov_len);
+      if ( ret < 0 )
+	goto out;
+    }
+  dptr->fd = fd;
+  *dev = dptr;
+  return 0;
+  
+
+
+ out:
+  free(dptr);
+  return ret;
+}
+
+
 #define MAXIO 65536
 static int oc_init(void *daemon, void **context)
 {
@@ -2433,6 +2579,7 @@ static int oc_init(void *daemon, void **context)
   pthread_t thr;
   struct oss_dsp_cdev *ctl;
   struct cbpoll_pipe_event pe = { 0 };
+  server_context.cuse_helper_fd = -1;
   server_context.config = dspd_read_config("mod_osscuse", true);
   server_context.devnode_prefix = "";
   if ( ret != 0 )
@@ -2460,6 +2607,7 @@ static int oc_init(void *daemon, void **context)
   pthread_condattr_setclock(&server_context.client_condattr, CLOCK_MONOTONIC);
   pthread_rwlock_init(&server_context.devtable_lock, NULL);
   server_context.ctl_assignments = ossv4_table;
+  server_context.helper = OSSCUSE_HELPER_AUTO;
   if ( ret == 0 )
     {
       server_context.dsp_params.maxwrite = MAXIO;
@@ -2487,7 +2635,19 @@ static int oc_init(void *daemon, void **context)
 
 	  val = NULL;
 	  dspd_dict_find_value(server_context.config, "dev_major", (char**)&val);
-	  server_context.persistent_devnodes = !!dspd_strtoidef(val, server_context.dsp_params.major);
+	  server_context.dsp_params.major = dspd_strtoidef(val, server_context.dsp_params.major);
+
+	  
+	  val = NULL;
+	  dspd_dict_find_value(server_context.config, "cdev_helper", (char**)&val);
+	  if ( val != NULL )
+	    {
+	      if ( strcasecmp(val, "on") == 0 )
+		server_context.helper = OSSCUSE_ENABLE_HELPER;
+	      else if ( strcasecmp(val, "off") == 0 )
+		server_context.helper = OSSCUSE_DISABLE_HELPER;
+	    }
+
 
 	  val = NULL;
 	  dspd_dict_find_value(server_context.config, "legacy_mixer_type", (char**)&val);
@@ -2514,7 +2674,7 @@ static int oc_init(void *daemon, void **context)
 	ret = cbpoll_start(&server_context.ctl_cbpoll);
       if ( ret != 0 )
 	dspd_log(0, "Could not create control event handler: error %d", ret);
-
+      osscuse_start_helper();
 
       if ( ret == 0 )
 	{

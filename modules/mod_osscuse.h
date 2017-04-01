@@ -71,6 +71,8 @@ struct dspd_oss_server {
   struct dspd_dict *config;
   const struct snd_mixer_oss_assign_table *ctl_assignments;
 
+  int32_t cuse_helper_fd;
+  int32_t helper;
 
 };
 
@@ -223,4 +225,15 @@ const struct snd_mixer_oss_assign_table *oss_get_mixer_assignment(const struct d
 
 int oss_new_legacy_mixer_assignments(int32_t device, struct oss_legacy_mixer_table **table);
 void oss_delete_legacy_mixer_assignments(struct oss_legacy_mixer_table *table);
+#define OSSCUSE_ENABLE_HELPER 1
+#define OSSCUSE_DISABLE_HELPER 0
+#define OSSCUSE_HELPER_AUTO -1
+struct osscuse_open_req {
+#define DEVTYPE_MIXER 1
+#define DEVTYPE_DSP   2
+  int32_t devtype;
+  int32_t devnum;
+  struct rtcuse_cdev_params params;
+};
+
 #endif

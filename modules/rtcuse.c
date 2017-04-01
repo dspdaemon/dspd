@@ -147,6 +147,7 @@ int rtcuse_create_cdev(const char *device,
   d->fd = open(device, oflags);
   if ( d->fd < 0 )
     goto out;
+  
 
   /*
     The kernel will quickly send an init command
@@ -159,12 +160,14 @@ int rtcuse_create_cdev(const char *device,
     {
       if ( errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR )
 	goto out;
+      
       pfd.fd = d->fd;
       pfd.events = POLLIN;
       pfd.revents = 0;
       ret = poll(&pfd, 1, 1000);
       if ( ret < 0 && errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN )
 	goto out;
+      
     }
   ohdr.len = sizeof(ohdr) + sizeof(outarg) + namelen;
   ohdr.error = 0;
@@ -194,6 +197,7 @@ int rtcuse_create_cdev(const char *device,
     {
       if ( errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR )
 	goto out;
+      
       pfd.fd = d->fd;
       pfd.events = POLLOUT;
       pfd.revents = 0;
@@ -208,6 +212,8 @@ int rtcuse_create_cdev(const char *device,
   else
     d->params.pktlen = d->params.maxwrite;
   d->params.pktlen += sizeof(struct fuse_in_header) + sizeof(struct fuse_read_in);
+
+  
 
   return 0;
 

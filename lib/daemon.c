@@ -1679,28 +1679,31 @@ int dspd_daemon_run(void)
   struct dspd_ll *curr, *prev = NULL;
   struct dspd_startup_callback *cb;
   int ret;
-  
+  dspd_log(0, "UID=%d GID=%d NAME=%s", dspd_dctx.uid, dspd_dctx.gid, dspd_dctx.user);
   if ( dspd_dctx.gid >= 0 )
     {
       if ( setgid(dspd_dctx.gid) < 0 )
 	{
-	  dspd_log(0, "Error %d while setting group id to %d\n", errno, dspd_dctx.gid);
+	  dspd_log(0, "Error %d while setting group id to %d", errno, dspd_dctx.gid);
 	  return -1;
 	}
     }
 
   if ( dspd_dctx.user )
     initgroups(dspd_dctx.user, dspd_dctx.gid);
-  
+
   if ( dspd_dctx.uid >= 0 )
     {
       if ( setuid(dspd_dctx.uid) < 0 )
 	{
-	  dspd_log(0, "Error %d while setting user id to %d\n", errno, dspd_dctx.uid);
+	  dspd_log(0, "Error %d while setting user id to %d", errno, dspd_dctx.uid);
 	  return -1;
 	}
     }
-  
+  if ( dspd_dctx.gid >= 0 )
+    setgid(dspd_dctx.gid);
+
+
 
 
   if ( (dspd_dctx.rtsvc_policy == SCHED_RR ||

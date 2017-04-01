@@ -258,5 +258,7 @@ int dspd_ctx_get_fd(void *context);
 
 bool dspd_req_input_pending(struct dspd_req_ctx *ctx);
 bool dspd_req_output_pending(struct dspd_req_ctx *ctx);
-
+struct iovec;
+int dspd_cmsg_sendfd(int s, int fd, struct iovec *data);
+int dspd_cmsg_recvfd(int s, struct iovec *iov);
 #endif

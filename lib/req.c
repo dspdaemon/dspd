@@ -83,7 +83,7 @@ struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
 			    
 			    
 
-static int cmsg_recvfd(int s, struct iovec *iov)
+int dspd_cmsg_recvfd(int s, struct iovec *iov)
 {
   int n;
   int fd = -1;
@@ -112,10 +112,8 @@ static int cmsg_recvfd(int s, struct iovec *iov)
       errno = ECONNABORTED;
       return -errno;
     }
-
   iov->iov_base += n;
   iov->iov_len -= n;
-
   int i = 0, f;
 
   //The sender should have only sent one control message.
@@ -165,7 +163,7 @@ static int32_t recv_fd(struct dspd_req_ctx *ctx)
       s = ctx->getfd(ctx->arg);
       if ( s < 0 )
 	return s;
-      ret = cmsg_recvfd(s, &iov);
+      ret = dspd_cmsg_recvfd(s, &iov);
       if ( ret <= 0 )
 	return ret;
       ctx->recvfd = ret;
@@ -261,7 +259,7 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
 }
 
 
-static int cmsg_sendfd(int s, int fd, struct iovec *data)
+int dspd_cmsg_sendfd(int s, int fd, struct iovec *data)
 {
 
   struct msghdr msg;
@@ -332,7 +330,7 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
       memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
       iov.iov_base = &buf[ctx->txstat.offset];
       iov.iov_len = ctx->txstat.len - ctx->txstat.offset; //sizeof(fd);
-      ret = cmsg_sendfd(s, fd, &iov);
+      ret = dspd_cmsg_sendfd(s, fd, &iov);
       if ( ret <= 0 )
 	return ret;
       ctx->txstat.offset += ret;

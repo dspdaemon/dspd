@@ -18,7 +18,7 @@ AMD chipsets), Nvidia AC97, Creative Labs USB, and Griffin Firewave cards.
 
 Dependencies
 ============
-The basic daemon requires nothing more than a recent glibc and libcap.  
+The basic daemon requires nothing more than a recent glibc.  
 Everything else is optionally loaded from binaries.  It probably needs a 
 3.x or newer kernel.  Only system timer based scheduling is supported so it 
 won't work on systems too old to have a HPET, APIC, or something similar.  
