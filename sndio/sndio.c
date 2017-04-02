@@ -56,7 +56,7 @@ struct sndio_client {
   bool                timer_active;
   dspd_time_t         next_wakeup;
   uint32_t            periodic_wakeup;
-
+  bool                next_wakeup_expired;
 
   //No work to do (waiting on POLLIN)
 #define CLIENT_STATE_IDLE   0
@@ -134,7 +134,7 @@ struct sndio_timer {
   uint32_t          periodic_wakeup;
   bool              active;
   bool              reset;
-  
+  bool              changed;
 };
 
 
@@ -173,7 +173,7 @@ static int send_pkt(struct sndio_client *cli, size_t len, bool async);
 int client_check_buffers(struct sndio_client *cli);
 int client_buildmsg(struct sndio_client *cli, bool async);
 static int send_ack(struct sndio_client *cli);
-static bool client_timer_event2(struct sndio_client *cli)
+static bool client_timer_event(struct sndio_client *cli)
 {
   int32_t ret, s;
   size_t br;
@@ -239,6 +239,10 @@ static int client_xrun(struct sndio_client *cli)
 	} else if ( cli->xrun_policy == SIO_SYNC )
 	{
 	  //TODO: Implement this
+	} else
+	{
+	  if ( cli->write_window == 0 && cli->pclient != NULL )
+	    cli->flow_control_pending = cli->pparams.bufsize - cli->pparams.fragsize;
 	}
     }
   return ret;
@@ -252,8 +256,11 @@ static void loop_sleep(void *arg, struct cbpoll_ctx *context)
     {
       read(ctx->tmr.timer.fd, &val, sizeof(val));
       ctx->tmr.reset = false;
+    } else if ( ctx->tmr.changed )
+    {
+      ctx->tmr.changed = false;
+      dspd_timer_set(&ctx->tmr.timer, ctx->tmr.next_wakeup, ctx->tmr.periodic_wakeup);
     }
-  dspd_timer_set(&ctx->tmr.timer, ctx->tmr.next_wakeup, ctx->tmr.periodic_wakeup);
 }
 
 static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint32_t *per)
@@ -262,15 +269,18 @@ static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint3
     cli->next_wakeup = *next;
   if ( per )
     cli->periodic_wakeup = *per;
+ 
   if ( cli->next_wakeup > 0 && (cli->server->tmr.next_wakeup > cli->next_wakeup || cli->server->tmr.next_wakeup == 0) )
     {
       cli->server->tmr.next_wakeup = cli->next_wakeup;
-      cli->server->tmr.reset = true;
+      cli->server->tmr.changed = true;
     }
   if ( cli->periodic_wakeup > 0 && (cli->server->tmr.periodic_wakeup > cli->periodic_wakeup || cli->server->tmr.periodic_wakeup == 0))
     {
-      cli->server->tmr.next_wakeup = cli->next_wakeup;
-      cli->server->tmr.reset = true;
+      cli->server->tmr.periodic_wakeup = cli->periodic_wakeup;
+      if ( cli->server->tmr.next_wakeup == 0 )
+	cli->server->tmr.next_wakeup = 1;
+      cli->server->tmr.changed = true;
     }
   cli->timer_active = ( cli->periodic_wakeup || cli->next_wakeup );
 }
@@ -296,19 +306,26 @@ static int timer_fd_event(void *data,
       cli = ctx->clients[i];
       if ( cli != NULL && cli != (struct sndio_client*)UINTPTR_MAX && cli->timer_active )
 	{
-	  if ( client_timer_event2(cli) )
+	  if ( client_timer_event(cli) )
 	    {
-	      if ( ctx->tmr.next_wakeup == 0 || 
-		   (ctx->tmr.next_wakeup < cli->next_wakeup && cli->next_wakeup != 0) )
+	      if ( cli->next_wakeup > w && ctx->tmr.next_wakeup > cli->next_wakeup && cli->next_wakeup != 0 )
 		ctx->tmr.next_wakeup = cli->next_wakeup;
-	      if ( ctx->tmr.periodic_wakeup == 0 || 
-		   (ctx->tmr.periodic_wakeup < cli->periodic_wakeup && cli->periodic_wakeup != 0) )
+	      else if ( w > cli->next_wakeup )
+		cli->next_wakeup = 0;
+	      if ( ctx->tmr.periodic_wakeup < cli->periodic_wakeup && cli->periodic_wakeup != 0 )
 		ctx->tmr.periodic_wakeup = cli->periodic_wakeup;
 	    }
 	}
     }
-  if ( ctx->tmr.next_wakeup == w && ctx->tmr.periodic_wakeup == p )
+  if ( (ctx->tmr.next_wakeup == w && ctx->tmr.periodic_wakeup == p) ||
+       (ctx->tmr.next_wakeup == 0 && ctx->tmr.periodic_wakeup == p) )
     ctx->tmr.reset = true;
+  else if ( ctx->tmr.next_wakeup != w || ctx->tmr.periodic_wakeup != p )
+    ctx->tmr.changed = true;
+  else
+    ctx->tmr.changed = false;
+  if ( ctx->tmr.changed && ctx->tmr.periodic_wakeup > 0 && ctx->tmr.next_wakeup == 0 )
+    ctx->tmr.next_wakeup = 1;
   return 0;
 }
 
@@ -316,11 +333,11 @@ static int timer_fd_event(void *data,
 int client_check_buffers(struct sndio_client *cli)
 {
   int ret = 0;
-  uint32_t avail_min = 0xdeadbeef;
+  uint32_t avail_min = 1;
   int32_t delay;
-  uint32_t pdelta = 0, cdelta = 0, mdelta;
+  uint32_t pdelta = 0, cdelta = 0, mdelta, w;
   dspd_time_t pnext = 0, cnext = 0, nextwakeup;
-
+  int32_t avail = -1;
   if ( cli->running == true )
     {
       if ( cli->pclient )
@@ -334,15 +351,19 @@ int client_check_buffers(struct sndio_client *cli)
 						       &pnext);
 	      if ( ret < 0 )
 		{
+	
 		  if ( ret == -EPIPE )
 		    ret = client_xrun(cli);
+		    
 		}
 	    } else if ( ret < 0 )
 	    {
 	      if ( ret == -EPIPE )
 		ret = client_xrun(cli);
+	      
 	    } else
 	    {
+	      avail = ret;
 	      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
 		{
 		  if ( ret > cli->write_window )
@@ -399,6 +420,10 @@ int client_check_buffers(struct sndio_client *cli)
 		ret = client_xrun(cli);
 	    } else
 	    {
+	      if ( cli->cparams.fragsize > avail_min )
+		avail_min = cli->cparams.fragsize;
+	      if ( ret > avail )
+		avail = ret;
 	      if ( ret > cli->last_fill )
 		{
 		  cdelta = ret - cli->last_fill;
@@ -414,7 +439,11 @@ int client_check_buffers(struct sndio_client *cli)
 	nextwakeup = pnext;
       else
 	nextwakeup = cnext;
-      if ( nextwakeup )
+      /*
+	Since the server synchronized the hardware with the system timer, set_client_wakeup() 
+	never gets called.  The periodic wakeup is enough to prevent xruns.
+      */
+      if ( nextwakeup > 0 && avail < avail_min )
 	set_client_wakeup(cli, &nextwakeup, NULL);
     }
   return ret;

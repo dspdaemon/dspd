@@ -961,7 +961,7 @@ static int dsp_fd_event(void *data,
 
    */
   ssize_t ret;
-  void *alloc;
+  void *alloc = NULL;
   struct oss_dsp_cdev *dev = data;
   struct rtcuse_ipkt *pkt, *p;
   struct fuse_interrupt_in *intr;
@@ -2665,11 +2665,15 @@ static int oc_init(void *daemon, void **context)
 
       ret = cbpoll_init(&server_context.cbpoll, 0, DSPD_MAX_OBJECTS);
       if ( ret == 0 )
+	ret = cbpoll_set_name(&server_context.cbpoll, "dspd-ossdsp");
+      if ( ret == 0 )
 	ret = cbpoll_start(&server_context.cbpoll);
       if ( ret != 0 )
 	dspd_log(0, "Could not create async event handler: error %d", ret);
       if ( ret == 0 )
 	ret = cbpoll_init(&server_context.ctl_cbpoll, 0, DSPD_MAX_OBJECTS);
+      if ( ret == 0 )
+	ret = cbpoll_set_name(&server_context.ctl_cbpoll, "dspd-ossctl");
       if ( ret == 0 )
 	ret = cbpoll_start(&server_context.ctl_cbpoll);
       if ( ret != 0 )

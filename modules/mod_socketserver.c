@@ -829,6 +829,7 @@ static int socksrv_init(void *daemon, void **context)
   listen(sctx->fd, DSPD_MAX_OBJECTS);
 
   cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN | EPOLLONESHOT, &socksrv_listen_ops, sctx);
+  cbpoll_set_name(&sctx->cbctx, "dspd-socksrv");
   cbpoll_start(&sctx->cbctx);
   return 0;
 }
