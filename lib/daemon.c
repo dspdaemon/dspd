@@ -29,6 +29,7 @@
 #include <grp.h>
 #include <sys/types.h>
 #include <pwd.h>
+#include <sys/stat.h>
 #ifdef HAVE_LIBCAP
 #include <sys/capability.h>
 #endif
@@ -2215,4 +2216,21 @@ int32_t dspd_daemon_dispatch_ctl2(struct dspd_rctx *rctx,
 	}
     }
   return ret;
+}
+
+
+int dspd_daemon_set_ipc_perm(const char *path)
+{
+  if ( chown(path, dspd_dctx.uid, dspd_dctx.gid) < 0 ||
+       chmod(path, dspd_dctx.ipc_mode) < 0 )
+    return -errno;
+  return 0;
+}
+
+int dspd_daemon_set_ipc_perm_fd(int fd)
+{
+  if ( fchown(fd, dspd_dctx.uid, dspd_dctx.gid) < 0 ||
+       fchmod(fd, dspd_dctx.ipc_mode) < 0 )
+    return -errno;
+  return 0;
 }

@@ -27,6 +27,7 @@
 #include "amsg.h"
 #include "defs.h"
 #include "dspd_sndio.h"
+
 #define MAX_CLIENTS 32
 
 
@@ -335,7 +336,7 @@ int client_check_buffers(struct sndio_client *cli)
   int ret = 0;
   uint32_t avail_min = 1;
   int32_t delay;
-  uint32_t pdelta = 0, cdelta = 0, mdelta, w;
+  uint32_t pdelta = 0, cdelta = 0, mdelta;
   dspd_time_t pnext = 0, cnext = 0, nextwakeup;
   int32_t avail = -1;
   if ( cli->running == true )
@@ -1625,7 +1626,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   sctx->fd = -1;
   sctx->tmr.timer.fd = -1;
   sctx->cbidx = -1;
-
+  
   if ( params->server_addr )
     {
       sctx->server_addr = strdup(params->server_addr);
@@ -1672,6 +1673,8 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	      goto error;
 	    }
 	}
+     
+
       if ( stat(sockpath, &fi) < 0 )
 	{
 	  ret = -errno;
@@ -1685,13 +1688,28 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       len = strlen(sockpath);
       sprintf(&sockpath[len], "/aucat%d", params->unit_number);
       unlink(sockpath);
+     
+
+
       sctx->fd = dspd_unix_sock_create(sockpath, SOCK_CLOEXEC | SOCK_NONBLOCK);
       if ( sctx->fd < 0 )
 	{
 	  ret = -errno;
 	  goto error;
 	}
-      chmod(sockpath, 0777);
+      if ( params->context )
+	{
+	  if ( params->context->uid > 0 && 
+	       params->context->gid > 0 &&
+	       params->context->ipc_mode != 0 )
+	    {
+	      chown(sockpath, params->context->uid, params->context->gid);
+	      chmod(sockpath, params->context->ipc_mode);
+	    }
+	} else
+	{
+	  chmod(sockpath, 0777);
+	}
       sctx->cbidx = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN, &sndio_listen_ops, sctx);
       if ( sctx->cbidx < 0 )
 	{

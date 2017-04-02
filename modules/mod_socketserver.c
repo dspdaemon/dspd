@@ -820,18 +820,54 @@ static const struct cbpoll_fd_ops socksrv_listen_ops = {
 static int socksrv_init(void *daemon, void **context)
 {
   struct ss_sctx *sctx;
+  int ret;
+  int fd = -1;
   sctx = calloc(1, sizeof(*sctx));
-  cbpoll_init(&sctx->cbctx, 0, DSPD_MAX_OBJECTS);
-  mkdir("/var/run/dspd", 0755);
+  if ( ! sctx )
+    return -errno;
+  sctx->fd = -1;
+  ret = cbpoll_init(&sctx->cbctx, 0, DSPD_MAX_OBJECTS);
+  if ( ret < 0 )
+    {
+      free(sctx);
+      return ret;
+    }
+  ret = mkdir("/var/run/dspd", 0755);
+  if ( ret < 0 && errno != EEXIST )
+    goto out;
   unlink("/var/run/dspd/dspd.sock");
   sctx->fd = dspd_unix_sock_create("/var/run/dspd/dspd.sock", SOCK_CLOEXEC | SOCK_NONBLOCK);
-  chmod("/var/run/dspd/dspd.sock", 0666);
-  listen(sctx->fd, DSPD_MAX_OBJECTS);
+  if ( sctx->fd < 0 )
+    goto out;
+  fd = sctx->fd;
+  dspd_daemon_set_ipc_perm("/var/run/dspd/dspd.sock");
+  ret = listen(sctx->fd, DSPD_MAX_OBJECTS);
+  if ( ret < 0 )
+    goto out;
+  
+ 
+  ret = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN | EPOLLONESHOT, &socksrv_listen_ops, sctx);
+  if ( ret < 0 )
+    goto out;
+  fd = -1;
+  ret = cbpoll_set_name(&sctx->cbctx, "dspd-socksrv");
+  if ( ret < 0 )
+    goto out;
+  ret = cbpoll_start(&sctx->cbctx);
+  if ( ret < 0 )
+    goto out;
+  ret = 0;
 
-  cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN | EPOLLONESHOT, &socksrv_listen_ops, sctx);
-  cbpoll_set_name(&sctx->cbctx, "dspd-socksrv");
-  cbpoll_start(&sctx->cbctx);
-  return 0;
+ out:
+  
+  if ( ret < 0 )
+    {
+      dspd_log(0, "Failed to initialize socket server");
+      cbpoll_destroy(&sctx->cbctx);
+      close(fd);
+      free(sctx);
+    }
+  return ret;
 }
 
 static void socksrv_close(void *daemon, void **context)

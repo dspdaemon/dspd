@@ -199,5 +199,6 @@ dspd_time_t dspd_get_min_latency(void);
 const char *dspd_get_modules_dir(void);
 int32_t dspd_get_glitch_correction(void);
 bool dspd_daemon_queue_work(const struct dspd_wq_item *item);
-
+int dspd_daemon_set_ipc_perm(const char *path);
+int dspd_daemon_set_ipc_perm_fd(int fd);
 #endif
