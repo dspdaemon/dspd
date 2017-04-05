@@ -1686,12 +1686,29 @@ int dspd_daemon_register_startup(void (*callback)(void *arg),
     }
   return ret;
 }
+static void sigxcpu_default_handler(int sig, siginfo_t *signinfo, void *context)
+{
+  struct sched_param param = { 0 };
+  sched_setscheduler(dspd_gettid(), SCHED_OTHER, &param);
+}
+
 
 int dspd_daemon_run(void)
 {
   struct dspd_ll *curr, *prev = NULL;
   struct dspd_startup_callback *cb;
   int ret;
+  struct sigaction act;
+  struct rlimit rl;
+  memset(&act, 0, sizeof(act));
+  rl.rlim_cur = 200000;
+  rl.rlim_max = 400000;
+  setrlimit(RLIMIT_RTTIME, &rl);
+  
+  act.sa_sigaction = sigxcpu_default_handler;
+  act.sa_flags = SA_SIGINFO;
+  sigaction(SIGXCPU, &act, NULL);
+
   dspd_log(0, "UID=%d GID=%d NAME=%s", dspd_dctx.uid, dspd_dctx.gid, dspd_dctx.user);
   if ( dspd_dctx.gid >= 0 )
     {
