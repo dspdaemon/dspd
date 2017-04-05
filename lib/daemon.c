@@ -666,6 +666,7 @@ int dspd_daemon_init(int argc, char **argv)
   char *val;
   char *pwbuf = NULL;
   ssize_t pwsize = sysconf(_SC_GETPW_R_SIZE_MAX);
+  struct rlimit rl;
   if ( pwsize == -1 )
     pwsize = 16384;
   if ( ! tmp )
@@ -807,8 +808,12 @@ int dspd_daemon_init(int argc, char **argv)
 			   n, ret);
 		}
 	    }
+	  rl.rlim_cur = 20 + n;
+	  rl.rlim_max = rl.rlim_cur;
+	  setrlimit(RLIMIT_NICE, &rl);
 	}
     }
+
 
   if ( dspd_dict_find_value(dcfg, "rtio_policy", &value) )
     {
@@ -831,6 +836,13 @@ int dspd_daemon_init(int argc, char **argv)
     {
       if ( value )
 	set_priority(value, &dspd_dctx.rtsvc_priority);
+    }
+
+  rl.rlim_cur = MAX(dspd_dctx.rtsvc_priority, dspd_dctx.rtio_priority);
+  if ( rl.rlim_cur )
+    {
+      rl.rlim_max = rl.rlim_cur;
+      setrlimit(RLIMIT_RTPRIO, &rl);
     }
 
   if ( dspd_dict_find_value(dcfg, "preferred_defaultdev", &value) )

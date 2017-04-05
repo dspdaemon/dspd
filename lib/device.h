@@ -283,7 +283,9 @@ struct dspd_pcm_device {
   volatile AO_t error;
 
   volatile AO_t irq_count, ack_count;
-
+  volatile bool reset_scheduler, idle;
+  struct sched_param sched_param;
+  int sched_policy;
 };
 
 

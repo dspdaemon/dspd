@@ -48,6 +48,10 @@ struct dspd_scheduler {
   struct epoll_event              *evts;
   const struct dspd_scheduler_ops *ops;
   void                            *udata;
+  int32_t                          avail_min, buffer_time;
+  bool                             have_sched_deadline;
+  int                              tid;
+  int32_t                          timebase;
 };
 
 //Create a new scheduler
@@ -62,4 +66,15 @@ void *dspd_scheduler_run(void *arg);
 //Make the scheduler abort at the end of the loop.
 void dspd_scheduler_abort(struct dspd_scheduler *sch);
 void dspd_sched_trigger(struct dspd_scheduler *sch);
+
+int32_t dspd_sched_set_deadline_hint(struct dspd_scheduler *sch, 
+				     int32_t avail_min,
+				     int32_t buffer_time);
+void dspd_sched_get_deadline_hint(struct dspd_scheduler *sch,
+				  int32_t *avail_min,
+				  int32_t *buffer_time);
+
+bool dspd_sched_enable_deadline(struct dspd_scheduler *sch);
+bool dspd_sched_deadline_init(struct dspd_scheduler *sch);
+void dspd_sched_set_timebase(struct dspd_scheduler *sched, int32_t t);
 #endif

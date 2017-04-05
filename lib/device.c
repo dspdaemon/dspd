@@ -18,7 +18,8 @@
  *
  */
 
-
+#define _GNU_SOURCE 
+#define _FILE_OFFSET_BITS 64
 #include <poll.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,8 @@
 #include <unistd.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
@@ -60,6 +63,16 @@ int32_t dspd_dev_get_slot(void *dev)
 {
   struct dspd_pcm_device *d = dev;
   return d->key;
+}
+
+static void set_idle(struct dspd_pcm_device *dev)
+{
+  dev->idle = true;
+  if ( dev->reset_scheduler )
+    {
+      dev->reset_scheduler = false;
+      pthread_setschedparam(pthread_self(), dev->sched_policy, &dev->sched_param);
+    }
 }
 
 static int stream_recover_print(struct dspd_pcmdev_stream *s, const char *fcn, int line)
@@ -785,6 +798,7 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
   struct dspd_pcm_device *dev = data;
   uint64_t f;
   uint64_t sleep_frames;
+  dev->idle = false;
   if ( ! dev->capture.ops )
     dspd_sync_reg(dev);
   if ( dev->playback.latency_changed )
@@ -869,6 +883,7 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
     {
       *reltime = DSPD_SCHED_STOP;
       *abstime = UINT64_MAX;
+      set_idle(dev);
     }
   return true;
 }
@@ -1924,7 +1939,7 @@ static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *relti
   struct dspd_pcm_device *dev = data;
   uint64_t f;
   bool ret = true;
-
+  dev->idle = false;
   if ( ! dev->playback.ops )
     dspd_sync_reg(dev);
   if ( dev->capture.status )
@@ -1960,6 +1975,7 @@ static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *relti
     {
       *reltime = DSPD_SCHED_STOP;
       *abstime = UINT64_MAX;
+      set_idle(dev);
     }
  
   return ret;
@@ -2131,7 +2147,36 @@ static void *dspd_pcm_device_get_context(void)
 }
 #endif
 
+static void sigxcpu_handler(int sig, siginfo_t *signinfo, void *context)
+{
+  //Drop realtime priority.  Realtime priority will be picked up again when the thread goes idle.
+  //If it doesn't go idle, then there is a bug somewhere and someone will be able to kill the process
+  //without rebooting.
+  struct sched_param param = { 0 };
 
+  struct timespec req, rem;
+ 
+
+  struct dspd_pcm_device *dev = dspd_pcm_device_get_context();
+  if ( dev )
+    {
+      if ( dev->idle )
+	{
+	  req.tv_sec = 0;
+	  req.tv_nsec = 1000000;
+	  nanosleep(&req, &rem);
+	} else
+	{
+	  dev->reset_scheduler = true;
+	  sched_setscheduler(dspd_gettid(), SCHED_OTHER, &param);
+	}
+    } else
+    {
+      //sched_setscheduler isn't technically supposed to be used in a signal handler, but it seems to work
+      //and I can't think of any reason why it would not work.
+      sched_setscheduler(dspd_gettid(), SCHED_OTHER, &param);
+    }
+}
   
 static void sigbus_handler(int sig, siginfo_t *signinfo, void *context)
 {
@@ -2150,9 +2195,24 @@ static void *dspd_dev_thread(void *arg)
 
   struct dspd_pcm_device *dev = sched->udata;
   char name[32];
+  struct rlimit rl, old;
   sprintf(name, "dspd-io-%d", dev->key);
   set_thread_name(name);
 
+  if ( pthread_getschedparam(pthread_self(), &dev->sched_policy, &dev->sched_param) == 0 &&
+       (dev->sched_policy == SCHED_RR || dev->sched_policy == SCHED_FIFO) )
+    {
+      /*
+	The idea is to make sure SIGXCPU is delivered to this thread and not some other thread.
+      */
+      rl.rlim_cur = 50000;
+      rl.rlim_max = 100000;
+      prlimit(dspd_gettid(), RLIMIT_RTTIME, &rl, &old);
+      memset(&act, 0, sizeof(act));
+      act.sa_sigaction = sigxcpu_handler;
+      act.sa_flags = SA_SIGINFO;
+      sigaction(SIGXCPU, &act, NULL);
+    }
 
   dspd_pcm_device_register_tls(dev);
   memset(&act, 0, sizeof(act));
@@ -2160,6 +2220,8 @@ static void *dspd_dev_thread(void *arg)
   act.sa_flags = SA_SIGINFO;
   sigaction(SIGBUS, &act, NULL);
   
+  
+
   if ( sigsetjmp(dev->sbh_env, SIGBUS) == 1 )
     {
       if ( dev->current_client >= 0 )
@@ -2204,7 +2266,7 @@ static void *dspd_dev_thread(void *arg)
 	}
     }
   
-
+  
   dspd_scheduler_run(arg);
 
   //Drop realtime priority
@@ -2213,6 +2275,9 @@ static void *dspd_dev_thread(void *arg)
   param.sched_priority = 0;
   pthread_setschedparam(dev->iothread.thread, SCHED_OTHER, &param);
   
+
+  
+
   AO_store(&dev->error, ENODEV);
   alert_all_clients(dev, ENODEV);
 
@@ -2250,7 +2315,7 @@ static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, int32_t *re
   bool ret = 0;
   uint64_t p_abstime, c_abstime; int32_t p_reltime, c_reltime;
   struct dspd_pcm_device *dev = data;
-
+  dev->idle = false;
   dspd_sync_reg(dev);
   ret |= schedule_playback_sleep(data, &p_abstime, &p_reltime);
   ret |= schedule_capture_sleep(data, &c_abstime, &c_reltime);
@@ -2289,6 +2354,7 @@ static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, int32_t *re
       //Stop (thread goes idle).
       *reltime = DSPD_SCHED_STOP;
       *abstime = UINT64_MAX;
+      set_idle(dev);
     }
   return ret;
 }

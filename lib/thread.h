@@ -172,4 +172,7 @@ static inline int dspd_thread_join(dspd_thread_t *thread, void **retval)
     }
   return ret;
 }
+
+int dspd_gettid(void);
+
 #endif

@@ -25,6 +25,8 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <sys/prctl.h>
+#include <unistd.h>
+#include <syscall.h>
 #include "sslib.h"
 
 
@@ -506,4 +508,9 @@ int set_thread_name(const char *name)
   if ( ret == -1 )
     ret = -errno;
   return ret;
+}
+
+int dspd_gettid(void)
+{
+  return syscall(SYS_gettid);
 }

@@ -32,6 +32,11 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
+#include <linux/unistd.h>
+#include <linux/kernel.h>
+#include <linux/types.h>
+#include <sys/syscall.h>
+#include <pthread.h>
 #include "scheduler.h"
 
 
@@ -108,7 +113,7 @@ struct dspd_scheduler *dspd_scheduler_new(const struct dspd_scheduler_ops *ops, 
   int err;
   if ( ! sch )
     return NULL;
-
+  sch->timebase = 1; //1ns
   sch->timerfd = -1;
   sch->epfd = -1;
   sch->eventfd = -1;
@@ -245,6 +250,8 @@ void *dspd_scheduler_run(void *arg)
   int ret = ECANCELED;
   uint64_t abstime;
   int32_t reltime;
+  dspd_sched_deadline_init(sch);
+
   if ( sch->ops->loop_started )
     sch->ops->loop_started(sch->udata);
   while ( sch->abort == 0 )
@@ -294,3 +301,152 @@ void dspd_scheduler_abort(struct dspd_scheduler *sch)
 }
 
 
+
+
+void dspd_sched_get_deadline_hint(struct dspd_scheduler *sch,
+				  int32_t *avail_min,
+				  int32_t *buffer_time)
+{
+  *avail_min = sch->avail_min;
+  *buffer_time = sch->buffer_time;
+}
+
+
+#define gettid() syscall(__NR_gettid)
+#ifndef SCHED_DEADLINE
+#define SCHED_DEADLINE	6
+
+/* XXX use the proper syscall numbers */
+#ifdef __x86_64__
+#define __NR_sched_setattr		314
+#define __NR_sched_getattr		315
+#define HAVE_SCHED_DEADLINE
+#endif
+
+#ifdef __i386__
+#define __NR_sched_setattr		351
+#define __NR_sched_getattr		352
+#define HAVE_SCHED_DEADLINE
+#endif
+
+#ifdef __arm__
+#define __NR_sched_setattr		380
+#define __NR_sched_getattr		381
+#define HAVE_SCHED_DEADLINE
+#endif
+
+struct sched_attr {
+  __u32 size;
+
+  __u32 sched_policy;
+  __u64 sched_flags;
+
+  /* SCHED_NORMAL, SCHED_BATCH */
+  __s32 sched_nice;
+
+  /* SCHED_FIFO, SCHED_RR */
+  __u32 sched_priority;
+
+  /* SCHED_DEADLINE (nsec) */
+  __u64 sched_runtime;
+  __u64 sched_deadline;
+  __u64 sched_period;
+};
+
+#else
+#define HAVE_SCHED_DEADLINE
+#endif
+
+static int dspd_sched_setattr(pid_t pid,
+			      const struct sched_attr *attr,
+			      unsigned int flags)
+{
+#ifdef HAVE_SCHED_DEADLINE
+  int ret;
+  ret = syscall(__NR_sched_setattr, pid, attr, flags);
+  if ( ret < 0 )
+    ret = -errno;
+  return ret;
+#else
+  return -ENOSYS;
+#endif
+}
+
+/*static int dspd_sched_getattr(pid_t pid,
+			      struct sched_attr *attr,
+			      unsigned int size,
+			      unsigned int flags)
+{
+#ifdef HAVE_SCHED_DEADLINE
+  int ret;
+  ret = syscall(__NR_sched_getattr, pid, attr, size, flags);
+  if ( ret < 0 )
+    ret = -errno;
+  return ret;
+#else
+  return -ENOSYS;
+#endif
+}*/
+
+bool dspd_sched_enable_deadline(struct dspd_scheduler *sch)
+{
+  sch->have_sched_deadline = sched_get_priority_max(SCHED_DEADLINE) >= 0;
+  return sch->have_sched_deadline;
+}
+
+int32_t dspd_sched_set_deadline_hint(struct dspd_scheduler *sch, 
+				     int32_t avail_min,
+				     int32_t buffer_time)
+{
+  int32_t ret = 0;
+  if ( sch->have_sched_deadline )
+    {
+      struct sched_attr attr;
+      memset(&attr, 0, sizeof(attr));
+      attr.sched_flags = 0;
+      attr.sched_nice = 0;
+      attr.sched_priority = 0;
+      attr.sched_policy = SCHED_DEADLINE;
+      attr.sched_runtime = avail_min / 2;
+      attr.sched_period = buffer_time / 2;
+      attr.sched_deadline = avail_min;
+      if ( attr.sched_period < attr.sched_deadline )
+	attr.sched_period = attr.sched_deadline;
+      attr.sched_runtime *= sch->timebase;
+      attr.sched_period *= sch->timebase;
+      attr.sched_deadline *= sch->timebase;
+      ret = dspd_sched_setattr(sch->tid, &attr, 0);
+      if ( ret == 0 )
+	{
+	  sch->avail_min = avail_min;
+	  sch->buffer_time = buffer_time;
+	}
+    }
+  return ret;
+}
+
+bool dspd_sched_deadline_init(struct dspd_scheduler *sch)
+{
+  struct sched_attr attr;
+  int ret;
+  if ( sch->have_sched_deadline && sch->tid < 0 )
+    {
+      sch->tid = gettid();
+      memset(&attr, 0, sizeof(attr));
+      attr.sched_flags = 0;
+      attr.sched_nice = 0;
+      attr.sched_priority = 0;
+      attr.sched_policy = SCHED_DEADLINE;
+      attr.sched_runtime = 2500000;
+      attr.sched_period = attr.sched_deadline = 10000000;
+      attr.sched_deadline = attr.sched_period;
+      ret = dspd_sched_setattr(sch->tid, &attr, 0);
+      if ( ret < 0 )
+	sch->have_sched_deadline = false;
+    }
+  return sch->have_sched_deadline;
+}
+void dspd_sched_set_timebase(struct dspd_scheduler *sched, int32_t t)
+{
+  sched->timebase = t;
+}
