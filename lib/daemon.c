@@ -526,20 +526,23 @@ void print_usage(void)
 
 static void set_policy(const char *policy, int32_t *curr)
 {
-  if ( strcmp(policy, "SCHED_ISO") == 0 )
+  if ( strcasecmp(policy, "SCHED_ISO") == 0 )
     *curr = SCHED_ISO;
-  else if ( strcmp(policy, "SCHED_RR") == 0 )
+  else if ( strcasecmp(policy, "SCHED_RR") == 0 )
     *curr = SCHED_RR;
-  else if ( strcmp(policy, "SCHED_FIFO") == 0 )
+  else if ( strcasecmp(policy, "SCHED_FIFO") == 0 )
     *curr = SCHED_FIFO;
-  else if ( strcmp(policy, "SCHED_OTHER") == 0 )
+  else if ( strcasecmp(policy, "SCHED_OTHER") == 0 )
     *curr = SCHED_OTHER;
-  else if ( strcmp(policy, "SCHED_IDLE") == 0 || strcmp(policy, "SCHED_IDLEPRIO") == 0 )
+  else if ( strcasecmp(policy, "SCHED_IDLE") == 0 || strcasecmp(policy, "SCHED_IDLEPRIO") == 0 )
     *curr = SCHED_IDLE;
-  else if ( strcmp(policy, "SCHED_BATCH") == 0 )
+  else if ( strcasecmp(policy, "SCHED_BATCH") == 0 )
     *curr = SCHED_BATCH;
-  else if ( strcmp(policy, "DEFAULT") != 0 )
+  else if ( strcasecmp(policy, "SCHED_DEADLINE") == 0 )
+    *curr = SCHED_DEADLINE;
+  else if ( strcasecmp(policy, "DEFAULT") != 0 )
     dspd_strtoi32(policy, curr, 0);
+  
 }
 
 static void set_priority(const char *priority, int32_t *curr)
@@ -1001,6 +1004,11 @@ int dspd_daemon_init(int argc, char **argv)
 	pf /= 2;
       pf += mnf;
       dspd_dctx.rtio_priority = pf;
+    } else
+    {
+      mxf = sched_get_priority_max(dspd_dctx.rtio_policy);
+      if ( dspd_dctx.rtio_priority > mxf )
+	dspd_dctx.rtio_priority = mxf;
     }
 
   if ( dspd_dctx.rtsvc_priority == -1 )
@@ -1021,6 +1029,11 @@ int dspd_daemon_init(int argc, char **argv)
 	  pr += mnr;
 	}
       dspd_dctx.rtsvc_priority = pr;
+    } else 
+    {
+      mxr = sched_get_priority_max(dspd_dctx.rtio_policy);
+      if ( dspd_dctx.rtsvc_priority > mxr )
+	dspd_dctx.rtsvc_priority = mxr;
     }
 
   if ( dspd_dctx.glitch_correction == -1 )
@@ -1701,8 +1714,8 @@ int dspd_daemon_run(void)
   struct sigaction act;
   struct rlimit rl;
   memset(&act, 0, sizeof(act));
-  rl.rlim_cur = 200000;
-  rl.rlim_max = 400000;
+  rl.rlim_cur = 50000;
+  rl.rlim_max = 75000;
   setrlimit(RLIMIT_RTTIME, &rl);
   
   act.sa_sigaction = sigxcpu_default_handler;
@@ -2102,6 +2115,7 @@ int dspd_daemon_threadattr_init(void *attr, size_t size, int flags)
   dspd_threadattr_t *a = attr;
   int ret;
   struct sched_param param;
+  int policy = SCHED_OTHER;
   if ( size == sizeof(*a) )
     ret = dspd_threadattr_init(a);
   else
@@ -2111,19 +2125,25 @@ int dspd_daemon_threadattr_init(void *attr, size_t size, int flags)
       memset(&param, 0, sizeof(param));
       if ( flags & DSPD_THREADATTR_DETACHED )
 	pthread_attr_setdetachstate(&a->attr, PTHREAD_CREATE_DETACHED);
+      pthread_attr_setschedpolicy(&a->attr, SCHED_OTHER);
       if ( flags & DSPD_THREADATTR_RTIO )
 	{
-	  param.sched_priority = dspd_dctx.rtio_priority;
-	  if ( pthread_attr_setschedpolicy(&a->attr, dspd_dctx.rtio_policy) == 0 )
-	    pthread_attr_setschedparam(&a->attr, &param);
+	  policy = dspd_dctx.rtio_policy;
+	  if ( dspd_dctx.rtio_policy != SCHED_DEADLINE )
+	    {
+	      param.sched_priority = dspd_dctx.rtio_priority;
+	      if ( pthread_attr_setschedpolicy(&a->attr, dspd_dctx.rtio_policy) == 0 )
+		pthread_attr_setschedparam(&a->attr, &param);
+	    }
 	}
       if ( flags & DSPD_THREADATTR_RTSVC )
 	{
 	  param.sched_priority = dspd_dctx.rtsvc_priority;
+	  policy = dspd_dctx.rtsvc_policy;
 	  if ( pthread_attr_setschedpolicy(&a->attr, dspd_dctx.rtsvc_policy) == 0 )
 	    pthread_attr_setschedparam(&a->attr, &param);
 	}
-      if ( param.sched_priority == 0 )
+      if ( param.sched_priority == 0 && (policy == SCHED_RR || policy == SCHED_FIFO) )
 	{
 	  if ( pthread_attr_setschedpolicy(&a->attr, SCHED_OTHER) == 0 )
 	    pthread_attr_setschedparam(&a->attr, &param);

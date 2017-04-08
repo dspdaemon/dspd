@@ -33,6 +33,8 @@
 #include "sslib.h"
 #include "daemon.h"
 
+
+
 #define DSPD_DEV_USE_TLS
 static int stream_recover_fcn(struct dspd_pcmdev_stream *stream);
 static int stream_prepare(struct dspd_pcmdev_stream *stream);
@@ -973,8 +975,6 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 
   if ( ops->get_playback_status )
     {
-      //TODO: Make the inout args a struct and allow the client to pass a timestamp.  The timestamp can be
-      //used to schedule the stream to run at a later time.
       ret = ops->get_playback_status(dev,
 				     client,
 				     &pointer,
@@ -1855,40 +1855,48 @@ static void schedule_playback_wake(void *userdata)
 	       dev->playback.requested_latency < dev->playback.glitch_threshold )
 	    {	      
 	      l = dev->playback.requested_latency / 4;
-	      //if ( len > l && (len / l) > 0 )
-		{
-		  total = dev->playback.status->space;
-		  len = l;
-		  if ( len > total )
-		    len = total;
-		  if ( len > dev->playback.status->fill && dev->playback.status->fill > 0 )
-		    len = dev->playback.status->fill;
+	      
+	      total = dev->playback.status->space;
+	      len = l;
+	      if ( len > total )
+		len = total;
+
+	      //This probably won't make much of a difference.  Make sure the first chunk is definitely
+	      //going to be completed in the available time.
+	      int32_t buftime, avail_min;
+	      dspd_sched_get_deadline_hint(dev->sched, &avail_min, &buftime);
+	      if ( avail_min > 0 && avail_min < len )
+		len = avail_min;
+	      
+
+	      if ( len > dev->playback.status->fill && dev->playback.status->fill > 0 )
+		len = dev->playback.status->fill;
 	
-		  while ( written < total )
-		    {
+	      while ( written < total )
+		{
 		     
-		      if ( ! device_playback_cycle(dev, len) )
-			break;
-		      if ( ! dev->playback.status )
-			break;
-		      written += len;
-		      len *= 2;
-		      if ( len > dev->playback.status->space )
-			len = dev->playback.status->space;
-		      if ( len > dev->playback.requested_latency )
-			len = dev->playback.requested_latency;
+		  if ( ! device_playback_cycle(dev, len) )
+		    break;
+		  if ( ! dev->playback.status )
+		    break;
+		  written += len;
+		  len *= 2;
+		  if ( len > dev->playback.status->space )
+		    len = dev->playback.status->space;
+		  if ( len > dev->playback.requested_latency )
+		    len = dev->playback.requested_latency;
 		     
 
-		      if ( len > 0 && written > dev->playback.requested_latency )
-			{
-			  if ( dev->playback.ops->status(dev->playback.handle, &dev->playback.status) < 0 )
-			    goto out;
-			} else if ( len == 0 )
-			{
-			  break;
-			}
+		  if ( len > 0 && written > dev->playback.requested_latency )
+		    {
+		      if ( dev->playback.ops->status(dev->playback.handle, &dev->playback.status) < 0 )
+			goto out;
+		    } else if ( len == 0 )
+		    {
+		      break;
 		    }
 		}
+		
 		
 	    } else
 	    {
@@ -2199,21 +2207,41 @@ static void *dspd_dev_thread(void *arg)
   sprintf(name, "dspd-io-%d", dev->key);
   set_thread_name(name);
 
-  if ( pthread_getschedparam(pthread_self(), &dev->sched_policy, &dev->sched_param) == 0 &&
-       (dev->sched_policy == SCHED_RR || dev->sched_policy == SCHED_FIFO) )
+  if ( dev->sched_policy == SCHED_DEADLINE )
     {
-      /*
-	The idea is to make sure SIGXCPU is delivered to this thread and not some other thread.
-      */
-      rl.rlim_cur = 50000;
-      rl.rlim_max = 100000;
-      prlimit(dspd_gettid(), RLIMIT_RTTIME, &rl, &old);
-      memset(&act, 0, sizeof(act));
-      act.sa_sigaction = sigxcpu_handler;
-      act.sa_flags = SA_SIGINFO;
-      sigaction(SIGXCPU, &act, NULL);
+      if ( dspd_sched_enable_deadline(dev->sched) )
+	{
+	  dspd_sched_set_timebase(dev->sched, 
+				  1000000000 / MAX(dev->playback.params.rate,dev->capture.params.rate));
+	  struct sched_param sp = { 0 };
+	  uint32_t l = MAX(dev->playback.params.max_latency, dev->capture.params.max_latency);
+	  sched_setscheduler(dspd_gettid(), 6, &sp);
+	  dspd_sched_set_deadline_hint(dev->sched, 
+				       l / 2,
+				       l);
+	} else
+	{
+	  
+	}
+    } else
+    {  
+      if ( pthread_getschedparam(pthread_self(), &dev->sched_policy, &dev->sched_param) == 0 &&
+	   (dev->sched_policy == SCHED_RR || dev->sched_policy == SCHED_FIFO) )
+	{
+	  /*
+	    The idea is to make sure SIGXCPU is delivered to this thread and not some other thread.
+	    It actually does work in testing and should be reasonably expected to since Linux threads
+	    are really just another process sharing address space.
+	  */
+	  rl.rlim_cur = 50000;
+	  rl.rlim_max = 100000;
+	  prlimit(dspd_gettid(), RLIMIT_RTTIME, &rl, &old);
+	  memset(&act, 0, sizeof(act));
+	  act.sa_sigaction = sigxcpu_handler;
+	  act.sa_flags = SA_SIGINFO;
+	  sigaction(SIGXCPU, &act, NULL);
+	}
     }
-
   dspd_pcm_device_register_tls(dev);
   memset(&act, 0, sizeof(act));
   act.sa_sigaction = sigbus_handler;
@@ -2559,6 +2587,8 @@ int32_t dspd_pcm_device_new(void **dev,
   
   devptr->arg = params->arg;
   devptr->current_client = -1;
+  devptr->sched_policy = dspd_dctx.rtio_policy;
+  devptr->sched_param.sched_priority = dspd_dctx.rtio_priority;
   ret = dspd_thread_create(&devptr->iothread,
 			   &attr,
 			   dspd_dev_thread,

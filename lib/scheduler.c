@@ -38,7 +38,7 @@
 #include <sys/syscall.h>
 #include <pthread.h>
 #include "scheduler.h"
-
+#include "thread.h"
 
 
 
@@ -312,9 +312,9 @@ void dspd_sched_get_deadline_hint(struct dspd_scheduler *sch,
 }
 
 
-#define gettid() syscall(__NR_gettid)
-#ifndef SCHED_DEADLINE
-#define SCHED_DEADLINE	6
+
+#ifdef _USE_DSPD_SCHED_DEADLINE
+
 
 /* XXX use the proper syscall numbers */
 #ifdef __x86_64__
@@ -399,7 +399,9 @@ int32_t dspd_sched_set_deadline_hint(struct dspd_scheduler *sch,
 				     int32_t buffer_time)
 {
   int32_t ret = 0;
-  if ( sch->have_sched_deadline )
+  if ( sch->have_sched_deadline &&
+       (avail_min != sch->avail_min ||
+	buffer_time != sch->buffer_time) )
     {
       struct sched_attr attr;
       memset(&attr, 0, sizeof(attr));
@@ -431,7 +433,7 @@ bool dspd_sched_deadline_init(struct dspd_scheduler *sch)
   int ret;
   if ( sch->have_sched_deadline && sch->tid < 0 )
     {
-      sch->tid = gettid();
+      sch->tid = dspd_gettid();
       memset(&attr, 0, sizeof(attr));
       attr.sched_flags = 0;
       attr.sched_nice = 0;
@@ -441,8 +443,9 @@ bool dspd_sched_deadline_init(struct dspd_scheduler *sch)
       attr.sched_period = attr.sched_deadline = 10000000;
       attr.sched_deadline = attr.sched_period;
       ret = dspd_sched_setattr(sch->tid, &attr, 0);
-      if ( ret < 0 )
-	sch->have_sched_deadline = false;
+      sch->have_sched_deadline = ret < 0;
+
+       
     }
   return sch->have_sched_deadline;
 }

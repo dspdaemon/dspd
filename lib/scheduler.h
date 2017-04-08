@@ -3,6 +3,11 @@
 #include <stdint.h>
 #include <sys/epoll.h>
 #include <atomic_ops.h>
+#include <sched.h>
+#ifndef SCHED_DEADLINE
+#define SCHED_DEADLINE 6
+#define _USE_DSPD_SCHED_DEADLINE
+#endif
 typedef void (*dspd_sch_callback_t)(void *udata, int32_t fd, void *fdata, uint32_t events);
 
 //Stop timer
