@@ -201,4 +201,6 @@ int32_t dspd_get_glitch_correction(void);
 bool dspd_daemon_queue_work(const struct dspd_wq_item *item);
 int dspd_daemon_set_ipc_perm(const char *path);
 int dspd_daemon_set_ipc_perm_fd(int fd);
+int dspd_daemon_set_thread_nice(int tid, int thread_type);
+void dspd_daemon_set_thread_schedparam(int tid, int thread_type);
 #endif

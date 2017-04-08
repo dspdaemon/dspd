@@ -655,11 +655,52 @@ static int reset_caps(void)
   return 0;
 }
 
+int dspd_daemon_set_thread_nice(int tid, int thread_type)
+{
+  int ret = 0, r;
+  if ( tid < 0 )
+    tid = dspd_gettid();
+  int prio = dspd_dctx.priority;
+  if ( prio < 0 )
+    {
+      if ( thread_type & DSPD_THREADATTR_RTSVC )
+	prio++;
+      else if ( ! (thread_type & DSPD_THREADATTR_RTIO) )
+	prio = 0;
+      ret = dspd_setpriority(PRIO_PROCESS, tid, prio, &r);
+    }
+  return ret;
+}
+
+/*
+  Automatically set the thread scheduler params.  There is no return
+  value because threads should continue anyway even if it fails.
+*/
+
+void dspd_daemon_set_thread_schedparam(int tid, int thread_type)
+{
+  struct sched_param sp;
+  if ( tid < 0 )
+    tid = dspd_gettid();
+  if ( (thread_type & DSPD_THREADATTR_RTIO) && 
+       dspd_dctx.rtio_policy != SCHED_DEADLINE )
+    {
+      memset(&sp, 0, sizeof(sp));
+      sp.sched_priority = dspd_dctx.rtio_priority;
+      sched_setscheduler(tid, dspd_dctx.rtio_policy, &sp);
+    } else if ( thread_type & DSPD_THREADATTR_RTSVC )
+    {
+      memset(&sp, 0, sizeof(sp));
+      sp.sched_priority = dspd_dctx.rtsvc_priority;
+      sched_setscheduler(tid, dspd_dctx.rtsvc_policy, &sp);
+    }
+  dspd_daemon_set_thread_nice(tid, thread_type);
+}
 
 
 int dspd_daemon_init(int argc, char **argv)
 {
-  int ret = -ENOMEM, result;
+  int ret = -ENOMEM;
   char *tmp = malloc(PATH_MAX);
   size_t len;
   ssize_t l;
@@ -799,21 +840,13 @@ int dspd_daemon_init(int argc, char **argv)
 	{
 	  n = INT32_MIN;
 	  set_priority(value, &n);
-	  if ( n != INT32_MIN )
+	  if ( n != INT32_MIN && n < 0 )
 	    {
-	      if ( (ret = dspd_setpriority(PRIO_PROCESS, 0, n, &result)) == 0 )
-		{
-		  dspd_log(0, "Set priority to %d", result);
-		  dspd_dctx.priority = ret;
-		} else
-		{
-		  dspd_log(0, "Could not set priority to %d (error %d)",
-			   n, ret);
-		}
+	      dspd_dctx.priority = ret;
+	      rl.rlim_cur = 20 + n;
+	      rl.rlim_max = rl.rlim_cur;
+	      setrlimit(RLIMIT_NICE, &rl);
 	    }
-	  rl.rlim_cur = 20 + n;
-	  rl.rlim_max = rl.rlim_cur;
-	  setrlimit(RLIMIT_NICE, &rl);
 	}
     }
 

@@ -2641,12 +2641,7 @@ static int oc_init(void *daemon, void **context)
 	  val = NULL;
 	  dspd_dict_find_value(server_context.config, "cdev_helper", (char**)&val);
 	  if ( val != NULL )
-	    {
-	      if ( strcasecmp(val, "on") == 0 )
-		server_context.helper = OSSCUSE_ENABLE_HELPER;
-	      else if ( strcasecmp(val, "off") == 0 )
-		server_context.helper = OSSCUSE_DISABLE_HELPER;
-	    }
+	    server_context.helper = dspd_strtoidef(val, server_context.helper);
 
 
 	  val = NULL;
@@ -2660,7 +2655,6 @@ static int oc_init(void *daemon, void **context)
 	      else
 		dspd_log(0, "Invalid legacy_mixer_type: '%s'", val);
 	    }
-
 	}
 
       ret = cbpoll_init(&server_context.cbpoll, 0, DSPD_MAX_OBJECTS);

@@ -2242,6 +2242,8 @@ static void *dspd_dev_thread(void *arg)
 	  sigaction(SIGXCPU, &act, NULL);
 	}
     }
+  dspd_daemon_set_thread_nice(-1, DSPD_THREADATTR_RTIO);
+
   dspd_pcm_device_register_tls(dev);
   memset(&act, 0, sizeof(act));
   act.sa_sigaction = sigbus_handler;
