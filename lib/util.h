@@ -63,4 +63,23 @@ void *dspd_memdup(const void *ptr, size_t len);
 ssize_t dspd_writev(int fd, const struct iovec *iov, int niov, size_t *offset);
 ssize_t dspd_readv(int fd, const struct iovec *iov, int niov, size_t *offset);
 int set_thread_name(const char *name);
+
+/*
+  The default value can be any value.  The recommended use default
+  value is 0, 1, or -1.  If -1, then the string is invalid.  If 
+  0 or 1, then the caller doesn't care and just wants a valid
+  boolean value.  The means the return values are 0, 1, or 
+  defaultvalue.
+  
+*/
+#define DSPD_SYNTAX_ERROR -1
+int32_t dspd_strtob(int32_t defaultvalue, const char *opt);
+
+int32_t dspd_vparse_opt(int32_t defaultvalue, 
+			const char *opt, va_list opts);
+
+//varargs are: value, intval, ..., NULL
+//example: "something", 123, NULL
+int32_t dspd_parse_opt(int32_t defaultvalue, 
+		       const char *opt, ...);
 #endif

@@ -1,0 +1,54 @@
+The following client applications were tested and are known to work well.
+This means no lagging sound effects or A/V sync issues or distortions.
+
+Quake 3              (SDL/OSS)
+Quake 4              (OpenAL/ALSA)
+Doom 3 1.3           (ALSA)
+Descent 3            (ALSA WINE)
+winecfg              (ALSA)
+Flash Player         (ALSA)
+Xine                 (ALSA,OSS,sndio)
+Descent for MS-DOS   (ALSA,OSS Qemu 0.9)
+Mozilla Seamonkey    (ALSA)
+Firefox              (ALSA)
+Chromium Browser     (ALSA)
+Chromium BSU         (OSS)
+KDE 4.10.5           (ALSA)
+aplay/arecord        (ALSA)
+ossplay              (OSS)
+mplayer              (OSS)
+esd		     (ALSA)
+
+The following applications mostly work:
+
+aucat                (sndio,ALSA)
+ May abort capture on xrun with sndio protocol.  ALSA support requires
+ a special pcm.hw entry in .asoundrc to override hardware access.
+
+ossxmix              (OSS)
+ Some controls aren't correctly represented due to bugs in dspd.
+
+aumix                (OSS)
+ The OSSv3 mixer API sucks.  Maybe it would be better to just represent a small
+ number of well known controls such as PCM, MIC, etc. and stop trying
+ to represent the actual device.
+
+pulseaudio    	     (ALSA,OSS)
+ Works as a client.  Not very well tested and probably won't be as long
+ as no apps on my system require pulseaudio.
+
+opera 12       	     (ALSA)
+ Seems to work.  HTML5 video has some glitches but this may be due to
+ the browser being very old.
+
+
+
+Not tested for a while, but previously known to work:
+
+artsd	       	     (ALSA,OSS)
+google-chrome	     Nearly identical to Chromium and did previously work.
+vlc		     (OSS)
+
+
+		     
+

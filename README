@@ -6,7 +6,8 @@ General Information
 ===================
 DSPD is a Linux sound daemon that tries to emulate one or more sound cards that support
 multiple streams.  It isn't really complete right now but it works well enough
-that I don't need dmix or anything like that anymore.
+that I don't need dmix or anything like that anymore.  This software is for Linux only,
+with no compromises for any other operating systems.
 
 So far it supports clients for OSSv4, ALSA, and sndio (based on version 1.0.1) as clients.  
 ALSA is the only supported hardware interface for the server.

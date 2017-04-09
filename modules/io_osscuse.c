@@ -702,13 +702,33 @@ static void dsp_poll(struct oss_cdev_client *cli, uint64_t ph)
   oss_reply_poll(cli, revents);
 }
 
-
+static void dsp_release(struct oss_cdev_client *cli)
+{
+  uint32_t s;
+  int32_t err;
+  if ( (cli->dsp.params.stream & DSPD_PCM_SBIT_PLAYBACK) != 0 &&
+       (cli->error == 0) )
+    {
+      s = DSPD_PCM_SBIT_PLAYBACK;
+      err = dspd_rclient_ctl(&cli->dsp.rclient,
+			     DSPD_SCTL_CLIENT_START,
+			     &s,
+			     sizeof(s),
+			     NULL,
+			     0,
+			     NULL);
+      if ( err == 0 )
+	err = dspd_rclient_drain(&cli->dsp.rclient);
+    }
+  oss_reply_error(cli, 0);
+}
 
 const struct oss_cdev_ops osscuse_dsp_ops = {
   .write = dsp_write,
   .read = dsp_read,
   .ioctl = dsp_ioctl,
   .poll = dsp_poll,
+  .release = dsp_release,
 };
 
 /*

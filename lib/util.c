@@ -27,6 +27,7 @@
 #include <sys/prctl.h>
 #include <unistd.h>
 #include <syscall.h>
+#include <stdarg.h>
 #include "sslib.h"
 
 
@@ -513,4 +514,56 @@ int set_thread_name(const char *name)
 int dspd_gettid(void)
 {
   return syscall(SYS_gettid);
+}
+
+int32_t dspd_strtob(int32_t defaultvalue, const char *opt)
+{
+  int32_t ret = defaultvalue;
+  if ( strcasecmp(opt, "on") == 0 ||
+       strcasecmp(opt, "true") == 0 ||
+       strcasecmp(opt, "1") == 0 ||
+       strcasecmp(opt, "yes") == 0 )
+    {
+      ret = 1;
+    } else if ( strcasecmp(opt, "off") == 0 ||
+		strcasecmp(opt, "true") == 0 ||
+		strcasecmp(opt, "0") == 0 ||
+		strcasecmp(opt, "no") == 0 )
+    {
+      ret = 0;
+    }
+  return ret;
+}
+
+int32_t dspd_vparse_opt(int32_t defaultvalue, 
+			const char *opt, va_list opts)
+{
+  const char *val;
+  int r;
+  int32_t ret = defaultvalue, n;
+  while ( (val = va_arg(opts, const char*)) )
+    {
+      if ( ! val )
+	break;
+      n = va_arg(opts, int32_t);
+      r = strcasecmp(opt, val);
+      if ( r == 0 )
+	{
+	  ret = n;
+	  break;
+	}
+    }
+  return ret;
+}
+
+
+int32_t dspd_parse_opt(int32_t defaultvalue, 
+		       const char *opt, ...)
+{
+  va_list opts;
+  int32_t ret;
+  va_start(opts, opt);
+  ret = dspd_vparse_opt(defaultvalue, opt, opts);
+  va_end(opts);
+  return ret;
 }

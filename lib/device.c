@@ -2206,7 +2206,19 @@ static void *dspd_dev_thread(void *arg)
   struct rlimit rl, old;
   sprintf(name, "dspd-io-%d", dev->key);
   set_thread_name(name);
+  
+  /*
+    SCHED_DEADLINE is really a natural fit for dspd.  dspd was meant to be preempted so it
+    tries to perform some minimal amount of io before the kernel gets a chance to preempt it.
+    In theory, SCHED_DEADLINE will make those preemptions more predictable.  It is likely that
+    some more work needs done to ensure that it works well on all systems.  For now, it will
+    ask for some parameters that will generally work well with a small number of devices on
+    a system with a fast CPU (or two).  
 
+    The preemption trick actually seems to work so well that it usually won't underrun with even
+    a 2-4ms of latency with SCHED_OTHER and priority (nice) 0.
+    
+   */
   if ( dev->sched_policy == SCHED_DEADLINE )
     {
       if ( dspd_sched_enable_deadline(dev->sched) )
