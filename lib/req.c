@@ -545,12 +545,13 @@ int dspd_stream_ctl(void    *context, //DSPD object, such as dspd_dctx
 		    size_t       *bytes_returned)
 {
   struct dspd_daemon_ctx *dctx;
-  uint32_t objtype = *(uint32_t*)context;
+  uint32_t objtype;
   int32_t ret;
   struct dspd_rctx rctx;
-  struct dspd_conn *conn;
-  size_t pkt_len;
   size_t tmp;
+  if ( context == NULL )
+    return -EFAULT;
+  objtype = *(uint32_t*)context;
   if ( bytes_returned == NULL )
     {
       if ( outbufsize == 0 )

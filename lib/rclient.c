@@ -1891,6 +1891,9 @@ int32_t dspd_rclient_ctl(struct dspd_rclient *client,
   int32_t ret;
   dspd_req_filter_t filter;
   size_t b = 0;
+  if ( client->data.conn == NULL )
+    return -EBADF;
+
   if ( br == NULL )
     br = &b;
   if ( r <= DSPD_DCTL_MAX )

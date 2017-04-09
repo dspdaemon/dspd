@@ -707,7 +707,7 @@ static void dsp_release(struct oss_cdev_client *cli)
   uint32_t s;
   int32_t err;
   if ( (cli->dsp.params.stream & DSPD_PCM_SBIT_PLAYBACK) != 0 &&
-       (cli->error == 0) )
+       (cli->error == 0) && cli->dsp.params_set )
     {
       s = DSPD_PCM_SBIT_PLAYBACK;
       err = dspd_rclient_ctl(&cli->dsp.rclient,
