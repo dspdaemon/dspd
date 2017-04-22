@@ -157,14 +157,13 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
 	cli->dsp.frame_bytes;
     }
 
+  struct dspd_rclient_hwparams hwp = { 0 };
 
-  ret = dspd_rclient_connect(&cli->dsp.rclient,
-			     &cliparams,
-			     NULL,
-			     NULL,
-			     &dspd_dctx,
-			     cli->client_index,
-			     cli->device_index);
+  if ( cli->dsp.params.stream & DSPD_PCM_SBIT_PLAYBACK )
+    hwp.playback_params = &cliparams;
+  if ( cli->dsp.params.stream & DSPD_PCM_SBIT_CAPTURE )
+    hwp.capture_params = &cliparams;
+  ret = dspd_rclient_hw_params(&cli->dsp.rclient, &hwp);
   if ( ret < 0 )
     return ret * -1;
 

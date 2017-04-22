@@ -660,7 +660,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   size_t pgsize = 256, pgcount, n;
   size_t br;
   int s = 0;
-
+  struct dspd_rclient_bindparams bp = { 0 };
 
   cli = calloc(1, sizeof(*cli));
   if ( ! cli )
@@ -668,32 +668,6 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
       err = ENOMEM;
       goto error;
     }
-
-  if ( cli->mode == O_RDWR )
-    s = DSPD_PCM_SBIT_FULLDUPLEX;
-  else if ( cli->mode == O_RDONLY )
-    s = DSPD_PCM_SBIT_CAPTURE;
-  else if ( cli->mode == O_WRONLY )
-    s = DSPD_PCM_SBIT_PLAYBACK;
- 
-  err = dspd_rclient_init(&cli->dsp.rclient, s);
-  if ( err )
-    {
-      err *= -1;
-      goto error;
-    }
-
-  cli->cdev_slot = slot;
-  err = dspd_cond_init(&cli->event, &server_context.client_condattr);
-  if ( err )
-    goto error;
-  err = dspd_mutex_init(&cli->lock, NULL);
-  if ( err )
-    goto error;
-
-  cli->flags = req->flags;
-  cli->unique = req->unique;
-
   cli->mode = req->flags & O_ACCMODE;
 
   if ( cli->mode == O_RDWR || cli->mode == O_RDONLY )
@@ -706,6 +680,36 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 	}
       cli->dsp.readlen = server_context.dsp_params.maxread;
     }
+
+
+  if ( cli->mode == O_RDWR )
+    s = DSPD_PCM_SBIT_FULLDUPLEX;
+  else if ( cli->mode == O_RDONLY )
+    s = DSPD_PCM_SBIT_CAPTURE;
+  else if ( cli->mode == O_WRONLY )
+    s = DSPD_PCM_SBIT_PLAYBACK;
+  
+  err = dspd_rclient_init(&cli->dsp.rclient, s);
+  if ( err )
+    {
+      err *= -1;
+      goto error;
+    }
+  
+
+
+  cli->cdev_slot = slot;
+  err = dspd_cond_init(&cli->event, &server_context.client_condattr);
+  if ( err )
+    goto error;
+  err = dspd_mutex_init(&cli->lock, NULL);
+  if ( err )
+    goto error;
+
+  cli->flags = req->flags;
+  cli->unique = req->unique;
+
+  
 
   cli->dsp.subdivision = 1;
  
@@ -861,7 +865,12 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   else
     cli->dsp.params.stream = DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE;
 
-    
+  bp.conn = &dspd_dctx;
+  bp.client = cli->client_index;
+  bp.device = cli->device_index;
+  err = dspd_rclient_bind(&cli->dsp.rclient, &bp);
+  if ( err )
+    goto error;
  
   err = pthread_create(&cli->thread, &server_context.client_threadattr, dsp_worker, cli);
   if ( err == EPERM )
@@ -878,6 +887,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   if ( err )
     goto error;
  
+  
 
 
   return;

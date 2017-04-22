@@ -847,7 +847,7 @@ static int _amsg_setpar(struct sndio_client *cli)
 	  cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
 	  if ( ret == 0 && cli->cclient != cli->pclient )
 	    {
-	      cli->start_threshold = cli->pparams.bufsize; //FIXME: Figure out the best size
+	      cli->start_threshold = cli->pparams.bufsize;
 	      ret = dspd_rclient_connect(cli->pclient, NULL, NULL, NULL, NULL, -1, -1);
 	    }
 	}
