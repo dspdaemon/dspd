@@ -626,15 +626,15 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   
 
-  struct dspd_rclient_data rd;
-  rd.conn = dspd->conn;
-  rd.client = dspd->client_stream;
-  rd.device = dspd->device;
+  struct dspd_rclient_bindparams bp;
+  bp.conn = dspd->conn;
+  bp.client = dspd->client_stream;
+  bp.device = dspd->device;
   
   ret = dspd_rclient_attach(&dspd->client,
 			    &shm,
 			    &p,
-			    &rd);
+			    &bp);
 
   if ( ret )
     goto error;
@@ -1154,7 +1154,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 
   dspd_time_init();
 
-  err = dspd_rclient_init(&dspd->client);
+  err = dspd_rclient_init(&dspd->client, dspd->stream);
   if ( err < 0 )
     goto error;
 

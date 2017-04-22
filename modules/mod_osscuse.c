@@ -499,25 +499,30 @@ static void free_client_cb(struct cbpoll_ctx *ctx,
   struct oss_cdev_client *cli = (struct oss_cdev_client*)(intptr_t)arg;
   size_t br;
   if ( cli->ops && cli->ops->free )
-    cli->ops->free(cli);
-  dspd_rtalloc_delete(cli->alloc);
-  dspd_fifo_delete(cli->eventq);
-  dspd_mutex_destroy(&cli->lock);
-  dspd_cond_destroy(&cli->event);
-  free(cli->dsp.readbuf);
-  cli->dsp.readbuf = NULL;
-  dspd_stream_ctl(&dspd_dctx, 
-		  cli->client_index,
-		  DSPD_SCTL_CLIENT_DISCONNECT,
-		  NULL,
-		  0,
-		  NULL,
-		  0,
-		  &br);
+    {
+      cli->ops->free(cli);
+    } else
+    {
+      dspd_rclient_destroy(&cli->dsp.rclient);
+      dspd_rtalloc_delete(cli->alloc);
+      dspd_fifo_delete(cli->eventq);
+      dspd_mutex_destroy(&cli->lock);
+      dspd_cond_destroy(&cli->event);
+      free(cli->dsp.readbuf);
+      cli->dsp.readbuf = NULL;
+      dspd_stream_ctl(&dspd_dctx, 
+		      cli->client_index,
+		      DSPD_SCTL_CLIENT_DISCONNECT,
+		      NULL,
+		      0,
+		      NULL,
+		      0,
+		      &br);
   
-  if ( cli->client_index > 0 )
-    dspd_daemon_unref(cli->client_index);
-  free(cli);
+      if ( cli->client_index > 0 )
+	dspd_daemon_unref(cli->client_index);
+      free(cli);
+    }
 }
 
 void dsp_client_release_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt)
@@ -654,7 +659,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   int err = 0;
   size_t pgsize = 256, pgcount, n;
   size_t br;
-
+  int s = 0;
 
 
   cli = calloc(1, sizeof(*cli));
@@ -664,8 +669,14 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
       goto error;
     }
 
+  if ( cli->mode == O_RDWR )
+    s = DSPD_PCM_SBIT_FULLDUPLEX;
+  else if ( cli->mode == O_RDONLY )
+    s = DSPD_PCM_SBIT_CAPTURE;
+  else if ( cli->mode == O_WRONLY )
+    s = DSPD_PCM_SBIT_PLAYBACK;
  
-  err = dspd_rclient_init(&cli->dsp.rclient);
+  err = dspd_rclient_init(&cli->dsp.rclient, s);
   if ( err )
     {
       err *= -1;
@@ -689,7 +700,10 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
     {
       cli->dsp.readbuf = calloc(1, server_context.dsp_params.maxread);
       if ( ! cli->dsp.readbuf )
-	goto error;
+	{
+	  err = ENOMEM;
+	  goto error;
+	}
       cli->dsp.readlen = server_context.dsp_params.maxread;
     }
 
@@ -872,6 +886,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 
   if ( cli )
     {
+      dspd_rclient_destroy(&cli->dsp.rclient);
       if ( cli->client_index > 0 )
 	dspd_daemon_unref(cli->client_index);
       if ( cli->device_index > 0 )
@@ -882,6 +897,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 	dspd_fifo_delete(cli->eventq);
       dspd_cond_destroy(&cli->event);
       dspd_mutex_destroy(&cli->lock);
+
       free(cli->dsp.readbuf);
       free(cli);
     }

@@ -1,7 +1,7 @@
 #ifndef _DSPD_RCLIENT_H_
 #define _DSPD_RCLIENT_H_
 
-struct dspd_rclient_data {
+struct dspd_rclient_bindparams {
   int32_t  device;
   int32_t  client;
   void    *conn;
@@ -12,6 +12,17 @@ struct dspd_rclient_swparams {
   uint32_t start_threshold;
   uint32_t stop_threshold;
 };
+
+struct dspd_rclient_hwparams {
+  const struct dspd_cli_params *playback_params;
+  const struct dspd_chmap      *playback_chmap;
+  const struct dspd_cli_params *capture_params;
+  const struct dspd_chmap      *capture_chmap;
+  void    *context;
+  int32_t  stream;
+  int32_t  device;
+};
+
 struct dspd_rclient {
   struct dspd_client_stream playback;
   struct dspd_client_shm    playback_shm;
@@ -27,7 +38,7 @@ struct dspd_rclient {
   
   struct dspd_rclient_swparams swparams;
 
-  struct dspd_rclient_data data;
+  struct dspd_rclient_bindparams bparams;
 
   uint32_t           trigger;
   bool               playback_xfer;
@@ -42,10 +53,12 @@ struct dspd_rclient {
 
   dspd_time_t playback_next_wakeup, capture_next_wakeup;
   uint32_t wakeup_streams;
-  
+
+  uint32_t streams;
+  bool init;
 };
 void dspd_rclient_detach(struct dspd_rclient *client, int32_t stream);
-int32_t dspd_rclient_init(struct dspd_rclient *client);
+int32_t dspd_rclient_init(struct dspd_rclient *client, int32_t stream);
 void dspd_rclient_destroy(struct dspd_rclient *client);
 
 
@@ -53,7 +66,7 @@ void dspd_rclient_destroy(struct dspd_rclient *client);
 int32_t dspd_rclient_attach(struct dspd_rclient *client,
 			    const struct dspd_client_shm *cshm,
 			    const struct dspd_cli_params *params,
-			    const struct dspd_rclient_data *data);
+			    const struct dspd_rclient_bindparams *bparams);
 
 int32_t dspd_rclient_write_rewind(struct dspd_rclient *client, uint32_t len);
 int32_t dspd_rclient_set_write_ptr(struct dspd_rclient *client, uintptr_t ptr);
@@ -150,12 +163,12 @@ int dspd_rclient_update_pollfd(struct dspd_rclient *client, uint32_t sbits, bool
 //allow passing the rclient to represent all of these things before
 //it is attached.
 int32_t dspd_rclient_bind(struct dspd_rclient *client,
-			  struct dspd_rclient_data *data);
+			  struct dspd_rclient_bindparams *bparams);
 int32_t dspd_rclient_fast_status(struct dspd_rclient *client, 
 				 int32_t stream, 
 				 struct dspd_pcmcli_status *status);
 
-int32_t dspd_rclient_new(struct dspd_rclient **client);
+int32_t dspd_rclient_new(struct dspd_rclient **client, int32_t streams);
 void dspd_rclient_delete(struct dspd_rclient *client);
 int32_t dspd_rclient_open_dev(struct dspd_rclient *client, 
 			      const char *name, 
@@ -171,5 +184,9 @@ int dspd_rclient_open(void *context,
 const struct dspd_device_stat *dspd_rclient_devinfo(const struct dspd_rclient *client);
 
 bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits);
+
+
+int32_t dspd_rclient_hw_params(struct dspd_rclient *cli, 
+			       const struct dspd_rclient_hwparams *hwp);
 
 #endif

@@ -82,13 +82,13 @@ static void rclient_eventfd_clear(struct dspd_rclient *client)
     }
 }
 
-int32_t dspd_rclient_new(struct dspd_rclient **client)
+int32_t dspd_rclient_new(struct dspd_rclient **client, int32_t streams)
 {
   struct dspd_rclient *rc = calloc(1, sizeof(struct dspd_rclient));
   int32_t ret = 0;
   if ( rc )
     {
-      ret = dspd_rclient_init(rc);
+      ret = dspd_rclient_init(rc, streams);
       if ( ret < 0 )
 	free(rc);
       else
@@ -110,21 +110,25 @@ void dspd_rclient_delete(struct dspd_rclient *client)
 }
 
 
-int32_t dspd_rclient_init(struct dspd_rclient *client)
+int32_t dspd_rclient_init(struct dspd_rclient *client, int32_t streams)
 {
+  if ( ! (streams & (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) )
+    return -EINVAL;
   memset(client, 0, sizeof(*client));
   client->eventfd = -1;
   client->swparams.avail_min = 1;
-  client->data.client = -1;
-  client->data.device = -1;
+  client->bparams.client = -1;
+  client->bparams.device = -1;
+  client->streams = streams;
+  client->init = true;
   return 0;
 }
 
 int32_t dspd_rclient_bind(struct dspd_rclient *client,
-			  struct dspd_rclient_data *data)
+			  struct dspd_rclient_bindparams *bparams)
 {
   int32_t ret;
-  if ( client == NULL || data == NULL )
+  if ( client == NULL || bparams == NULL )
     {
       ret = -EFAULT;
     } else if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) )
@@ -132,7 +136,7 @@ int32_t dspd_rclient_bind(struct dspd_rclient *client,
       ret = -EINVAL;
     } else
     {
-      memcpy(&client->data, data, sizeof(*data));
+      memcpy(&client->bparams, bparams, sizeof(*bparams));
       ret = 0;
     }
   return ret;
@@ -154,14 +158,14 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
   ssize_t i, bits;
   uint32_t dev, prev = 0;
   uint64_t d = 0;
-  if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) || client->data.conn == NULL || client->data.device > 0 )
+  if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) || client->bparams.conn == NULL || client->bparams.device > 0 )
     return -EINVAL;
 
 
 
   if ( strcmp(name, "default") == 0 )
     {
-      err = dspd_stream_ctl(client->data.conn,
+      err = dspd_stream_ctl(client->bparams.conn,
 			    0,
 			    DSPD_DCTL_GET_DEFAULTDEV,
 			    &stream,
@@ -172,7 +176,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
       if ( err )
 	return err;
     }
-  err = dspd_stream_ctl(client->data.conn,
+  err = dspd_stream_ctl(client->bparams.conn,
 			0,
 			DSPD_DCTL_GET_OBJMASK_SIZE,
 			NULL,
@@ -186,7 +190,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
   if ( ! mask )
     return -ENOMEM;
   
-  err = dspd_stream_ctl(client->data.conn,
+  err = dspd_stream_ctl(client->bparams.conn,
 			0,
 			DSPD_DCTL_ENUMERATE_OBJECTS,
 			&mtype,
@@ -207,7 +211,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
        d |= dev;
        prev = 0;
        //Create a reference, remove any existing references, and get the device information.
-       err = dspd_stream_ctl(client->data.conn,
+       err = dspd_stream_ctl(client->bparams.conn,
 			     -1,
 			     DSPD_SOCKSRV_REQ_REFSRV,
 			     &d,
@@ -237,7 +241,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
        if ( info )
 	 memcpy(info, &client->devinfo, sizeof(*info));
      }
-   client->data.device = devidx;
+   client->bparams.device = devidx;
    
 
  out:
@@ -246,7 +250,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
      {
        if ( devidx > 0 )
 	 {
-	   dspd_stream_ctl(client->data.conn,
+	   dspd_stream_ctl(client->bparams.conn,
 			   -1,
 			   DSPD_SOCKSRV_REQ_UNREFSRV,
 			   &devidx,
@@ -256,7 +260,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 			   NULL);
 	 } else if ( prev > 0 )
 	 {
-	   dspd_stream_ctl(client->data.conn,
+	   dspd_stream_ctl(client->bparams.conn,
 			   -1,
 			   DSPD_SOCKSRV_REQ_UNREFSRV,
 			   &prev,
@@ -273,6 +277,9 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 void dspd_rclient_destroy(struct dspd_rclient *client)
 {
   size_t br;
+  if ( ! client->init )
+    return;
+  
   if ( client->eventfd >= 0 )
     {
       close(client->eventfd);
@@ -281,39 +288,96 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
   dspd_rclient_detach(client, DSPD_PCM_SBIT_PLAYBACK);
   dspd_rclient_detach(client, DSPD_PCM_SBIT_CAPTURE);
 
-  if ( client->autoclose && client->data.conn )
+  if ( client->autoclose && client->bparams.conn )
     {
-      uint32_t t = *(int32_t*)client->data.conn;
+      uint32_t t = *(int32_t*)client->bparams.conn;
       if ( t == DSPD_OBJ_TYPE_DAEMON_CTX )
 	{
 	  
-	  dspd_stream_ctl(client->data.conn,
+	  dspd_stream_ctl(client->bparams.conn,
 			  -1,
 			  DSPD_SOCKSRV_REQ_UNREFSRV,
-			  &client->data.device,
-			  sizeof(client->data.device),
+			  &client->bparams.device,
+			  sizeof(client->bparams.device),
 			  NULL,
 			  0,
 			  &br);
-	  dspd_stream_ctl(client->data.conn,
+	  dspd_stream_ctl(client->bparams.conn,
 			  -1,
 			  DSPD_SOCKSRV_REQ_DELCLI,
-			  &client->data.client,
-			  sizeof(client->data.client),
+			  &client->bparams.client,
+			  sizeof(client->bparams.client),
 			  NULL,
 			  0,
 			  &br);
 	  
 	} else
 	{
-	  dspd_conn_delete(client->data.conn);
+	  dspd_conn_delete(client->bparams.conn);
 	}
-      client->data.conn = NULL;
-      client->data.client = -1;
-      client->data.device = -1;
+      client->bparams.conn = NULL;
+      client->bparams.client = -1;
+      client->bparams.device = -1;
     }
+  memset(client, 0, sizeof(*client));
 }
 
+int32_t dspd_rclient_hw_params(struct dspd_rclient *cli, 
+			       const struct dspd_rclient_hwparams *hwp)
+{
+  int s = 0;
+  int err = 0;
+  struct dspd_cli_params p;
+  if ( ! hwp )
+    return -EFAULT;
+  if ( hwp->playback_params )
+    s |= DSPD_PCM_SBIT_PLAYBACK;
+  if ( hwp->capture_params )
+    s |= DSPD_PCM_SBIT_CAPTURE;
+  if ( s != cli->streams )
+    return -EINVAL;
+  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+    dspd_rclient_detach(cli, DSPD_PCM_SBIT_PLAYBACK);
+  if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+    dspd_rclient_detach(cli, DSPD_PCM_SBIT_CAPTURE);
+  
+  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+    {
+      p = *hwp->playback_params;
+      p.stream = DSPD_PCM_SBIT_PLAYBACK;
+      p.flags |= DSPD_CLI_FLAG_RESERVED;
+      err = dspd_rclient_connect(cli, 
+				 &p,
+				 hwp->playback_chmap,
+				 NULL,
+				 hwp->context,
+				 hwp->stream,
+				 hwp->device);
+    }
+  if ( err == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
+    {
+      p = *hwp->capture_params;
+      p.stream = DSPD_PCM_SBIT_CAPTURE;
+      p.flags |= DSPD_CLI_FLAG_RESERVED;
+      err = dspd_rclient_connect(cli, 
+				 &p,
+				 NULL,
+				 hwp->capture_chmap,
+				 hwp->context,
+				 hwp->stream,
+				 hwp->device);
+
+    }
+  if ( err )
+    {
+      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	dspd_rclient_detach(cli, DSPD_PCM_SBIT_PLAYBACK);
+
+      if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	dspd_rclient_detach(cli, DSPD_PCM_SBIT_CAPTURE);
+    }
+  return err;
+}
 
 int32_t dspd_rclient_connect(struct dspd_rclient *client, 
 			     const struct dspd_cli_params *params, //required, may be full duplex
@@ -330,17 +394,24 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
   struct dspd_client_shm shm;
   int shm_fd = -1;
   int32_t s;
-  struct dspd_rclient_data rd;
+  struct dspd_rclient_bindparams bp;
   bool preset_params = !params;
   int sbits = 0;
 
+ 
   
-  if ( context == NULL && stream == -1 && device == -1 )
+  if ( context == NULL || stream == -1 || device == -1 )
     {
-      context = client->data.conn;
-      stream = client->data.client;
-      device = client->data.device;
+      context = client->bparams.conn;
+      stream = client->bparams.client;
+      device = client->bparams.device;
+    } else
+    {
+      client->bparams.conn = context;
+      client->bparams.client = stream;
+      client->bparams.device = device;
     }
+  
   if ( preset_params )
     {
       if ( client->playback.params.channels )
@@ -362,8 +433,15 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	}
     } else
     {
-      if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) )
-	return -EBUSY;
+      if ( ! (params->flags & DSPD_CLI_FLAG_RESERVED) )
+	{
+	  if ( PLAYBACK_ENABLED(client) || CAPTURE_ENABLED(client) )
+	    return -EBUSY;
+	} else if ( ! (params->stream == DSPD_PCM_SBIT_PLAYBACK ||
+		       params->stream == DSPD_PCM_SBIT_CAPTURE) )
+	{
+	  return -EINVAL;
+	}
 
       sbits = params->stream;
       p = *params;
@@ -375,14 +453,13 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
       if ( ! preset_params )
 	{
 	  p.stream = DSPD_PCM_SBIT_PLAYBACK;
-	  ret = dspd_stream_ctl(context,
-				stream,
-				DSPD_SCTL_CLIENT_SETPARAMS,
-				&p,
-				sizeof(p),
-				&pp,
-				sizeof(pp),
-				&br);
+	  ret = dspd_rclient_ctl(client,
+				 DSPD_SCTL_CLIENT_SETPARAMS,
+				 &p,
+				 sizeof(p),
+				 &pp,
+				 sizeof(pp),
+				 &br);
 	  if ( ret )
 	    return ret;
 	} else
@@ -394,14 +471,13 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	
       if ( playback_map )
 	{
-	  ret = dspd_stream_ctl(context,
-				stream,
-				DSPD_SCTL_CLIENT_SETCHANNELMAP,
-				playback_map,
-				dspd_chmap_sizeof(playback_map),
-				NULL,
-				0,
-				&br);
+	  ret = dspd_rclient_ctl(client,
+				 DSPD_SCTL_CLIENT_SETCHANNELMAP,
+				 playback_map,
+				 dspd_chmap_sizeof(playback_map),
+				 NULL,
+				 0,
+				 &br);
 	  if ( ret )
 	    return ret;
 	}
@@ -411,8 +487,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
       if ( ! preset_params )
 	{
 	  p.stream = DSPD_PCM_SBIT_CAPTURE;
-	  ret = dspd_stream_ctl(context,
-				stream,
+	  ret = dspd_rclient_ctl(client,
 				DSPD_SCTL_CLIENT_SETPARAMS,
 				&p,
 				sizeof(p),
@@ -427,8 +502,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	}
       if ( capture_map )
 	{
-	  ret = dspd_stream_ctl(context,
-				stream,
+	  ret = dspd_rclient_ctl(client,
 				DSPD_SCTL_CLIENT_SETCHANNELMAP,
 				capture_map,
 				dspd_chmap_sizeof(capture_map),
@@ -440,8 +514,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	}
     }
 
-  ret = dspd_stream_ctl(context,
-			stream,
+  ret = dspd_rclient_ctl(client,
 			DSPD_SCTL_CLIENT_CONNECT,
 			&device,
 			sizeof(device),
@@ -452,15 +525,14 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
   if ( ret )
     return ret;
 
-  rd.conn = context;
-  rd.client = stream;
-  rd.device = device;
+  bp.conn = context;
+  bp.client = stream;
+  bp.device = device;
 
   if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
     {
       s = DSPD_PCM_SBIT_PLAYBACK;
-      ret = dspd_stream_ctl(context,
-			    stream,
+      ret = dspd_rclient_ctl(client,
 			    DSPD_SCTL_CLIENT_MAPBUF,
 			    &s,
 			    sizeof(s),
@@ -475,7 +547,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	shm_fd = dspd_conn_recv_fd(context);
       else
 	shm_fd = -1;
-      ret = dspd_rclient_attach(client, &shm, &pp, &rd);
+      ret = dspd_rclient_attach(client, &shm, &pp, &bp);
       if ( ret )
 	{
 
@@ -488,8 +560,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
   if ( sbits & DSPD_PCM_SBIT_CAPTURE )
     {
       s = DSPD_PCM_SBIT_CAPTURE;
-      ret = dspd_stream_ctl(context,
-			    stream,
+      ret = dspd_rclient_ctl(client,
 			    DSPD_SCTL_CLIENT_MAPBUF,
 			    &s,
 			    sizeof(s),
@@ -508,7 +579,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
       ret = dspd_rclient_attach(client,
 				&shm,
 				&cp,
-				&rd);
+				&bp);
       if ( ret )
 	{
 	  close(shm_fd);
@@ -539,8 +610,8 @@ int32_t dspd_rclient_disconnect(struct dspd_rclient *cli, bool reserve)
   
   if ( reserve )
     {
-      ret = dspd_stream_ctl(cli->data.conn,
-			    cli->data.client,
+      ret = dspd_stream_ctl(cli->bparams.conn,
+			    cli->bparams.client,
 			    DSPD_SCTL_CLIENT_RESERVE,
 			    NULL,
 			    0,
@@ -549,8 +620,8 @@ int32_t dspd_rclient_disconnect(struct dspd_rclient *cli, bool reserve)
 			    NULL);
     } else
     {
-      ret = dspd_stream_ctl(cli->data.conn,
-			    cli->data.client,
+      ret = dspd_stream_ctl(cli->bparams.conn,
+			    cli->bparams.client,
 			    DSPD_SCTL_CLIENT_DISCONNECT,
 			    NULL,
 			    0,
@@ -621,7 +692,7 @@ int32_t dspd_rclient_avail(struct dspd_rclient *client, int32_t stream)
 int32_t dspd_rclient_attach(struct dspd_rclient *client,
 			    const struct dspd_client_shm *cshm,
 			    const struct dspd_cli_params *params,
-			    const struct dspd_rclient_data     *data)
+			    const struct dspd_rclient_bindparams     *bparams)
 {
   struct dspd_shm_map *map;
   struct dspd_client_shm *shm;
@@ -666,8 +737,8 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
 
   if ( cshm == NULL )
     {
-      ret = dspd_stream_ctl(data->conn,
-			    data->client,
+      ret = dspd_stream_ctl(bparams->conn,
+			    bparams->client,
 			    DSPD_SCTL_CLIENT_MAPBUF,
 			    &params->stream,
 			    sizeof(params->stream),
@@ -684,7 +755,7 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
       cshm = &tmpshm;
       if ( cshm->flags & DSPD_SHM_FLAG_MMAP )
 	{
-	  shm_fd = dspd_conn_recv_fd(data->conn);
+	  shm_fd = dspd_conn_recv_fd(bparams->conn);
 	  if ( shm_fd < 0 )
 	    return shm_fd;
 	}
@@ -779,8 +850,8 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
   memcpy(shm, cshm, sizeof(*cshm));
   memmove(&stream->params, params, sizeof(*params));
   stream->sample_time = 1000000000 / stream->params.rate;
-  if ( data )
-    memcpy(&client->data, data, sizeof(*data));
+  if ( bparams )
+    memcpy(&client->bparams, bparams, sizeof(*bparams));
   memset(&stream->status, 0, sizeof(stream->status));
   client->trigger &= ~params->stream;
   dspd_intrp_reset2(intrp, stream->params.rate);
@@ -1439,7 +1510,7 @@ int32_t dspd_rclient_pollfd(struct dspd_rclient *client, uint32_t count, struct 
 	}
       if ( count > 2 )
 	{
-	  fd = dspd_ctx_get_fd(client->data.conn);
+	  fd = dspd_ctx_get_fd(client->bparams.conn);
 	  if ( fd >= 0 )
 	    {
 	      pfd[ret].events = POLLIN | POLLRDHUP;
@@ -1457,7 +1528,7 @@ int32_t dspd_rclient_pollfd_count(struct dspd_rclient *client)
   int ret;
   if ( client->eventfd < 0 )
     return 0;
-  if ( dspd_ctx_get_fd(client->data.conn) >= 0 )
+  if ( dspd_ctx_get_fd(client->bparams.conn) >= 0 )
     ret = 3;
   else
     ret = 2;
@@ -1576,7 +1647,7 @@ int32_t dspd_rclient_poll_revents(struct dspd_rclient *client, struct pollfd *pf
   struct pollfd *p;
   int32_t ret;
   uint32_t avail;
-  int en = 0, fd = dspd_ctx_get_fd(client->data.conn);
+  int en = 0, fd = dspd_ctx_get_fd(client->bparams.conn);
 
   if ( client->stream_poll_events & DSPD_PCM_SBIT_PLAYBACK )
     revents |= POLLOUT;
@@ -1664,8 +1735,8 @@ static int32_t rclient_start(struct dspd_rclient *client,
   int32_t ret;
   size_t br;
   *bytes_returned = 0;
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			req,
 			inbuf,
 			inbufsize,
@@ -1704,8 +1775,8 @@ static int32_t rclient_stop(struct dspd_rclient *client,
   size_t br;
   int32_t bits = *(int32_t*)inbuf;
   *bytes_returned = 0;
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			req,
 			inbuf,
 			inbufsize,
@@ -1745,8 +1816,8 @@ static int32_t rclient_settrigger(struct dspd_rclient *client,
   size_t br;
   int32_t nbits = *(int32_t*)inbuf;
   *bytes_returned = 0;
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			req,
 			inbuf,
 			inbufsize,
@@ -1791,8 +1862,8 @@ static int32_t rclient_setparams(struct dspd_rclient *client,
     oparams = &client->playback.params;
   else
     oparams = &client->capture.params;
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			req,
 			iparams,
 			inbufsize,
@@ -1832,8 +1903,8 @@ static int32_t rclient_synccmd(struct dspd_rclient *client,
   
   const struct dspd_sync_cmd *cmd = inbuf;
   struct dspd_sync_cmd *ocmd = outbuf;
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			req,
 			inbuf,
 			inbufsize,
@@ -1891,14 +1962,14 @@ int32_t dspd_rclient_ctl(struct dspd_rclient *client,
   int32_t ret;
   dspd_req_filter_t filter;
   size_t b = 0;
-  if ( client->data.conn == NULL )
+  if ( client->bparams.conn == NULL )
     return -EBADF;
 
   if ( br == NULL )
     br = &b;
   if ( r <= DSPD_DCTL_MAX )
     {
-      ret = dspd_stream_ctl(client->data.conn,
+      ret = dspd_stream_ctl(client->bparams.conn,
 			    0,
 			    req,
 			    inbuf,
@@ -1928,8 +1999,8 @@ int32_t dspd_rclient_ctl(struct dspd_rclient *client,
 		       br);
 	} else
 	{
-	  ret = dspd_stream_ctl(client->data.conn,
-				client->data.client,
+	  ret = dspd_stream_ctl(client->bparams.conn,
+				client->bparams.client,
 				req,
 				inbuf,
 				inbufsize,
@@ -1940,7 +2011,7 @@ int32_t dspd_rclient_ctl(struct dspd_rclient *client,
     } else if ( r >= DSPD_SCTL_SERVER_MIN && r <= DSPD_SCTL_SERVER_MAX )
     {
       ret = dspd_stream_ctl(client,
-			    client->data.device,
+			    client->bparams.device,
 			    req,
 			    inbuf,
 			    inbufsize,
@@ -2169,27 +2240,27 @@ int dspd_rclient_open(void *context,
   struct dspd_conn *conn = NULL;
   struct dspd_rclient *client = NULL;
   int ret;
-  struct dspd_rclient_data data;
+  struct dspd_rclient_bindparams bp;
   size_t br;
 
-  memset(&data, 0, sizeof(data));
+  memset(&bp, 0, sizeof(bp));
   if ( context == NULL )
     {
       ret = dspd_conn_new(addr, &conn);
       if ( ret )
 	return ret;
-      data.conn = conn;
+      bp.conn = conn;
     } else
     {
-      data.conn = context;
+      bp.conn = context;
     }
-  ret = dspd_rclient_new(&client);
+  ret = dspd_rclient_new(&client, stream);
   if ( ret )
     goto out;
 
-  data.client = -1;
-  data.device = -1;
-  ret = dspd_rclient_bind(client, &data);
+  bp.client = -1;
+  bp.device = -1;
+  ret = dspd_rclient_bind(client, &bp);
   if ( ret )
     goto out;
   
@@ -2197,21 +2268,21 @@ int dspd_rclient_open(void *context,
   ret = dspd_rclient_open_dev(client, name, stream, NULL);
   if ( ret < 0 )
     {
-      client->data.conn = NULL;
+      client->bparams.conn = NULL;
       goto out;
     }
   client->autoclose = true;
 
 
-  if ( client->data.client < 0 )
+  if ( client->bparams.client < 0 )
     {
-      ret = dspd_stream_ctl(client->data.conn,
+      ret = dspd_stream_ctl(client->bparams.conn,
 			    -1,
 			    DSPD_SOCKSRV_REQ_NEWCLI,
-			    &client->data.client,
-			    sizeof(client->data.client),
-			    &client->data.client,
-			    sizeof(client->data.client),
+			    &client->bparams.client,
+			    sizeof(client->bparams.client),
+			    &client->bparams.client,
+			    sizeof(client->bparams.client),
 			    &br);
       if ( ret < 0 )
 	goto out;
@@ -2219,11 +2290,11 @@ int dspd_rclient_open(void *context,
 
 
   //Create a reservation on the device (kind of a dummy connect)
-  ret = dspd_stream_ctl(client->data.conn,
-			client->data.client,
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
 			DSPD_SCTL_CLIENT_RESERVE,
-			&client->data.device,
-			sizeof(client->data.device),
+			&client->bparams.device,
+			sizeof(client->bparams.device),
 			NULL,
 			0,
 			&br);
