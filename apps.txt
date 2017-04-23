@@ -18,6 +18,7 @@ aplay/arecord        (ALSA)
 ossplay              (OSS)
 mplayer              (OSS)
 esd		     (ALSA)
+fluidsynth   	     (ALSA,OSS)
 
 The following applications mostly work:
 
@@ -40,7 +41,6 @@ pulseaudio    	     (ALSA,OSS)
 opera 12       	     (ALSA)
  Seems to work.  HTML5 video has some glitches but this may be due to
  the browser being very old.
-
 
 
 Not tested for a while, but previously known to work:

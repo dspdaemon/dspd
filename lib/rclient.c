@@ -322,8 +322,8 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
   memset(client, 0, sizeof(*client));
 }
 
-int32_t dspd_rclient_hw_params(struct dspd_rclient *cli, 
-			       const struct dspd_rclient_hwparams *hwp)
+int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli, 
+				   const struct dspd_rclient_hwparams *hwp)
 {
   int s = 0;
   int err = 0;
@@ -2337,5 +2337,18 @@ bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits)
 	if ( len == 0 )
 	  ret = true;
     }
+  return ret;
+}
+
+const struct dspd_cli_params *dspd_rclient_get_hw_params(const struct dspd_rclient *client, int32_t sbit)
+{
+  const struct dspd_cli_params *ret = NULL;
+  if ( sbit & client->streams )
+    {
+      if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+	ret = &client->playback.params;
+      else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+	ret = &client->capture.params;
+    } 
   return ret;
 }

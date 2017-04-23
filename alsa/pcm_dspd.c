@@ -503,13 +503,11 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   int dir, ret;
-  struct dspd_cli_params cp, p;
+  struct dspd_cli_params cp;
+  const struct dspd_cli_params *p;
   snd_pcm_format_t fmt;
   snd_pcm_uframes_t frames;
   unsigned int ui;
-  size_t br;
-  struct dspd_client_shm shm;
-  int shm_fd = -1;
   snd_pcm_hw_params_t *newparams;
   snd_pcm_uframes_t maxbuf, minbuf, n;
   snd_pcm_hw_params_alloca(&newparams);
@@ -581,93 +579,59 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   dir = 0;
   ret = snd_pcm_hw_params_get_channels(newparams, &ui);
   if ( ret )
-    return ret;
+    goto error;
   cp.channels = ui;
   
   dspd->frame_bytes = snd_pcm_format_size(cp.format, cp.channels);
-  ret = dspd_stream_ctl(dspd->conn,
-			dspd->client_stream,
-			DSPD_SCTL_CLIENT_SETPARAMS,
-			&cp,
-			sizeof(cp),
-			&p,
-			sizeof(p),
-			&br);
-  if ( ret )
-    return ret;
-  ret = dspd_stream_ctl(dspd->conn,
-			dspd->client_stream,
-			DSPD_SCTL_CLIENT_MAPBUF,
-			&dspd->stream,
-			sizeof(dspd->stream),
-			&shm,
-			sizeof(shm),
-			&br);
+
+  struct dspd_rclient_hwparams hwp;
+ 
+  memset(&hwp, 0, sizeof(hwp));
+  hwp.playback_params = &cp;
+  ret = dspd_rclient_set_hw_params(&dspd->client, &hwp);
   if ( ret )
     goto error;
+
+  p = dspd_rclient_get_hw_params(&dspd->client, dspd->stream);
+  if ( ! p )
+    {
+      ret = -EINVAL;
+      goto error;
+    }
   
-
-
-  shm_fd = dspd_conn_recv_fd(dspd->conn);
-  if ( shm_fd < 0 )
-    goto error;
-  
-  ret = dspd_stream_ctl(dspd->conn,
-			dspd->client_stream,
-			DSPD_SCTL_CLIENT_CONNECT,
-			&dspd->device,
-			sizeof(dspd->device),
-			NULL,
-			0,
-			&br);
-
-  if ( ret )
-    goto error;
 
   
 
-  struct dspd_rclient_bindparams bp;
-  bp.conn = dspd->conn;
-  bp.client = dspd->client_stream;
-  bp.device = dspd->device;
   
-  ret = dspd_rclient_attach(&dspd->client,
-			    &shm,
-			    &p,
-			    &bp);
-
-  if ( ret )
-    goto error;
+  
 
 
-  ret = snd_pcm_hw_params_set_buffer_size(dspd->io.pcm, newparams, p.bufsize);
+  ret = snd_pcm_hw_params_set_buffer_size(dspd->io.pcm, newparams, p->bufsize);
   if ( ret )
     goto error;
   
-  ret = snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p.fragsize, 0);
+  ret = snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p->fragsize, 0);
   if ( ret )
-    ret = snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p.fragsize, 1);
+    ret = snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p->fragsize, 1);
   if ( ret )
-    (void)snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p.fragsize, -1);
+    (void)snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p->fragsize, -1);
   
 
-  ret = snd_pcm_hw_params_set_rate(dspd->io.pcm, newparams, p.rate, 0);
+  ret = snd_pcm_hw_params_set_rate(dspd->io.pcm, newparams, p->rate, 0);
   if ( ret )
     goto error;
 
-  ret = snd_pcm_hw_params_set_channels(dspd->io.pcm, newparams, p.channels);
+  ret = snd_pcm_hw_params_set_channels(dspd->io.pcm, newparams, p->channels);
   if ( ret )
     goto error;
-  io->buffer_size = p.bufsize;
-  io->period_size = p.fragsize;
-  dspd->channels = p.channels;
+  io->buffer_size = p->bufsize;
+  io->period_size = p->fragsize;
+  dspd->channels = p->channels;
   snd_pcm_hw_params_copy(params, newparams);
 
   return 0;
  
  error:
-  if ( shm_fd >= 0 )
-    close(shm_fd);
   if ( ret > 0 )
     ret *= -1;
   return ret;
@@ -1289,6 +1253,15 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   err = dspd_hw_constraint(dspd);
   if ( err < 0 )
     goto error;
+
+  struct dspd_rclient_bindparams bp = { 0 };
+  bp.conn = dspd->conn;
+  bp.client = dspd->client_stream;
+  bp.device = dspd->device;
+  err = dspd_rclient_bind(&dspd->client, &bp);
+  if ( err < 0 )
+    goto error;
+  
  
   dspd->io.private_data = dspd;
   snd_pcm_ioplug_reinit_status(&dspd->io);

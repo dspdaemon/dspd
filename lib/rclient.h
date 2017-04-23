@@ -186,7 +186,8 @@ const struct dspd_device_stat *dspd_rclient_devinfo(const struct dspd_rclient *c
 bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits);
 
 
-int32_t dspd_rclient_hw_params(struct dspd_rclient *cli, 
-			       const struct dspd_rclient_hwparams *hwp);
+int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli, 
+				   const struct dspd_rclient_hwparams *hwp);
 
+const struct dspd_cli_params *dspd_rclient_get_hw_params(const struct dspd_rclient *client, int32_t sbit);
 #endif

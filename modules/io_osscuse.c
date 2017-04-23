@@ -163,7 +163,7 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
     hwp.playback_params = &cliparams;
   if ( cli->dsp.params.stream & DSPD_PCM_SBIT_CAPTURE )
     hwp.capture_params = &cliparams;
-  ret = dspd_rclient_hw_params(&cli->dsp.rclient, &hwp);
+  ret = dspd_rclient_set_hw_params(&cli->dsp.rclient, &hwp);
   if ( ret < 0 )
     return ret * -1;
 
