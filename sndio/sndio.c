@@ -802,12 +802,15 @@ static int _amsg_setpar(struct sndio_client *cli)
   struct amsg_par *par = &cli->imsg.u.par;
   int ret;
   struct dspd_cli_params pparams, cparams;
-  size_t br;
+  const struct dspd_cli_params *p;
+  struct dspd_rclient_hwparams hwparams;
+  
   if ( cli->pstate != PROTO_INIT && cli->pstate != PROTO_CONFIGURED )
     return -1;
   par2cpu(par);
   memset(&pparams, 0x00, sizeof(pparams));
   memset(&cparams, 0x00, sizeof(cparams));
+  memset(&hwparams, 0x00, sizeof(hwparams));
   if ( ! cli->server->ctx )
     {
       pparams.flags = DSPD_CLI_FLAG_SHM;
@@ -832,39 +835,55 @@ static int _amsg_setpar(struct sndio_client *cli)
     }
   if ( ret == 0 )
     {
-      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
-	combine_params(&pparams, &cparams);
-      
-      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX && cli->cclient == cli->pclient )
 	{
-	  ret = dspd_rclient_ctl(cli->pclient,
-				 DSPD_SCTL_CLIENT_SETPARAMS,
-				 &pparams,
-				 sizeof(pparams),
-				 &cli->pparams,
-				 sizeof(cli->pparams),
-				 &br);
-	  cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
-	  if ( ret == 0 && cli->cclient != cli->pclient )
-	    {
-	      cli->start_threshold = cli->pparams.bufsize;
-	      ret = dspd_rclient_connect(cli->pclient, NULL, NULL, NULL, NULL, -1, -1);
-	    }
-	}
-	  
-      if ( ret == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
-	{
-	  ret = dspd_rclient_ctl(cli->cclient,
-				 DSPD_SCTL_CLIENT_SETPARAMS,
-				 &cparams,
-				 sizeof(cparams),
-				 &cli->cparams,
-				 sizeof(cli->cparams),
-				 &br);
-	  cli->cframe_bytes = dspd_get_pcm_format_size(cli->cparams.format) * cli->cparams.channels;
+	  combine_params(&pparams, &cparams);
+	  hwparams.playback_params = &pparams;
+	  hwparams.capture_params = &cparams;
+	  ret = dspd_rclient_set_hw_params(cli->pclient, &hwparams);
 	  if ( ret == 0 )
 	    {
-	      ret = dspd_rclient_connect(cli->cclient, NULL, NULL, NULL, NULL, -1, -1);
+	      p = dspd_rclient_get_hw_params(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
+	      assert(p);
+	      cli->pparams = *p;
+
+	      p = dspd_rclient_get_hw_params(cli->cclient, DSPD_PCM_SBIT_CAPTURE);
+	      assert(p);
+	      cli->cparams = *p;
+
+	      cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
+	      cli->cframe_bytes = dspd_get_pcm_format_size(cli->cparams.format) * cli->cparams.channels;
+	      cli->start_threshold = cli->pparams.bufsize;
+	    }
+	} else 
+	{
+	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	    {
+	      hwparams.playback_params = &pparams;
+	      ret = dspd_rclient_set_hw_params(cli->pclient, &hwparams);
+	      if ( ret == 0 )
+		{
+		  p = dspd_rclient_get_hw_params(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
+		  assert(p);
+		  cli->pparams = *p;
+		  cli->start_threshold = cli->pparams.bufsize;
+		  cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
+		  
+		}
+	    }
+	  if ( ret == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
+	    {
+	      hwparams.playback_params = NULL;
+	      hwparams.capture_params = &cparams;
+	      ret = dspd_rclient_set_hw_params(cli->cclient, &hwparams);
+	      if ( ret == 0 )
+		{
+		  p = dspd_rclient_get_hw_params(cli->cclient, DSPD_PCM_SBIT_CAPTURE);
+		  assert(p);
+		  cli->cparams = *p;
+		  cli->cframe_bytes = dspd_get_pcm_format_size(cli->cparams.format) * cli->cparams.channels;
+		  
+		}
 	    }
 	}
     }
