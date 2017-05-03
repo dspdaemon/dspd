@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/uio.h>
+#include <stdarg.h>
 
 struct dspd_ll {
   void           *pointer;

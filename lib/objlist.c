@@ -32,7 +32,11 @@
 #include "atomic.h"
 #include "req.h"
 
-#define KL_FUTEX
+#ifndef KL_FUTEX
+#define KL_PTHREADS
+#endif
+
+//#define KL_FUTEX
 //#define KL_PTHREADS
 #ifdef KL_FUTEX
 /*
@@ -69,6 +73,7 @@ static inline int sys_futex(volatile uint32_t *uaddr,
 
   This needs rewritten for each CPU type.  It works on x86 and x86_64.
 */
+#if defined(__i386) || defined(__x86_64)
 static inline int compare_and_swap_u32(volatile uint32_t *addr,
 				       uint32_t old, uint32_t new_val) 
 {
@@ -78,6 +83,9 @@ static inline int compare_and_swap_u32(volatile uint32_t *addr,
 		       : "m"(*addr), "r" (new_val), "a"(old) : "memory");
   return (int) result; //1=success, 0=failure
 }
+#elif defined(__arm__)
+#define compare_and_swap_u32(_a,_o,_n) AO_compare_and_swap(_a,_o,_n)
+#endif
 static inline void wait_for(volatile uint32_t *addr, uint32_t value)
 {
   int v;
@@ -252,7 +260,7 @@ struct dspd_slist_entry {
 
 struct dspd_slist {
   pthread_rwlock_t   lock;
-  uintptr_t          count;
+  uint32_t           count;
   pthread_mutex_t    idlock;
   uint64_t           last_id;
   struct dspd_slist_entry *entries;
@@ -297,9 +305,9 @@ static void unwind(struct dspd_slist *l)
     }
 }
 
-struct dspd_slist *dspd_slist_new(uintptr_t entries)
+struct dspd_slist *dspd_slist_new(uint32_t entries)
 {
-  uintptr_t i;
+  uint32_t i;
   struct dspd_slist_entry *e;
   struct dspd_slist *l = calloc(1, sizeof(struct dspd_slist));
   if ( ! l )
@@ -382,7 +390,7 @@ intptr_t dspd_slist_get_free(struct dspd_slist *list, int32_t whence)
   return -1;
 }
 
-void dspd_slist_entry_get_pointers(struct dspd_slist *list, uintptr_t entry, void **data, void **server_ops, void **client_ops)
+void dspd_slist_entry_get_pointers(struct dspd_slist *list, uint32_t entry, void **data, void **server_ops, void **client_ops)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   *data = e->data;
@@ -390,7 +398,7 @@ void dspd_slist_entry_get_pointers(struct dspd_slist *list, uintptr_t entry, voi
   *client_ops = e->client_ops;
 }
 
-void dspd_slist_entry_set_pointers(struct dspd_slist *list, uintptr_t entry, void *data, void *server_ops, void *client_ops)
+void dspd_slist_entry_set_pointers(struct dspd_slist *list, uint32_t entry, void *data, void *server_ops, void *client_ops)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   e->data = data;
@@ -401,7 +409,7 @@ uint64_t dspd_slist_id(struct dspd_slist *list, uintptr_t entry)
 {
   return list->entries[entry].slot_id;
 }
-void dspd_slist_entry_set_used(struct dspd_slist *list, uintptr_t entry, bool used)
+void dspd_slist_entry_set_used(struct dspd_slist *list, uint32_t entry, bool used)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   e->used = used;
@@ -420,43 +428,43 @@ void dspd_slist_entry_set_used(struct dspd_slist *list, uintptr_t entry, bool us
     }
 }
 
-void dspd_slist_entry_srvlock(struct dspd_slist *list, uintptr_t entry)
+void dspd_slist_entry_srvlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   kl_lock(&e->lock);
 }
 
-void dspd_slist_entry_set_key(struct dspd_slist *list, uintptr_t entry, uint32_t key)
+void dspd_slist_entry_set_key(struct dspd_slist *list, uint32_t entry, uint32_t key)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   kl_set_key(&e->lock, key);
 }
 
-uint32_t dspd_slist_entry_get_key(struct dspd_slist *list, uintptr_t entry)
+uint32_t dspd_slist_entry_get_key(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   return kl_get_key(&e->lock);
 }
 
-void dspd_slist_entry_srvunlock(struct dspd_slist *list, uintptr_t entry)
+void dspd_slist_entry_srvunlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   kl_unlock(&e->lock);
 }
 
-void dspd_slist_entry_wrlock(struct dspd_slist *list, uintptr_t entry)
+void dspd_slist_entry_wrlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   pthread_rwlock_wrlock(&e->rwlock);
 }
 
-void dspd_slist_entry_rdlock(struct dspd_slist *list, uintptr_t entry)
+void dspd_slist_entry_rdlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   pthread_rwlock_rdlock(&e->rwlock);
 }
 
-void dspd_slist_entry_rw_unlock(struct dspd_slist *list, uintptr_t entry)
+void dspd_slist_entry_rw_unlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
   pthread_rwlock_unlock(&e->rwlock);
@@ -483,7 +491,7 @@ void dspd_slist_unlock(struct dspd_slist *list)
 
 
 
-bool dspd_client_srv_lock(struct dspd_slist *list, uintptr_t index, uintptr_t key)
+bool dspd_client_srv_lock(struct dspd_slist *list, uint32_t index, uint32_t key)
 {
   struct dspd_slist_entry *e = &list->entries[index];
   bool ret;
@@ -503,7 +511,7 @@ bool dspd_client_srv_lock(struct dspd_slist *list, uintptr_t index, uintptr_t ke
   return ret;
 }
 
-bool dspd_client_srv_trylock(struct dspd_slist *list, uintptr_t index, uintptr_t key)
+bool dspd_client_srv_trylock(struct dspd_slist *list, uint32_t index, uint32_t key)
 {
   struct dspd_slist_entry *e = &list->entries[index];
   bool ret;
@@ -523,14 +531,14 @@ bool dspd_client_srv_trylock(struct dspd_slist *list, uintptr_t index, uintptr_t
   return ret;
 }
 
-void dspd_client_srv_unlock(struct dspd_slist *list, uintptr_t index)
+void dspd_client_srv_unlock(struct dspd_slist *list, uint32_t index)
 {
   struct dspd_slist_entry *e = &list->entries[index];
   kl_unlock(&e->lock);
 }
 
 //Must have the rwlock
-uint32_t dspd_slist_ref(struct dspd_slist *list, uintptr_t index)
+uint32_t dspd_slist_ref(struct dspd_slist *list, uint32_t index)
 {
   uint32_t ret = 0;
   if ( index < list->count )
@@ -545,7 +553,7 @@ uint32_t dspd_slist_ref(struct dspd_slist *list, uintptr_t index)
 }
 
 //Must have the rwlock
-uint32_t dspd_slist_unref(struct dspd_slist *list, uintptr_t index)
+uint32_t dspd_slist_unref(struct dspd_slist *list, uint32_t index)
 {
   uint32_t ret = 0;
   if ( index < list->count )
@@ -565,7 +573,7 @@ uint32_t dspd_slist_unref(struct dspd_slist *list, uintptr_t index)
   return ret;
 }
 
-uint32_t dspd_slist_refcnt(struct dspd_slist *list, uintptr_t index)
+uint32_t dspd_slist_refcnt(struct dspd_slist *list, uint32_t index)
 {
   uint32_t ret = 0;
   if ( index < list->count )
@@ -577,14 +585,14 @@ uint32_t dspd_slist_refcnt(struct dspd_slist *list, uintptr_t index)
 }
 
 void dspd_slist_set_destructor(struct dspd_slist *list,
-			       uintptr_t index,
+			       uint32_t index,
 			       void (*destructor)(void *data))
 {
   list->entries[index].destructor = destructor;
 }
 
 void dspd_slist_set_ctl(struct dspd_slist *list,
-			uintptr_t object,
+			uint32_t object,
 			int32_t (*ctl)(struct dspd_rctx *rctx,
 				       uint32_t             req,
 				       const void          *inbuf,

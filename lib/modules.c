@@ -26,6 +26,9 @@
 #include <errno.h>
 #include <stdio.h>
 #include <limits.h>
+#include <limits.h>
+#include <unistd.h>
+#include <string.h>
 #include "util.h"
 #include "modules.h"
 #include "log.h"

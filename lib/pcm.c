@@ -18,9 +18,11 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <byteswap.h>
+#include <math.h>
 #include "pcm.h"
 #include "util.h"
 

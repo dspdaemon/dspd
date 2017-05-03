@@ -38,27 +38,15 @@
 
 #include <pthread.h>
 #include <errno.h>
-#include <signal.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/un.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <sys/ioctl.h>
-#include <stdio.h>
-#include <sys/timerfd.h>
 #include <alsa/asoundlib.h>
 #include <alsa/pcm_external.h>
-#include <samplerate.h>
 #include <sys/uio.h>
 #include <fcntl.h>
 #include <dlfcn.h>
-
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 {
   const char *solib = getenv("SND_PCM_DEVEL_LOAD");

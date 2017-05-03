@@ -18,7 +18,6 @@
  *
  */
 #define _FILE_OFFSET_BITS 64
-#include <fuse.h>
 #include <linux/fuse.h>
 #include <stdio.h>
 #include <limits.h>
@@ -29,6 +28,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/uio.h>
+#include <fcntl.h>
+#include <sys/types.h>
 #include "rtcuse.h"
 
 

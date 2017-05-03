@@ -19,6 +19,8 @@ ossplay              (OSS)
 mplayer              (OSS)
 esd		     (ALSA)
 fluidsynth   	     (ALSA,OSS)
+d2x-rebirth	     (ALSA)
+d1x-rebirth	     (ALSA)
 
 The following applications mostly work:
 

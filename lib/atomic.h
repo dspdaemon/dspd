@@ -46,12 +46,12 @@ static inline void dspd_store_float32(volatile union dspd_atomic_float32 *addr,
 }
 
 //Should work on most if not all systems
-#define dspd_load_uint32(__addr) AO_int_load(__addr)
-#define dspd_store_uint32(__addr,__val) AO_int_store(__addr, __val)
+#define dspd_load_uint32(_addr) AO_int_load(_addr)
+#define dspd_store_uint32(_addr,_val) AO_int_store(_addr, _val)
 
 //Assumes sizeof(intptr_t)==sizeof(AO_t)
-#define dspd_store_uintptr(__addr, __val) AO_store((volatile AO_t*)__addr, __val)
-#define dspd_load_uintptr(__addr) AO_load((volatile AO_t*)__addr)
+#define dspd_store_uintptr(_addr, _val) AO_store((volatile AO_t*)_addr, _val)
+#define dspd_load_uintptr(_addr) AO_load((volatile AO_t*)_addr)
 
 #define dspd_ts_t AO_TS_t
 
@@ -68,12 +68,12 @@ static inline uintptr_t dspd_atomic_dec(volatile uintptr_t *addr)
 #endif
 
 #ifdef AO_AO_TS_T
-#define dspd_ts_load(__addr) AO_load(__addr)
+#define dspd_ts_load(_addr) AO_load(_addr)
 #else
-#define dspd_ts_load(__addr) AO_char_load(__addr)
+#define dspd_ts_load(_addr) AO_char_load(_addr)
 #endif
-#define dspd_ts_clear(__addr) AO_CLEAR(__addr)
-#define dspd_test_and_set(__addr) AO_test_and_set(__addr)
+#define dspd_ts_clear(_addr) AO_CLEAR(_addr)
+#define dspd_test_and_set(_addr) AO_test_and_set(_addr)
 #define DSPD_TS_SET AO_TS_SET
 
 #ifndef DSPD_WORDSIZE
@@ -88,13 +88,15 @@ static inline uintptr_t dspd_atomic_dec(volatile uintptr_t *addr)
 
 #if defined(__i386) || defined(__x86_64)
 #include "x86.h"
+#elif defined(__arm__)
+#include "arm.h"
 #else
 #if DSPD_WORDSIZE == 32
-#include "generic32.h"
+#define dspd_nop() AO_nop_full()
 #endif
 #endif
 
-#define dspd_test_and_set(__addr) AO_test_and_set(__addr)
-#define dspd_test_and_set_clear(__addr) AO_CLEAR(__addr)
+#define dspd_test_and_set(_addr) AO_test_and_set(_addr)
+#define dspd_test_and_set_clear(_addr) AO_CLEAR(_addr)
 
 #endif

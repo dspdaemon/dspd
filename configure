@@ -216,9 +216,9 @@ cd "$WORKDIR"
 > config.makefile
 exec 3>config.makefile
 if [ $DEBUG -eq 1 ]; then
-    TCFLAGS="-Wall -O0 -ggdb -fPIC -L../lib -pthread $SRCF"
+    TCFLAGS="-Wall -O0 -ggdb -fPIC -L../lib -pthread $SRCF -std=gnu99"
 else
-    TCFLAGS="-Wall -O2 -ggdb -fPIC -L../lib -pthread $SRCF"
+    TCFLAGS="-Wall -O2 -ggdb -fPIC -L../lib -pthread $SRCF -std=gnu99"
 fi
 
 
@@ -274,6 +274,7 @@ fi
 
 
 MODULES="none"
+
 
 if is_enabled socketserver; then
     log -n "Checking for sockets..."
@@ -333,7 +334,7 @@ fi
 
 if is_enabled oss; then
     log -n "Checking for fuse headers for OSS emulation..."
-    printsrc linux/fuse.h fuse.h >"$TMPFILE"
+    printsrc stdint.h linux/fuse.h >"$TMPFILE"
     if ! $CC $TCFLAGS -D_FILE_OFFSET_BITS=64 "$TMPFILE" -o /dev/null 2>&4; then
 	echo no
     else

@@ -41,7 +41,6 @@
 #include <sys/timerfd.h>
 #include <alsa/asoundlib.h>
 #include <alsa/pcm_external.h>
-#include <samplerate.h>
 #include <sys/uio.h>
 #include <fcntl.h>
 #include "../lib/sslib.h"

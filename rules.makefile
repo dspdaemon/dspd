@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?=-Wall -O0 -ggdb -fPIC $(XCFLAGS) -L../lib -DLIBSUFFIX=\"\"
+CFLAGS ?=-Wall -O0 -ggdb -fPIC $(XCFLAGS) -L../lib -DLIBSUFFIX=\"\" -std=gnu99
 MAKE_OBJ=$(CC) $(CFLAGS) $(XCFLAGS) -c
 LIBS ?=-lrt -pthread -lm -ldl $(XLIBS)
 ifeq ($(DESTDIR),)
