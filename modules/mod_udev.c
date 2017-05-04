@@ -176,7 +176,7 @@ static void get_device_id(struct udev_device *dev, char bus[16], char dev_id[64]
     } else
     {
       if ( ! modalias )
-	strcpy(bus, "unknown");
+	strcpy(bus, "none");
       strcpy(dev_id, "unknown");
     }
 }
@@ -266,7 +266,7 @@ static const char *stream_name(int s)
 
 static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, bool newdev)
 {
-  const char *str, *action, *card;
+  const char *str, *action, *card, *modalias, *driver;
   struct udev_device *pdev = udev_device_get_parent(dev);
   int streams, ret;
   char hwname[32];
@@ -275,7 +275,13 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
   char busid[16] = { 0 }, hwid[64] = { 0 };
   int s;
   if ( ! pdev )
-    return true;
+    {
+      str = udev_device_get_sysname(dev);
+      if ( strncmp(str, "card", 4) == 0 )
+	pdev = dev;
+      else
+	return true;
+    }
   if ( newdev )
     {
       action = udev_device_get_action(dev);
@@ -296,7 +302,7 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
       card = str;
     } else
     {
-      if ( ! udev_device_get_sysattr_value(pdev, "modalias") )
+      if ( udev_device_get_sysattr_value(pdev, "modalias") == NULL && pdev != dev )
 	return true;
       str = udev_device_get_sysname(dev);
       if ( ! str )
@@ -339,6 +345,16 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
   else
     s = streams;
 
+  //This may not be entirely correct.  Some devices seem to be missing sysfs attributes, but
+  //they still exist in ALSA.
+  modalias = udev_device_get_sysattr_value(pdev, "modalias");
+  if ( modalias == NULL && pdev == dev )
+    modalias = "none";
+  driver = udev_device_get_driver(pdev);
+  if ( driver == NULL && pdev == dev )
+    driver = "builtin";
+
+
   if ( (insert_value(sect, DSPD_HOTPLUG_EVENT, action) &&
 	insert_value(sect, DSPD_HOTPLUG_BUSNAME, busid) &&
 	insert_value(sect, DSPD_HOTPLUG_DEVTYPE, "alsa") &&
@@ -346,9 +362,9 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
 	insert_value(sect, DSPD_HOTPLUG_DESC, desc) &&
 	insert_value(sect, DSPD_HOTPLUG_DEVNAME, hwname) &&
 	insert_value(sect, DSPD_HOTPLUG_ADDRESS, udev_device_get_sysname(pdev)) &&
-	insert_value(sect, DSPD_HOTPLUG_KDRIVER, udev_device_get_driver(pdev)) &&
+	insert_value(sect, DSPD_HOTPLUG_KDRIVER, driver) &&
 	insert_value(sect, DSPD_HOTPLUG_HWID, hwid) && 
-	insert_value(sect, DSPD_HOTPLUG_MODALIAS, udev_device_get_sysattr_value(pdev, "modalias")) &&
+	insert_value(sect, DSPD_HOTPLUG_MODALIAS, modalias) &&
 	insert_value(sect, DSPD_HOTPLUG_STREAM, stream_name(s))))
     {
       ret = dspd_daemon_hotplug_add(sect);
