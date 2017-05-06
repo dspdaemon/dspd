@@ -1179,7 +1179,7 @@ static int32_t dspd_rclient_status_ex(struct dspd_rclient *client, int32_t strea
 	      s = dspd_mbx_acquire_read(&cs->mbx, 1);
 	      if ( s )
 		{
-		  dspd_intrp_set(intrp, s->tstamp, s->appl_ptr);
+		  dspd_intrp_set(intrp, s->tstamp, s->hw_ptr - cs->status.hw_ptr);
 		  cs->status.appl_ptr = s->appl_ptr;
 		  cs->status.hw_ptr = s->hw_ptr;
 		  cs->status.tstamp = s->tstamp;

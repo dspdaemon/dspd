@@ -99,6 +99,8 @@ struct alsahw_handle {
 
   int32_t                    stream_index;
 
+  
+
   void *other_handle;
 
  

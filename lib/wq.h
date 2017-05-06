@@ -1,5 +1,6 @@
 #ifndef _DSPD_WQ_H_
 #define _DSPD_WQ_H_
+#include <limits.h>
 struct dspd_wq_item {
   uint16_t len;
   bool (*callback)(void *arg, void *data, size_t len);

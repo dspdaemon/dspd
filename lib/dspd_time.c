@@ -273,7 +273,8 @@ void dspd_intrp_update(struct dspd_intrp *i,
 {
   uint64_t tdiff = tstamp - i->last_tstamp;
   uint64_t pdiff = tdiff / i->sample_time;
-  int64_t d = (pdiff - diff) * i->sample_time, val;
+  int64_t d = (pdiff - diff) * i->sample_time; //ns diff
+  int64_t val;
   uint64_t lt;
  
   lt = i->last_tstamp;
@@ -285,10 +286,10 @@ void dspd_intrp_update(struct dspd_intrp *i,
       return;
     }
   
-
+  
 
   //Limit to some value
-  val = llabs(d) / diff;
+  val = llabs(d) / diff; //ns per frame 
   if ( val > i->maxdiff )
     val = i->maxdiff;
 
@@ -301,6 +302,18 @@ void dspd_intrp_update(struct dspd_intrp *i,
   i->diff /= 2;
 
 
+}
+
+uint64_t dspd_intrp_used(struct dspd_intrp *i, dspd_time_t time)
+{
+  int64_t f = (time / i->sample_time) * i->diff;
+  int64_t ret;
+  if ( llabs(f) >= time )
+    ret = time;
+  else
+    ret = time - f;
+  ret /= i->sample_time;
+  return ret;
 }
 
 dspd_time_t dspd_intrp_frames(struct dspd_intrp *i, int64_t frames)

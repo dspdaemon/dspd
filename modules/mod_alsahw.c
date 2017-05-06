@@ -27,7 +27,7 @@ struct alsahw_mcfg {
   int32_t   format;
   uint32_t  channels;
   int32_t   access;
-  uint32_t  rate;
+  uint32_t  rate, max_rate;
   uint32_t  fragsize;
   uint32_t  bufsize;
 };
@@ -37,7 +37,7 @@ static int alsahw_set_channels(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigne
 static int alsahw_set_rate(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigned int rate);
 static int alsahw_set_fragsize(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigned int size);
 static int alsahw_set_bufsize(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigned int size);
-static int alsahw_is_batch(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, const char *bus, const char *addr);
+static int alsahw_is_batch(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, const char *bus, const char *addr, const struct alsahw_mcfg *cfg);
 
 static struct alsahw_notifier *global_notifier;
 
@@ -530,7 +530,8 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
 	   hdl->started != 0 &&
 	   hdl->status.space > 0 &&
 	   hdl->xfer < hdl->hlatency &&
-	   hdl->status.appl_ptr > hdl->params.min_latency )
+	   hdl->status.appl_ptr > hdl->params.min_latency &&
+	   hdl->vbufsize > (hdl->min_dma * 2) )
 	{
 	  //Don't interpolate an xrun state.  The timer might be wrong so
 	  //check the real hardware.  If the timer is always right then this
@@ -1019,9 +1020,10 @@ static int alsahw_set_bufsize(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigned
   return err;
 }
 
-static int alsahw_is_batch(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, const char *bus, const char *addr)
+static int alsahw_is_batch(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, const char *bus, const char *addr, const struct alsahw_mcfg *cfg)
 {
   int ret = 0;
+  int32_t t;
   if ( snd_pcm_hw_params_is_batch(hwp) ||
        snd_pcm_hw_params_is_double(hwp) ||
        snd_pcm_type(pcm) != SND_PCM_TYPE_HW )
@@ -1029,7 +1031,8 @@ static int alsahw_is_batch(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, const char 
       ret = 1;
     } else if ( bus != NULL )
     {
-      if ( strcasecmp(bus, "USB") == 0 || strcasecmp(bus, "IEEE1394") == 0 )
+      t = (1000000000 / cfg->max_rate) * cfg->fragsize;
+      if ( strcasecmp(bus, "USB") == 0 || strcasecmp(bus, "IEEE1394") == 0 || t >= 1000000 )
 	ret = 1;
     }
   return  ret;
@@ -1088,6 +1091,14 @@ static int get_min_cfg(snd_pcm_t *handle, snd_pcm_hw_params_t *hwp, struct alsah
     return ret;
   cfg->fragsize = fr;
   
+  val = 192000;
+  d = -1;
+  ret = snd_pcm_hw_params_set_rate_max(handle, hwp, &val, &d);
+  if ( ret == 0 )
+    cfg->max_rate = val;
+  else
+    cfg->max_rate = cfg->rate;
+
   return 0;
 }
 
@@ -2120,7 +2131,7 @@ int alsahw_open(const struct dspd_drv_params *params,
 
 
 
-  if ( alsahw_is_batch(hbuf->handle, hwp, params->bus, params->addr) )
+  if ( alsahw_is_batch(hbuf->handle, hwp, params->bus, params->addr, &mincfg) )
     {
       dspd_log(0, "Device %s @ %s:%s is batch", 
 	       params->name,
@@ -2289,6 +2300,7 @@ int alsahw_open(const struct dspd_drv_params *params,
     }
   if ( hbuf->params.min_latency > hbuf->params.bufsize )
     hbuf->params.min_latency = hbuf->params.bufsize;
+      
   
   if ( params->max_latency == 0 )
     hbuf->params.max_latency = hbuf->buffer_size;
@@ -2299,6 +2311,8 @@ int alsahw_open(const struct dspd_drv_params *params,
     hbuf->params.max_latency = hbuf->params.min_latency;
   else if ( hbuf->params.max_latency > hbuf->buffer_size )
     hbuf->params.max_latency = hbuf->buffer_size;
+
+  
 
   hbuf->params.min_dma = hbuf->min_dma;
 

@@ -3,6 +3,7 @@
 #include "thread.h"
 #include <poll.h>
 #include <setjmp.h>
+
 struct dspd_pcmcli_status;
 struct dspd_pcmcli_ops;
 

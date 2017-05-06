@@ -318,20 +318,26 @@ void dspd_sched_get_deadline_hint(struct dspd_scheduler *sch,
 
 /* XXX use the proper syscall numbers */
 #ifdef __x86_64__
+#if ! (defined(____NR_sched_setattr) && defined(__NR_sched_getattr))
 #define __NR_sched_setattr		314
 #define __NR_sched_getattr		315
+#endif
 #define HAVE_SCHED_DEADLINE
 #endif
 
 #ifdef __i386__
+#if ! (defined(____NR_sched_setattr) && defined(__NR_sched_getattr))
 #define __NR_sched_setattr		351
 #define __NR_sched_getattr		352
+#endif
 #define HAVE_SCHED_DEADLINE
 #endif
 
 #ifdef __arm__
+#if ! (defined(____NR_sched_setattr) && defined(__NR_sched_getattr))
 #define __NR_sched_setattr		380
 #define __NR_sched_getattr		381
+#endif
 #define HAVE_SCHED_DEADLINE
 #endif
 

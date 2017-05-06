@@ -54,5 +54,5 @@ int64_t dspd_intrp_set(struct dspd_intrp *i,
 
 dspd_time_t dspd_intrp_frames(struct dspd_intrp *i, int64_t frames);
 dspd_time_t dspd_intrp_time(struct dspd_intrp *i, dspd_time_t time);
-
+uint64_t dspd_intrp_used(struct dspd_intrp *i, dspd_time_t time);
 #endif

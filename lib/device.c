@@ -1608,9 +1608,8 @@ static int stream_prepare(struct dspd_pcmdev_stream *stream)
   stream->cycle.start_count++;
   if ( stream->cycle.start_count == 0 )
     stream->cycle.start_count++;
-  
-  
-
+  if ( stream->glitch && dspd_get_glitch_correction() == DSPD_GHCN_AUTO )
+    stream->glitch = false;
   return stream->ops->prepare(stream->handle);
 }
 
