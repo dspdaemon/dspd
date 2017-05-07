@@ -1698,6 +1698,12 @@ static bool device_playback_cycle(struct dspd_pcm_device *dev, uintptr_t frames)
 		    } else
 		    {
 		      dev->playback.started = 1;
+		      //Wake up early the first time just in case the device
+		      //consumes data fast at startup.  This is often the case with 
+		      //USB and IEEE1394 and some embedded devices.
+		      if ( dev->playback.early_cycle > dev->playback.params.min_dma )
+                        dev->playback.early_cycle = dev->playback.params.min_dma;
+
 		    }
 		}
 	      if ( frames > 0 && dev->playback.stop_threshold > 0 )
