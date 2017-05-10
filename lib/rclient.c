@@ -975,6 +975,8 @@ int32_t dspd_rclient_set_read_ptr(struct dspd_rclient *client, uintptr_t ptr)
   return ret;
 }
 
+
+
 int32_t dspd_rclient_get_hw_ptr(struct dspd_rclient *client, int32_t stream, uint32_t *ptr)
 {
   int32_t ret = 0;
@@ -988,7 +990,7 @@ int32_t dspd_rclient_get_hw_ptr(struct dspd_rclient *client, int32_t stream, uin
 	  f = i - o;
 	  *ptr = o;
 	  if ( (( f == 0 && (client->trigger & DSPD_PCM_SBIT_PLAYBACK) && i > 0)) ||
-	       (f >= client->playback.params.bufsize) )
+	       (f > client->playback.params.bufsize) )
 	    {
 	      if ( dspd_rclient_test_xrun(client, DSPD_PCM_SBIT_PLAYBACK) )
 		ret = -EPIPE;
@@ -1014,6 +1016,7 @@ int32_t dspd_rclient_get_hw_ptr(struct dspd_rclient *client, int32_t stream, uin
     {
       ret = -EINVAL;
     }
+  ret = 0;
   return ret;
 }
 
@@ -1379,6 +1382,7 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 		  n = client->playback.params.bufsize / client->playback.params.fragsize;
 		  if ( n < 3 || client->playback.status.tstamp == 0 )
 		    diff /= 2;
+
 		  abstime = diff;
 		  abstime *= client->playback.sample_time;
 		  
@@ -2323,13 +2327,26 @@ bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits)
 {
   uint32_t len;
   bool ret = false;
+  dspd_time_t diff;
   if ( (sbits & DSPD_PCM_SBIT_PLAYBACK) && 
        client->playback.enabled && client->playback_xfer && (client->trigger & DSPD_PCM_SBIT_PLAYBACK) &&
        client->playback.params.channels )
     {
       if ( dspd_fifo_len(&client->playback.fifo, &len) == 0 )
-	if ( len == 0 )
-	  ret = true;
+	{
+	  if ( len == 0 )
+	    {
+	      if ( dspd_rclient_status_ex(client, DSPD_PCM_SBIT_PLAYBACK, NULL, true) == 0 )
+		diff = (dspd_get_time() - client->playback.status.tstamp) / client->playback.sample_time;
+	      else if ( client->playback.trigger_tstamp )
+		diff = (dspd_get_time() - client->playback.trigger_tstamp) / client->playback.sample_time;
+	      else
+		diff = 0;
+	      if ( diff > client->playback.params.fragsize )
+		ret = true;
+	      //else it is probably close enough to recover on the server side (actually tested, not just a theory)
+	    }
+	}
     }
   if ( (sbits & DSPD_PCM_SBIT_CAPTURE) && client->capture.params.channels && (ret == false))
     {

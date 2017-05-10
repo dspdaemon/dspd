@@ -57,9 +57,13 @@ make
 #Install
 make install
 
+#Install configuration files
+make install-config
 
 
-Configurations are located in the configs directory.  All of them except
-asound.conf can be copied to /etc/dspd.  The default configs should work
-with any build.
+Configurations are located in the configs directory.  The
+contents of the configs directory can be copied to /etc
+or "make install-config" can be used to copy everything
+except for asound.conf.
+
 

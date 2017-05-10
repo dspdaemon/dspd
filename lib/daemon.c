@@ -1070,12 +1070,8 @@ int dspd_daemon_init(int argc, char **argv)
     }
 
   if ( dspd_dctx.glitch_correction == -1 )
-    {
-      if ( is_rt() )
-	dspd_dctx.glitch_correction = DSPD_GHCN_AUTO;
-      else
-	dspd_dctx.glitch_correction = DSPD_GHCN_LATCH;
-    }
+    dspd_dctx.glitch_correction = DSPD_GHCN_OFF;
+
 
   dspd_log(0, "Set scheduler (policy,priority): rtio=(%d,%d) rtsvc=(%d,%d)",
 	   dspd_dctx.rtio_policy, dspd_dctx.rtio_priority,

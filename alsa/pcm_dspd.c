@@ -599,11 +599,6 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
     }
   
 
-  
-
-  
-  
-
 
   ret = snd_pcm_hw_params_set_buffer_size(dspd->io.pcm, newparams, p->bufsize);
   if ( ret )

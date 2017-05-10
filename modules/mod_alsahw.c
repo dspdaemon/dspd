@@ -786,7 +786,6 @@ intptr_t alsahw_pcm_capture_rewind(void *handle, uintptr_t frames)
     hdl->is_rewound = 1;
   if ( frames )
     {
-      // fprintf(stderr, "ALSA REWIND!!!!!\n");
       ret = snd_pcm_rewind(hdl->handle, frames);
       if ( ret < 0 )
 	{
@@ -838,6 +837,7 @@ intptr_t alsahw_pcm_rewindable(void *handle)
     {
       hdl->err = ret;
     }
+  
   return ret;
 }
 

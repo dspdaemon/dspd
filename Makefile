@@ -28,6 +28,10 @@ install-lib:
 #for the secondary arch (usually 32 bit).
 install: $(INSTALL_TARGETS)
 
+install-config:
+	mkdir /etc/dspd
+	install -m 0644 -t /etc/dspd configs/dspd/*.conf
+
 uninstall:
 	sh -c 'OWD="$$PWD";for f in $(SUBDIRS); do cd $$OWD/$$f && make uninstall || exit 1; done'
 
