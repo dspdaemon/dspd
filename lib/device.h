@@ -25,6 +25,7 @@ struct dspd_drv_params {
   char     *name;
   char     *bus;
   char     *addr;
+  char     *hwid;
   int32_t   format;
   uint32_t  channels;
   uint32_t  rate;

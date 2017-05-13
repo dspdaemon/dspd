@@ -567,3 +567,10 @@ int32_t dspd_parse_opt(int32_t defaultvalue,
   va_end(opts);
   return ret;
 }
+
+size_t dspd_strlen_safe(const char *str)
+{
+  if ( str )
+    return strlen(str);
+  return 0;
+}

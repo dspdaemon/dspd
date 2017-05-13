@@ -56,7 +56,7 @@ struct dspd_dict {
 };
 void dspd_dict_dump(const struct dspd_dict *sect);
 struct dspd_dict *dspd_dict_read(FILE *fp);
-void dspd_dict_free(struct dspd_dict *sect);
+void dspd_dict_free(struct dspd_dict *dict);
 struct dspd_dict *dspd_dict_find_section(struct dspd_dict *sect, const char *name);
 struct dspd_kvpair *dspd_dict_find_pair(const struct dspd_dict *sect, const char *key);
 bool dspd_dict_find_value(const struct dspd_dict *sect, const char *key, char **val);

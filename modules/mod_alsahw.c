@@ -1143,6 +1143,7 @@ static void alsahw_destructor(void *handle)
   free(hdl->params.name);
   free(hdl->params.bus);
   free(hdl->params.addr);
+  free(hdl->params.hwid);
   free(handle);
 }
 
@@ -2674,14 +2675,15 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
   int ret;
   const struct dspd_pcmdrv_ops *ops = NULL, *playback_ops = NULL, *capture_ops = NULL;
   void *handle = NULL;
-  char *desc = NULL, *name = NULL;
+  char *desc = NULL, *name = NULL, *kdrv = NULL, *stream = NULL;
   void *hlist[2] = { NULL, NULL };
   int flags = 0;
   dspd_dict_find_value(device, DSPD_HOTPLUG_DESC, &desc);
   dspd_dict_find_value(device, DSPD_HOTPLUG_DEVNAME, &name);
-
-  dspd_log(0, "alsahw: Got device: desc='%s' name='%s'", 
-	   desc, name);
+  dspd_dict_find_value(device, DSPD_HOTPLUG_KDRIVER, &kdrv);
+  dspd_dict_find_value(device, DSPD_HOTPLUG_STREAM, &stream);
+  dspd_log(0, "alsahw: Got device: desc='%s' name='%s' driver='%s' stream='%s'", 
+	   desc, name, kdrv, stream);
 
   memset(&params, 0, sizeof(params));
   ret = dspd_daemon_get_config(device, &params);

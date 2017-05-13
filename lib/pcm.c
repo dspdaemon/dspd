@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <byteswap.h>
 #include <math.h>
+#include <string.h>
 #include "pcm.h"
 #include "util.h"
 
@@ -2388,3 +2389,91 @@ bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, 
     }
   return ret;
 }
+
+
+static const char *fmt_desc[] = {
+  [DSPD_PCM_FORMAT_S8] = "S8",
+  [DSPD_PCM_FORMAT_U8] = "U8",
+  [DSPD_PCM_FORMAT_S16_LE] = "S16_LE",
+  [DSPD_PCM_FORMAT_S16_BE] = "S16_BE",
+  [DSPD_PCM_FORMAT_U16_LE] = "U16_LE" ,
+  [DSPD_PCM_FORMAT_U16_BE] = "U16_BE" ,
+  [DSPD_PCM_FORMAT_S24_LE] = "S24_LE" ,
+  [DSPD_PCM_FORMAT_S24_BE] = "S24_BE" ,
+  [DSPD_PCM_FORMAT_U24_LE] = "U24_LE" ,
+  [DSPD_PCM_FORMAT_U24_BE] = "U24_BE"  ,
+  [DSPD_PCM_FORMAT_S32_LE] = "S32_LE"  ,
+  [DSPD_PCM_FORMAT_S32_BE] = "S32_BE"  ,
+  [DSPD_PCM_FORMAT_U32_LE] = "U32_LE" ,
+  [DSPD_PCM_FORMAT_U32_BE] = "U32_BE" ,
+  [DSPD_PCM_FORMAT_FLOAT_LE] = "FLOAT_LE",
+  [DSPD_PCM_FORMAT_FLOAT_BE] = "FLOAT_BE",
+  [DSPD_PCM_FORMAT_FLOAT64_LE] = "FLOAT64_LE",
+  [DSPD_PCM_FORMAT_FLOAT64_BE] = "FLOAT64_BE",
+  [DSPD_PCM_FORMAT_IEC958_SUBFRAME_LE] = "IEC958_SUBFRAME_LE",
+  [DSPD_PCM_FORMAT_IEC958_SUBFRAME_BE] = "IEC958_SUBFRAME_BE" ,
+  [DSPD_PCM_FORMAT_MU_LAW] = "MU_LAW",
+  [DSPD_PCM_FORMAT_A_LAW] = "A_LAW" ,
+  [DSPD_PCM_FORMAT_IMA_ADPCM] = "IMA_ADPCM" ,
+  [DSPD_PCM_FORMAT_MPEG] = "MPEG" ,
+  [DSPD_PCM_FORMAT_GSM] = "GSM" ,
+  [DSPD_PCM_FORMAT_SPECIAL] = "SPECIAL" ,
+  [DSPD_PCM_FORMAT_S24_3LE] = "S24_3LE" ,
+  [DSPD_PCM_FORMAT_S24_3BE] = "S24_3BE" ,
+  [DSPD_PCM_FORMAT_U24_3LE] = "U24_3LE",
+  [DSPD_PCM_FORMAT_U24_3BE] = "U24_3BE",
+  [DSPD_PCM_FORMAT_S20_3LE] = "S20_3LE",
+  [DSPD_PCM_FORMAT_S20_3BE] = "S20_3BE",
+  [DSPD_PCM_FORMAT_U20_3LE] = "U20_3LE" ,
+  [DSPD_PCM_FORMAT_U20_3BE] = "U20_3BE",
+  [DSPD_PCM_FORMAT_S18_3LE] = "S18_3LE"  ,
+  [DSPD_PCM_FORMAT_S18_3BE] = "S18_3BE" ,
+  [DSPD_PCM_FORMAT_U18_3LE] = "U18_3LE",
+  [DSPD_PCM_FORMAT_U18_3BE] = "U18_3BE",
+  [DSPD_PCM_FORMAT_G723_24] = "G723_24",
+  [DSPD_PCM_FORMAT_G723_24_1B] = "G723_24_1B",
+  [DSPD_PCM_FORMAT_G723_40] = "G723_40", 
+  [DSPD_PCM_FORMAT_G723_40_1B] = "G723_40_1B",
+  [DSPD_PCM_FORMAT_DSD_U8] = "DSD_U8", 
+  [DSPD_PCM_FORMAT_DSD_U16_LE] = "DSD_U16_LE"  };
+
+
+
+const char *dspd_pcm_name_from_format(int32_t format)
+{
+  const char *ret = "UNKNOWN";
+  if ( format >= 0 || format >= (int)ARRAY_SIZE(fmt_desc) )
+    {
+      if ( fmt_desc[format] )
+	ret = fmt_desc[format];
+    }
+  return ret;
+}
+
+int32_t dspd_pcm_format_from_name(const char *name)
+{
+  size_t i;
+  const char *p;
+  int32_t ret = DSPD_PCM_FORMAT_UNKNOWN;
+  const char s[] = "_PCM_FORMAT_";
+  if ( strncasecmp(name, "DSPD_", 5) == 0 || 
+       strncasecmp(name, "SND_", 4) == 0 )
+    {
+      p = strcasestr(name, s);
+      if ( p )
+	p = &p[sizeof(s)-1];
+    } else
+    {
+      p = name;
+    }
+  for ( i = 0; i < ARRAY_SIZE(fmt_desc); i++ )
+    {
+      if ( strcasecmp(fmt_desc[i], p) == 0 )
+	{
+	  ret = i;
+	  break;
+	}
+    }
+  return ret;
+}
+

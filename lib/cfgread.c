@@ -228,10 +228,12 @@ static void dict_free_section(struct dspd_dict *sect)
     }
 }
 
-void dspd_dict_free(struct dspd_dict *sect)
+void dspd_dict_free(struct dspd_dict *dict)
 {
   struct dspd_dict *curr, *prev = NULL;
-  for ( curr = sect; curr; curr = curr->next )
+  if ( ! dict )
+    return;
+  for ( curr = dict; curr; curr = curr->next )
     {
       if ( prev )
 	{

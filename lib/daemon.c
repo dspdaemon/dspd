@@ -34,7 +34,7 @@
 #include <sys/capability.h>
 #endif
 #include <sys/prctl.h>
-
+#include <ctype.h>
 #include "sslib.h"
 #include "daemon.h"
 #include "syncgroup.h"
@@ -1614,39 +1614,163 @@ int dspd_hotplug_delete(const struct dspd_dict *dict)
   return ret;
 }
 
-int dspd_daemon_get_config(const struct dspd_dict *sect,
+static void remove_spaces(char *str)
+{
+  size_t i = 0;
+  while ( str[i] )
+    {
+      if ( isspace(str[i]) )
+	str[i] = '_';
+      i++;
+    }
+}
+
+static struct dspd_dict *find_config(struct dspd_drv_params *params, const struct dspd_dict *hotplug)
+{
+  char buf[PATH_MAX];
+  struct dspd_dict *dict = NULL;
+  char *ptr = NULL;
+  if ( dspd_strlen_safe(params->hwid) > 0 )
+    {
+      sprintf(buf, "hwcfg/hwid-%s", params->hwid);
+      remove_spaces(buf);
+      dict = dspd_read_config(buf, true);
+    }
+  if ( dict == NULL && dspd_strlen_safe(params->addr) > 0 )
+    {
+      sprintf(buf, "hwcfg/addr-%s", params->addr);
+      dict = dspd_read_config(buf, true);
+    }
+  if ( dict == NULL && dspd_strlen_safe(params->bus) > 0 )
+    {
+      sprintf(buf, "hwcfg/bus-%s", params->bus);
+      remove_spaces(buf);
+      dict = dspd_read_config(buf, true);
+    }
+  if ( dict == NULL && dspd_strlen_safe(params->name) > 0 )
+    {
+      sprintf(buf, "hwcfg/name-%s", params->name);
+      remove_spaces(buf);
+      dict = dspd_read_config(buf, true);
+    }
+  if ( dict == NULL && dspd_strlen_safe(params->desc) > 0 )
+    {
+      sprintf(buf, "hwcfg/desc-%s", params->desc);
+      remove_spaces(buf);
+      dict = dspd_read_config(buf, true);
+    }
+  if ( dict == NULL && hotplug != NULL )
+    {
+      if ( dspd_dict_find_value(hotplug, DSPD_HOTPLUG_MODALIAS, &ptr) )
+	{
+	  sprintf(buf, "hwcfg/mod-%s", ptr);
+	  dict = dspd_read_config(buf, true);
+	}
+      if ( dict == NULL && dspd_dict_find_value(hotplug, DSPD_HOTPLUG_KDRIVER, &ptr) == true )
+	{
+	  sprintf(buf, "hwcfg/kdrv-%s", ptr);
+	  dict = dspd_read_config(buf, true);
+	}
+      if ( dict == NULL && dspd_dict_find_value(hotplug, DSPD_HOTPLUG_DEVTYPE, &ptr) == true )
+	{
+	  sprintf(buf, "hwcfg/type-%s", ptr);
+	  dict = dspd_read_config(buf, true);
+	}
+    }
+  if ( dict == NULL )
+    dict = dspd_read_config("hwcfg/default", true);
+  return dict;
+}
+
+static void apply_config(struct dspd_dict *dict, struct dspd_drv_params *params)
+{
+  char *ptr;
+  int32_t val;
+  if ( dspd_dict_find_value(dict, "format", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) < 0 )
+	val = dspd_pcm_format_from_name(ptr);
+      if ( val != DSPD_PCM_FORMAT_UNKNOWN )
+	params->format = val;
+    }
+  if ( dspd_dict_find_value(dict, "channels", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->channels = val;
+    }
+  if ( dspd_dict_find_value(dict, "rate", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->rate = val;
+    }
+  if ( dspd_dict_find_value(dict, "fragsize", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->fragsize = val;
+    }
+  if ( dspd_dict_find_value(dict, "bufsize", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->bufsize = val;
+    }
+  if ( dspd_dict_find_value(dict, "min_latency", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->min_latency = val;
+    }
+  if ( dspd_dict_find_value(dict, "max_latency", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->max_latency = val;
+    }
+  if ( dspd_dict_find_value(dict, "min_dma", &ptr) )
+    {
+      if ( dspd_strtoi32(ptr, &val, 0) == 0 )
+	params->min_dma = val;
+    }
+}
+
+
+int dspd_daemon_get_config(const struct dspd_dict *dict,
 			   struct dspd_drv_params *params)
 {
   char *ptr;
   int ret;
+  struct dspd_dict *cfg = NULL, *d;
   memset(params, 0, sizeof(*params));
-  if ( dspd_dict_find_value(sect, DSPD_HOTPLUG_BUSNAME, &ptr) )
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_BUSNAME, &ptr) )
     {
       params->bus = strdup(ptr);
       if ( ! params->bus )
 	goto out;
     }
-  if ( dspd_dict_find_value(sect, DSPD_HOTPLUG_DEVNAME, &ptr) )
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_DEVNAME, &ptr) )
     {
       params->name = strdup(ptr);
       if ( ! params->name )
 	goto out;
     }
-  if ( dspd_dict_find_value(sect, DSPD_HOTPLUG_ADDRESS, &ptr) )
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_ADDRESS, &ptr) )
     {
       params->addr = strdup(ptr);
       if ( ! params->addr )
 	goto out;
     }
 
-  if ( dspd_dict_find_value(sect, DSPD_HOTPLUG_DESC, &ptr) )
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_DESC, &ptr) )
     {
       params->desc = strdup(ptr);
       if ( ! params->addr )
 	goto out;
     }
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_HWID, &ptr) )
+    {
+      params->hwid = strdup(ptr);
+      if ( ! params->addr )
+	goto out;
+    }
 
-  if ( dspd_dict_find_value(sect, DSPD_HOTPLUG_STREAM, &ptr) )
+  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_STREAM, &ptr) )
     {
       if ( strcmp(ptr, "playback") == 0 )
 	{
@@ -1666,9 +1790,28 @@ int dspd_daemon_get_config(const struct dspd_dict *sect,
   
   params->format = DSPD_PCM_FORMAT_S16_LE;
   params->channels = 2;
-  params->rate = 48000; //44100 / 2;
+  params->rate = 48000;
   params->bufsize = 16384;
   params->fragsize = 4096;
+
+  cfg = find_config(params, dict);
+  if ( cfg )
+    {
+      if ( params->stream == DSPD_PCM_STREAM_PLAYBACK || params->stream == DSPD_PCM_STREAM_FULLDUPLEX )
+	{
+	  d = dspd_dict_find_section(cfg, "PLAYBACK");
+	  if ( d )
+	    apply_config(d, params);
+	} 
+      if ( params->stream == DSPD_PCM_STREAM_CAPTURE || params->stream == DSPD_PCM_STREAM_FULLDUPLEX )
+	{
+	  d = dspd_dict_find_section(cfg, "CAPTURE");
+	  if ( d )
+	    apply_config(d, params);
+	}
+      dspd_dict_free(cfg);
+    }
+
   return 0;
  out:
   ret = -errno;
@@ -1677,6 +1820,7 @@ int dspd_daemon_get_config(const struct dspd_dict *sect,
   free(params->bus);
   free(params->desc);
   memset(params, 0, sizeof(*params));
+  dspd_dict_free(cfg);
   return ret;
 }
 
