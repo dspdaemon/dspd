@@ -243,8 +243,8 @@ int32_t alsahw_pcm_write_begin(void *handle,
   //Find contiguous space <= requested size.
   if ( fr > *frames )
     fr = *frames;
-  o = hdl->status.appl_ptr % hdl->buffer_size;
-  f = hdl->buffer_size - o;
+  o = hdl->status.appl_ptr % hdl->params.bufsize;
+  f = hdl->params.bufsize - o;
   if ( fr > f )
     fr = f;
   *frames = fr; 
@@ -525,8 +525,8 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
   if ( hdl->got_tstamp != 0 && hdl->stream == SND_PCM_STREAM_PLAYBACK )
     {
       if ( hdl->xfer < hdl->params.fragsize &&
-	   hdl->xfer < (hdl->buffer_size/2) &&
-	   (hdl->buffer_size-hdl->status.fill) > hdl->hlatency &&
+	   hdl->xfer < (hdl->params.bufsize/2) &&
+	   (hdl->params.bufsize-hdl->status.fill) > hdl->hlatency &&
 	   hdl->started != 0 &&
 	   hdl->status.space > 0 &&
 	   hdl->xfer < hdl->hlatency &&
@@ -594,7 +594,7 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
       if ( hdl->stream == SND_PCM_STREAM_PLAYBACK )
 	{
 	  hdl->status.space = snd_pcm_status_get_avail(hdl->alsa_status);
-	  hdl->status.fill = hdl->buffer_size - hdl->status.space;
+	  hdl->status.fill = hdl->params.bufsize - hdl->status.space;
 	  p = hdl->status.appl_ptr - hdl->status.fill;
 	  hdl->status.hw_ptr = p;
 	  if ( hdl->vbufsize < hdl->status.fill )
@@ -611,19 +611,19 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
 	} else
 	{
 	  hdl->status.fill = snd_pcm_status_get_avail(hdl->alsa_status);
-	  hdl->status.space = hdl->buffer_size - hdl->status.fill;
+	  hdl->status.space = hdl->params.bufsize - hdl->status.fill;
 	  hdl->status.hw_ptr = hdl->status.appl_ptr + hdl->status.fill;
 	}
       if ( state == SND_PCM_STATE_RUNNING )
 	hdl->got_tstamp = 1;
 
-      if ( hdl->status.fill > hdl->buffer_size ||
-	   hdl->status.space > hdl->buffer_size )
+      if ( hdl->status.fill > hdl->params.bufsize ||
+	   hdl->status.space > hdl->params.bufsize )
 	hdl->err = -EPIPE;
       if ( hdl->status.fill > hdl->params.bufsize )
-	fprintf(stderr, "GLITCH FROM ALSA %lu %lu %u %u %lu\n", (long)hdl->status.fill,
-		snd_pcm_status_get_avail(hdl->alsa_status), hdl->params.bufsize, hdl->status.space,
-		(long)hdl->buffer_size);
+	fprintf(stderr, "GLITCH FROM ALSA %lu %lu %u %u\n", (long)hdl->status.fill,
+		snd_pcm_status_get_avail(hdl->alsa_status), hdl->params.bufsize, hdl->status.space);
+		
       *status = &hdl->status;
       
     }
@@ -1860,48 +1860,18 @@ static int32_t alsahw_stream_ioctl(struct dspd_rctx *rctx,
 				   size_t            outbufsize)
 {
   int32_t ret = -ENOSYS;
-  //  uint32_t stream;
-  // struct alsahw_handle *hdl = dspd_req_userdata(rctx);
   struct dspd_dispatch_ctl2_info info;
-  /*switch(req)
-    {
-      case DSPD_SCTL_SERVER_GETCHANNELMAP:
-      if ( ! hdl->channel_map )
-	break;
-      //TODO: If sizeof(uint64_t) then last 32 bits is channel count
-      if ( inbufsize < sizeof(stream) )
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	} else
-	{
-	  stream = *(uint32_t*)inbuf;
-	  if ( ((hdl->stream == SND_PCM_STREAM_PLAYBACK) && (stream == DSPD_PCM_SBIT_PLAYBACK)) ||
-	       ((hdl->stream == SND_PCM_STREAM_CAPTURE) && (stream == DSPD_PCM_SBIT_CAPTURE)) )
-	    {
-	      ret = dspd_req_reply_buf(rctx, 0, hdl->channel_map, DSPD_CHMAP_SIZEOF(hdl->channel_map->channels));
-	    } else if ( hdl->other_handle )
-	    {
-	      //Check other stream.
-	      hdl = hdl->other_handle;
-	      if ( hdl->stream == stream )
-		ret = dspd_req_reply_buf(rctx, 0, hdl->channel_map, DSPD_CHMAP_SIZEOF(hdl->channel_map->channels));
-	    }
-	}
-      break;
-      default:*/
-      info.min_req = DSPD_SCTL_SERVER_MIXER_FIRST;
-      info.handlers_count = ARRAY_SIZE(mixer_handlers);
-      info.req = req;
-      info.handlers = mixer_handlers;
-      ret = dspd_daemon_dispatch_ctl2(rctx,
-				      &info,
-				      inbuf,
-				      inbufsize,
-				      outbuf,
-				      outbufsize);
-
-      /*  break;
-	  }*/
+  info.min_req = DSPD_SCTL_SERVER_MIXER_FIRST;
+  info.handlers_count = ARRAY_SIZE(mixer_handlers);
+  info.req = req;
+  info.handlers = mixer_handlers;
+  ret = dspd_daemon_dispatch_ctl2(rctx,
+				  &info,
+				  inbuf,
+				  inbufsize,
+				  outbuf,
+				  outbufsize);
+  
   return ret;
 }
 
@@ -2194,13 +2164,14 @@ int alsahw_open(const struct dspd_drv_params *params,
   hbuf->volume = 1.0;
 
 
-  hbuf->buffer_size = params->bufsize;
+  //hbuf->buffer_size = params->bufsize;
   hbuf->channels = hbuf->params.channels;
   hbuf->frame_size = snd_pcm_format_size(hbuf->params.format, hbuf->channels);
   if ( batch )
     hbuf->min_dma = hbuf->params.fragsize;
   else
     hbuf->min_dma = hbuf->min_dma_bytes / hbuf->frame_size;
+
   hbuf->stream = params->stream;
 
   if ( ! batch )
@@ -2248,9 +2219,9 @@ int alsahw_open(const struct dspd_drv_params *params,
 
 
   if ( params->stream == SND_PCM_STREAM_PLAYBACK )
-    hbuf->buffer.addr = calloc(hbuf->buffer_size, hbuf->channels * sizeof(*hbuf->buffer.addr64));
+    hbuf->buffer.addr = calloc(hbuf->params.bufsize, hbuf->channels * sizeof(*hbuf->buffer.addr64));
   else
-    hbuf->buffer.addr = calloc(hbuf->buffer_size, hbuf->channels * sizeof(*hbuf->buffer.addr32));
+    hbuf->buffer.addr = calloc(hbuf->params.bufsize, hbuf->channels * sizeof(*hbuf->buffer.addr32));
   if ( ! hbuf->buffer.addr )
     {
       ret = -errno;
@@ -2258,7 +2229,7 @@ int alsahw_open(const struct dspd_drv_params *params,
     }
   if ( ! mmap )
     {
-      hbuf->hw_addr = calloc(hbuf->buffer_size, hbuf->channels * hbuf->frame_size);
+      hbuf->hw_addr = calloc(hbuf->params.bufsize, hbuf->channels * hbuf->frame_size);
       if ( ! hbuf->hw_addr )
 	{
 	  ret = -errno;
@@ -2282,7 +2253,7 @@ int alsahw_open(const struct dspd_drv_params *params,
 
   hbuf->swparams = swp;
   hbuf->hwparams = hwp;
-  hbuf->vbufsize = hbuf->buffer_size;
+  hbuf->vbufsize = hbuf->params.bufsize;
  
   hbuf->sample_time = 1000000000 / hbuf->params.rate;
 
@@ -2304,14 +2275,14 @@ int alsahw_open(const struct dspd_drv_params *params,
       
   
   if ( params->max_latency == 0 )
-    hbuf->params.max_latency = hbuf->buffer_size;
+    hbuf->params.max_latency = hbuf->params.bufsize;
   else
     hbuf->params.max_latency = params->max_latency;
 
   if ( hbuf->params.max_latency < hbuf->params.min_latency )
     hbuf->params.max_latency = hbuf->params.min_latency;
-  else if ( hbuf->params.max_latency > hbuf->buffer_size )
-    hbuf->params.max_latency = hbuf->buffer_size;
+  else if ( hbuf->params.max_latency > hbuf->params.bufsize )
+    hbuf->params.max_latency = hbuf->params.bufsize;
 
   
 
@@ -2353,6 +2324,7 @@ int alsahw_open(const struct dspd_drv_params *params,
   else
     hbuf->channel_map->stream = DSPD_PCM_SBIT_CAPTURE;
 
+  
 
   ret = 0;
 
