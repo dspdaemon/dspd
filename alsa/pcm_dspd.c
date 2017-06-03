@@ -519,26 +519,26 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   ret = snd_pcm_hw_params_get_buffer_size_min(params, &minbuf);
   if ( ret )
-    goto error;
+    goto out;
   ret = snd_pcm_hw_params_get_buffer_size_max(params, &maxbuf);
   if ( ret )
-    goto error;
+    goto out;
 
   dir = 0;
   ret = snd_pcm_hw_params_get_rate(newparams, &ui, &dir);
   if ( ret )
-    return ret;
+    goto out;
   cp.rate = ui;
 
   ret = snd_pcm_hw_params_get_format(newparams, &fmt);
   if ( ret )
-    return ret;
+    goto out;
   cp.format = fmt; 
   
   dir = 0;
   ret = snd_pcm_hw_params_get_period_size(newparams, &frames, &dir);
   if ( ret )
-    return ret;
+    goto out;
   if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
     cp.fragsize = dspd_get_fragsize(&dspd->devinfo.playback, cp.rate, frames);
   else
@@ -551,7 +551,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   ret = snd_pcm_hw_params_get_buffer_size(newparams, &frames);
   if ( ret )
-    return ret;
+    goto out;
   cp.bufsize = frames;
   if ( cp.bufsize < (cp.fragsize * MIN_PERIODS) )
     cp.bufsize = cp.fragsize * MIN_PERIODS;
@@ -570,7 +570,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
       maxbuf = cp.bufsize;
       ret = snd_pcm_hw_params_set_buffer_size_max(dspd->io.pcm, newparams, &maxbuf);
       if ( ret )
-	goto error;
+	goto out;
       cp.bufsize = maxbuf;
     }
 
@@ -578,7 +578,7 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   dir = 0;
   ret = snd_pcm_hw_params_get_channels(newparams, &ui);
   if ( ret )
-    goto error;
+    goto out;
   cp.channels = ui;
   
   dspd->frame_bytes = snd_pcm_format_size(cp.format, cp.channels);
@@ -586,23 +586,33 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   struct dspd_rclient_hwparams hwp;
  
   memset(&hwp, 0, sizeof(hwp));
-  hwp.playback_params = &cp;
+  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+    {
+      hwp.playback_params = &cp;
+    } else if ( dspd->stream == DSPD_PCM_SBIT_CAPTURE )
+    {
+      hwp.capture_params = &cp;
+    } else
+    {
+      assert(dspd->stream == DSPD_PCM_SBIT_PLAYBACK || dspd->stream == DSPD_PCM_SBIT_CAPTURE);
+    }
+ 
   ret = dspd_rclient_set_hw_params(&dspd->client, &hwp);
   if ( ret )
-    goto error;
+    goto out;
 
   p = dspd_rclient_get_hw_params(&dspd->client, dspd->stream);
   if ( ! p )
     {
       ret = -EINVAL;
-      goto error;
+      goto out;
     }
   
 
 
   ret = snd_pcm_hw_params_set_buffer_size(dspd->io.pcm, newparams, p->bufsize);
   if ( ret )
-    goto error;
+    goto out;
   
   ret = snd_pcm_hw_params_set_period_size(dspd->io.pcm, newparams, p->fragsize, 0);
   if ( ret )
@@ -613,19 +623,19 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   ret = snd_pcm_hw_params_set_rate(dspd->io.pcm, newparams, p->rate, 0);
   if ( ret )
-    goto error;
+    goto out;
 
   ret = snd_pcm_hw_params_set_channels(dspd->io.pcm, newparams, p->channels);
   if ( ret )
-    goto error;
+    goto out;
   io->buffer_size = p->bufsize;
   io->period_size = p->fragsize;
   dspd->channels = p->channels;
   snd_pcm_hw_params_copy(params, newparams);
-
-  return 0;
+  
  
- error:
+ out:
+
   if ( ret > 0 )
     ret *= -1;
   return ret;

@@ -2164,7 +2164,7 @@ int alsahw_open(const struct dspd_drv_params *params,
   hbuf->volume = 1.0;
 
 
-  //hbuf->buffer_size = params->bufsize;
+
   hbuf->channels = hbuf->params.channels;
   hbuf->frame_size = snd_pcm_format_size(hbuf->params.format, hbuf->channels);
   if ( batch )
@@ -2324,7 +2324,8 @@ int alsahw_open(const struct dspd_drv_params *params,
   else
     hbuf->channel_map->stream = DSPD_PCM_SBIT_CAPTURE;
 
-  
+  dspd_log(0, "Parameters for device %s: channels=%d bufsize=%d fragsize=%d rate=%d",
+	   params->name, params->channels, params->bufsize, params->fragsize, params->rate);
 
   ret = 0;
 

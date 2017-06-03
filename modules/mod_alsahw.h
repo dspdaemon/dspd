@@ -64,7 +64,6 @@ struct alsahw_handle {
   uintptr_t                 min_dma_bytes;
   uintptr_t                 frame_size;
   uintptr_t                 channels;
-  //uintptr_t                 buffer_size;
   double                    volume;
   snd_pcm_status_t         *alsa_status;
   void                     *hw_addr;
