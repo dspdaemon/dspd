@@ -1,9 +1,4 @@
 #!/bin/bash
-#TODO: Add --disable-MODULENAME, --disable-modules, --enable-modules options
-#TODO: Add --enable-multilib and --disable-multilib.  Automatically
-#detect it by default.  Only supported in separate build directory.
-#Need to advertise this while configuring (detect it and show whether it
-#is possible then don't do it if not in a separate build directory.
 
 function print_help {
     echo "  --enable-option=option     Enable an option
