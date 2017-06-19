@@ -171,6 +171,32 @@ struct dspd_scheduler *dspd_scheduler_new(const struct dspd_scheduler_ops *ops, 
   return NULL;
 }
 
+int dspd_scheduler_set_fd_event(struct dspd_scheduler *sch, 
+				int32_t fd,
+				int32_t events)
+{
+  struct epoll_event evt;
+  int32_t ret;
+  size_t i;
+  for ( i = 0; i < sch->maxfds; i++ )
+    {
+      if ( sch->fds[i].fd == fd )
+	break;
+   }
+  if ( i == sch->maxfds )
+    {
+      errno = EINVAL;
+      ret = -1;
+    } else
+    {
+      memset(&evt, 0, sizeof(evt));
+      evt.events = events;
+      evt.data.u32 = i;
+      ret = epoll_ctl(sch->epfd, EPOLL_CTL_MOD, fd, &evt);
+    }
+  return ret;
+}
+
 int dspd_scheduler_add_fd(struct dspd_scheduler *sch, 
 			  int32_t fd, 
 			  int32_t events, 

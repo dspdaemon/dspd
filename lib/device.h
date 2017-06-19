@@ -38,6 +38,26 @@ struct dspd_drv_params {
   uint32_t  min_dma;
 };
 
+struct dspd_mq_notification {
+  uint32_t client;
+  uint32_t flags;
+  int64_t  cookie;
+};
+
+struct dspd_lock_result {
+  int32_t fd;
+  int32_t reserved;
+  int64_t cookie;
+};
+
+struct dspd_dev_lock_req {
+  int32_t  server_fd;
+  int32_t  client_fd;
+  uint32_t client;
+  int32_t  flags;
+  int64_t  cookie;
+};
+
 struct dspd_pcmdrv_ops {
   /*
     Map a buffer area.
@@ -86,7 +106,7 @@ struct dspd_pcmdrv_ops {
   /*
     Get device status.  Includes timestamp, buffer levels, and delays.
    */
-  int (*status)(void *handle, const struct dspd_pcm_status **status);
+  int (*status)(void *handle, const struct dspd_pcm_status **status, bool hwsync);
 
 
   /*
@@ -240,6 +260,7 @@ struct dspd_pcmdev_stream {
   size_t                           glitch_threshold;
   size_t                           requested_latency;
   dspd_time_t                      early_cycle;
+
 };
 
 #define DSPD_IOC_LOCK    1
@@ -288,6 +309,21 @@ struct dspd_pcm_device {
   volatile bool reset_scheduler, idle;
   struct sched_param sched_param;
   int sched_policy;
+  int32_t mq[2];
+  
+#ifndef DSPD_HAVE_ATOMIC_INT64
+  dspd_mutex_t cookie_lock;
+  uint64_t cookie;
+#else
+  volatile uint64_t cookie;
+#endif
+
+#define DSPD_DEV_LOCK_EXCL    1
+#define DSPD_DEV_LOCK_LATENCY 2
+  uint32_t access_flags;
+  int32_t  excl_client;
+  unsigned int seed;
+  uint32_t wakeup_count;
 };
 
 

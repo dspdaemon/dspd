@@ -497,7 +497,7 @@ static int32_t alsahw_pcm_status_intrp(struct alsahw_handle *handle)
   return 0;
 }
 
-int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
+int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status, bool hwsync)
 {
   struct alsahw_handle *hdl = handle;
   snd_htimestamp_t hts, tts;
@@ -524,7 +524,8 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status)
    */
   if ( hdl->got_tstamp != 0 && hdl->stream == SND_PCM_STREAM_PLAYBACK )
     {
-      if ( hdl->xfer < hdl->params.fragsize &&
+      if ( hwsync == false && 
+	   hdl->xfer < hdl->params.fragsize &&
 	   hdl->xfer < (hdl->params.bufsize/2) &&
 	   (hdl->params.bufsize-hdl->status.fill) > hdl->hlatency &&
 	   hdl->started != 0 &&

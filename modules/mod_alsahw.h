@@ -15,7 +15,7 @@ int32_t alsahw_pcm_recover(void *handle);
 int32_t alsahw_pcm_start(void *handle);
 int32_t alsahw_pcm_drop(void *handle);
 int32_t alsahw_pcm_prepare(void *handle);
-int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status);
+int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status, bool hwsync);
 intptr_t alsahw_pcm_rewind(void *handle, uintptr_t frames);
 intptr_t alsahw_pcm_forward(void *handle, uintptr_t frames);
 intptr_t alsahw_pcm_rewindable(void *handle);

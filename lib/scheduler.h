@@ -65,6 +65,10 @@ struct dspd_scheduler *dspd_scheduler_new(const struct dspd_scheduler_ops *ops, 
 void dspd_scheduler_delete(struct dspd_scheduler *sch);
 //Add a file descriptor.
 int dspd_scheduler_add_fd(struct dspd_scheduler *sch, int32_t fd, int32_t events, void *data, dspd_sch_callback_t cb);
+int dspd_scheduler_set_fd_event(struct dspd_scheduler *sch, 
+				int32_t fd,
+				int32_t events);
+
 //The the schedule loop.  Does not exit until the loop aborts.
 void *dspd_scheduler_run(void *arg);
 

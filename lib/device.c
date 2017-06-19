@@ -29,6 +29,7 @@
 #include <sched.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <mqueue.h>
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
@@ -287,8 +288,16 @@ static int32_t dspd_dev_set_client_latency(struct dspd_pcm_device *dev,
   uint8_t cbits;
   int32_t ret;
   uint32_t l;
+  uint32_t cfg, cfgl;
   if ( client < DSPD_MAX_OBJECTS )
     {
+      if ( dev->access_flags & DSPD_DEV_LOCK_LATENCY )
+	{
+	  cfg = AO_load(&dev->reg.config);
+	  cfgl = dspd_dev_config_get_latency(dev, &cfg);
+	  if ( latency < cfgl && client != dev->excl_client )
+	    return -ETIME;
+	}
       cbits = dev->client_configs[client];
       if ( cbits & DSPD_CBIT_PRESENT )
 	{
@@ -339,14 +348,21 @@ static int32_t dspd_dev_attach_client(struct dspd_pcm_device *dev,
   int32_t ret;
   if ( client < DSPD_MAX_OBJECTS )
     {
-      cbits = dev->client_configs[client];
-      if ( cbits & DSPD_CBIT_PRESENT )
+
+      if ( ! (dev->access_flags & DSPD_DEV_LOCK_EXCL) )
 	{
-	  ret = -EEXIST;
+	  cbits = dev->client_configs[client];
+	  if ( cbits & DSPD_CBIT_PRESENT )
+	    {
+	      ret = -EEXIST;
+	    } else
+	    {
+	      dev->client_configs[client] = DSPD_CBIT_PRESENT;
+	      ret = 0;
+	    }
 	} else
 	{
-	  dev->client_configs[client] = DSPD_CBIT_PRESENT;
-	  ret = 0;
+	  ret = -EBUSY;
 	}
     } else
     {
@@ -366,6 +382,11 @@ static int32_t dspd_dev_detach_client(struct dspd_pcm_device *dev,
       cbits = dev->client_configs[client];
       if ( cbits & DSPD_CBIT_PRESENT )
 	{
+	  if ( client == dev->excl_client )
+	    {
+	      dev->excl_client = -1;
+	      dev->access_flags = 0;
+	    }
 	  dspd_dev_client_settrigger(dev, client, 0, 0);
 	  dev->client_configs[client] = 0;
 	  ret = 0;
@@ -702,7 +723,7 @@ static void schedule_timer_event(void *data)
   if ( dev->playback.started )
     {
    
-      ret = dev->playback.ops->status(dev->playback.handle, &dev->playback.status);
+      ret = dev->playback.ops->status(dev->playback.handle, &dev->playback.status, false);
       if ( ret < 0 )
 	{
 	  dev->playback.started = 0;
@@ -724,7 +745,7 @@ static void schedule_timer_event(void *data)
     }
   if ( dev->capture.started )
     {
-      ret = dev->capture.ops->status(dev->capture.handle, &dev->capture.status);
+      ret = dev->capture.ops->status(dev->capture.handle, &dev->capture.status, false);
       if ( ret < 0 )
 	{
 
@@ -801,6 +822,14 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
   uint64_t f;
   uint64_t sleep_frames;
   dev->idle = false;
+
+  if ( dev->wakeup_count )
+    {
+      dev->wakeup_count--;
+      if ( dev->wakeup_count == 0 )
+	dspd_scheduler_set_fd_event(dev->sched, dev->mq[0], POLLIN);
+    }
+  
   if ( ! dev->capture.ops )
     dspd_sync_reg(dev);
   if ( dev->playback.latency_changed )
@@ -817,7 +846,7 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
 	system clock.
       */
       if ( dev->playback.status->appl_ptr < dev->playback.latency || dev->playback.check_status != 0 )
-	dev->playback.ops->status(dev->playback.handle, &dev->playback.status);
+	dev->playback.ops->status(dev->playback.handle, &dev->playback.status, false);
     
 
       if ( dev->playback.glitch && dev->playback.requested_latency < dev->playback.glitch_threshold )
@@ -1298,124 +1327,6 @@ static void process_client_capture(struct dspd_pcm_device *dev,
 }
 
 
-/*static void process_client_capture(struct dspd_pcm_device *dev,
-				   void *client,
-				   const struct dspd_pcmcli_ops *ops)
-{
-  uint32_t latency;
-  uint64_t pointer, start_count, max_ptr;
-  float *ptr;
-  intptr_t rw, diff, max_xfer, ret, xfer;
-  bool starting;
-  size_t offset;
-  intptr_t adj;
-
-  process_client_capture_new(dev, client, ops); return;
-
-
-  start_count = dev->capture.cycle.start_count;
-  pointer = dev->capture.status->appl_ptr;
-  latency = dev->capture.latency;
-  if ( ops->get_capture_status(dev,
-			       client,
-			       &pointer,
-			       &start_count,
-			       &latency,
-			       dev->capture.status) != -EAGAIN )
-    {
-      starting = start_count != dev->capture.cycle.start_count;
-      max_xfer = latency * 2;
-      max_ptr = dev->capture.cycle.len + dev->capture.status->appl_ptr;
-      if ( pointer < dev->capture.status->appl_ptr )
-	{
-
-	  rw = dev->capture.ops->rewindable(dev->capture.handle);
-	  if ( rw < 0 )
-	    goto err;
-	  diff = dev->capture.status->appl_ptr - pointer;
-	  
-	  if ( rw > diff )
-	    rw = diff;
-	  ret = dev->capture.ops->rewind(dev->capture.handle, rw);
-	  if ( ret < 0 )
-	    goto err;
-	  if ( ret > 0 )
-	    {
-	      if ( ret > max_xfer )
-		xfer = max_xfer;
-	      else
-		xfer = ret;
-	      pointer = dev->capture.status->appl_ptr;
-	      if ( ! process_rewound_capture(dev,
-					     client,
-					     ops,
-					     &pointer,
-					     xfer) )
-		goto err;
-	      max_xfer -= xfer;
-	      if ( xfer < ret )
-		{
-		  if ( dev->capture.ops->forward(dev->capture.handle, ret - xfer) < 0 )
-		    goto err;
-		}
-	    }
-	} else if ( pointer >= max_ptr )
-	{
-	  //No new data for this client
-	  return;
-	}
-      if ( max_xfer )
-	{
-
-	  ptr = dev->capture.cycle.addr;
-	  offset = dev->capture.cycle.offset;
-	  if ( dev->capture.cycle.len < max_xfer )
-	    {
-	      max_xfer = dev->capture.cycle.len;
-	    } else if ( dev->capture.cycle.len > max_xfer && starting != 0 )
-	    {
-	      //Adjust the offset to start at the correct position.
-	      offset = dev->capture.cycle.len - max_xfer;
-	    }
-	  //Adjust in case the fragment was partial.  This is a very unlikely "retry" situation.
-	  //The last time it put some data into the buffer from the current application pointer
-	  //but it did not take all of the data.  Either the buffer was full or it appeared to
-	  //be too much when the latency was taken into consideration.
-	  if ( pointer > dev->capture.status->appl_ptr )
-	    {
-	      diff = pointer - dev->capture.status->appl_ptr;
-	      if ( diff < max_xfer )
-		{
-		  max_xfer -= diff;
-		  offset += diff;
-		  adj = dev->capture.ops->adjust_pointer(dev->capture.handle, diff * -1UL);
-		} else
-		{
-		  max_xfer = 0;
-		  adj = 0;
-		}
-	    } else
-	    {
-	      adj = 0;
-	    }
-	  if ( max_xfer )
-	    {
-	      ops->capture_xfer(dev,
-				client,
-				&ptr[offset*dev->capture.params.channels],
-				max_xfer,
-				dev->capture.status);
-	      if ( adj )
-		if ( dev->capture.ops->adjust_pointer(dev->capture.handle, adj) == 0 )
-		  goto err;
-	    }
-	}
-    }
-  return;
-
- err:
-  stream_recover(&dev->capture);
-  }*/
 
 static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32_t error)
 {
@@ -1816,7 +1727,7 @@ static void schedule_playback_wake(void *userdata)
     {
       if ( dev->playback.status == NULL )
 	{
-	  ret = dev->playback.ops->status(dev->playback.handle, &dev->playback.status);
+	  ret = dev->playback.ops->status(dev->playback.handle, &dev->playback.status, false);
 	  if ( ret < 0 )
 	    goto out;
 	} else if ( dev->playback.status->space > dev->playback.params.bufsize )
@@ -1894,7 +1805,7 @@ static void schedule_playback_wake(void *userdata)
 
 		  if ( len > 0 && written > dev->playback.requested_latency )
 		    {
-		      if ( dev->playback.ops->status(dev->playback.handle, &dev->playback.status) < 0 )
+		      if ( dev->playback.ops->status(dev->playback.handle, &dev->playback.status, false) < 0 )
 			goto out;
 		    } else if ( len == 0 )
 		    {
@@ -2019,7 +1930,7 @@ static void schedule_capture_wake(void *data)
 		  dev->capture.started = true;
 		}
 	    }
-	  ret = dev->capture.ops->status(dev->capture.handle, &dev->capture.status);
+	  ret = dev->capture.ops->status(dev->capture.handle, &dev->capture.status, false);
 	  if ( ret < 0 )
 	    {
 	      if ( stream_recover(&dev->capture) < 0 )
@@ -2452,6 +2363,128 @@ static void dev_destructor(void *arg)
 
 
 
+static int dspd_mq_validate_event(struct dspd_pcm_device *dev, 
+				  struct dspd_mq_notification *event,
+				  int len)
+{
+  int ret = -1;
+  if ( len == sizeof(*event) && dev->playback.running )
+    {
+      if ( event->client < DSPD_MAX_OBJECTS )
+	{
+#ifndef DSPD_HAVE_ATOMIC_INT64
+	  if ( dspd_mutex_trylock(&dev->cookie_lock) == 0 )
+	    {
+	      if ( dev->cookie != 0 && dev->cookie == event->cookie )
+		ret = event->client;
+	      dspd_mutex_unlock(&dev->cookie_lock);
+	    }
+#else
+	  uint64_t c = dspd_load_uint64(&dev->cookie);
+	  if ( c != 0 && c == event->cookie )
+	    ret = event->client;
+#endif
+	}
+    }
+  return ret;
+}
+
+/*
+  This event is called if a client requests immediate attention.  There can be only one client doing
+  that because otherwise it gets ugly and there may be glitches.
+ */
+static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t events)
+{
+  struct dspd_mq_notification event;
+  unsigned prio;
+  struct dspd_pcm_device *dev = udata;
+  int ret;
+  int client, c;
+  uint8_t tm;
+  struct dspd_pcmcli_ops *cli_ops;
+  struct dspd_pcmsrv_ops *srv_ops;
+  void *cli;
+  bool error = false;
+  ret = mq_receive(dev->mq[0], (char*)&event, sizeof(event), &prio);
+
+  client = dspd_mq_validate_event(dev, &event, ret);
+  ret = dev->playback.ops->status(dev->playback.handle, &dev->playback.status, true);
+  if ( ret < 0 )
+    {
+      error = true;
+      goto out;
+    } 
+  if ( dev->playback.status->tstamp )
+    {
+      dspd_intrp_update(&dev->playback.intrp, 
+			dev->playback.status->tstamp,
+			dev->playback.status->hw_ptr - dev->playback.last_hw);
+      dev->playback.last_hw = dev->playback.status->hw_ptr;
+    } 
+  if ( client < 0 )
+    {
+      /*
+	It is possible that some program got exclusive access then released the device and
+	tried to abuse the message queue.  If so, then drain the queue and increase the wakeup
+	count.  Each sleep will reduce the count by 1, so if the next wakeup is invalid
+	the POLLIN event will be turned off.  It will stay off for 2 cycles before turning
+	back on again.  That will probably keep the device thread from using too much CPU due to
+	message queue abuse.  Another client that wants exclusive access may not work correctly
+	but that can be fixed by killing the misbehaving process.
+	
+      */
+      dev->wakeup_count += 2;
+      (void)mq_receive(dev->mq[0], (char*)&event, sizeof(event), &prio);
+      if ( dev->wakeup_count > 2 )
+	dspd_scheduler_set_fd_event(sch, fd, 0);
+      goto out;
+    }
+
+
+  c = client * 2;
+  
+  tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, c);
+  if ( tm & DSPD_PCM_SBIT_PLAYBACK )
+    {
+      if ( dspd_client_srv_trylock(dev->list, client, dev->key) )
+	{
+	  dev->current_client = client;
+	  //Try again with the lock
+	  tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, c);
+	  dspd_slist_entry_get_pointers(dev->list,
+					client,
+					&cli,
+					(void**)&srv_ops,
+					(void**)&cli_ops);
+	  
+	  if ( tm & DSPD_PCM_SBIT_PLAYBACK )
+	    {
+	      dev->playback.cycle.len = 0; //Not ready, must rewind.
+	      error = ! process_client_playback(dev, cli, cli_ops);
+	    }
+	  dev->current_client = -1;
+	  dspd_client_srv_unlock(dev->list, client);
+	}
+    }
+
+ out:
+
+  if ( error )
+    {
+      dev->playback.started = 0;
+
+      dev->playback.status = NULL;
+      ret = stream_recover(&dev->playback);
+      if ( ret < 0 )
+	dspd_scheduler_abort(dev->sched);
+    }
+ 
+  /*
+    After returning, the wakeup callback will be executed as if a timer expired.  The additional
+    hwsync here is enough to improve reliability.
+   */
+  return;
+}
 
    
 int32_t dspd_pcm_device_new(void **dev,
@@ -2466,9 +2499,13 @@ int32_t dspd_pcm_device_new(void **dev,
   void *h;
   dspd_time_t t;
   bool fullduplex;
+ 
   devptr = calloc(1, sizeof(struct dspd_pcm_device));
   if ( ! devptr )
     return -errno;
+  devptr->mq[0] = -1;
+  devptr->mq[1] = -1;
+  devptr->excl_client = -1;
   if ( list )
     {
       dspd_slist_wrlock(list);
@@ -2491,7 +2528,32 @@ int32_t dspd_pcm_device_new(void **dev,
   devptr->list = list;
   devptr->key = index;
 
-
+  if ( params->stream & DSPD_PCM_SBIT_PLAYBACK )
+    {
+      /*
+	Failure is not a fatal error because the device will work without the low latency protocol.
+      */
+      char buf[PATH_MAX];
+      struct mq_attr mqattr;
+      sprintf(buf, "/dspd-%d-dev-%ld", getpid(), (long)index);
+      memset(&mqattr, 0, sizeof(mqattr));
+      mqattr.mq_flags = 0;
+      mqattr.mq_maxmsg = 4;
+      mqattr.mq_msgsize = MIN(sizeof(struct dspd_mq_notification), sizeof(struct dspd_pcm_status));
+      mqattr.mq_curmsgs = 0;
+      mq_unlink(buf);
+      devptr->mq[0] = mq_open(buf, O_RDWR | O_CREAT | O_NONBLOCK, 0666, &mqattr);
+      if ( devptr->mq[0] >= 0 )
+	{
+	  devptr->mq[1] = mq_open(buf, O_RDWR | O_NONBLOCK);
+	  if ( devptr->mq[1] < 0 )
+	    {
+	      mq_close(devptr->mq[0]);
+	      devptr->mq[0] = -1;
+	    }
+	  mq_unlink(buf);
+	}
+    }
 
   fullduplex = (params->stream & (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) == 
     (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE);
@@ -2583,19 +2645,35 @@ int32_t dspd_pcm_device_new(void **dev,
   s = params->stream & (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE);
   if ( s == DSPD_PCM_SBIT_PLAYBACK )
     {
-      devptr->sched = dspd_scheduler_new(&playback_ops, devptr, devptr->playback.nfds);
+      devptr->sched = dspd_scheduler_new(&playback_ops, devptr, devptr->playback.nfds+1);
     } else if ( s == DSPD_PCM_SBIT_CAPTURE )
     {
-      devptr->sched = dspd_scheduler_new(&capture_ops, devptr, devptr->capture.nfds);
+      devptr->sched = dspd_scheduler_new(&capture_ops, devptr, devptr->capture.nfds+1);
     } else
     {
-      devptr->sched = dspd_scheduler_new(&fullduplex_ops, devptr, devptr->playback.nfds+devptr->capture.nfds);
+      devptr->sched = dspd_scheduler_new(&fullduplex_ops, devptr, devptr->playback.nfds+devptr->capture.nfds+1);
     }
     
   if ( ! devptr->sched )
     goto out;
   
-
+  if ( devptr->mq[0] >= 0 )
+    {
+      ret = dspd_scheduler_add_fd(devptr->sched, devptr->mq[0], POLLIN, devptr, dspd_dev_mq_event);
+      if ( ret != 0 )
+	{
+	  ret *= -1;
+	  goto out;
+	}
+    }
+#ifndef DSPD_HAVE_ATOMIC_INT64
+  ret = dspd_mutex_init(&devptr->cookie_lock, NULL);
+  if ( ret )
+    {
+      ret *= -1;
+      goto out;
+    }
+#endif
 
   ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED | DSPD_THREADATTR_RTIO);
   if ( ret != 0 )
@@ -2676,6 +2754,14 @@ void dspd_pcm_device_delete_ex(struct dspd_pcm_device *dev, bool closedev)
   dspd_scheduler_abort(dev->sched);
   dspd_sched_trigger(dev->sched);
   dspd_mutex_destroy(&dev->reg_lock);
+#ifndef DSPD_HAVE_ATOMIC_INT64
+  dspd_mutex_destroy(&dev->cookie_lock);
+#endif
+  if ( dev->mq[0] >= 0 )
+    mq_close(dev->mq[0]);
+  if ( dev->mq[1] >= 0 )
+    mq_close(dev->mq[1]);
+
   if ( dev->playback.ops )
     {
       free(dev->playback.pfds);
@@ -3199,6 +3285,7 @@ static int32_t server_reserve(struct dspd_rctx *context,
   int32_t ret;
   uint32_t client = *(uint32_t*)inbuf;
   struct dspd_pcm_device *dev = dspd_req_userdata(context);
+  dspd_dev_lock(dev);
   ret = dspd_dev_attach_client(dev, client);
   if ( ret == 0 || ret == -EEXIST )
     {
@@ -3208,7 +3295,8 @@ static int32_t server_reserve(struct dspd_rctx *context,
     }
   if ( ret < 0 )
     ret *= -1;
-    
+  dspd_dev_unlock(dev);
+
   return dspd_req_reply_err(context, 0, ret);
 }
 static int32_t server_irqinfo(struct dspd_rctx *context,
@@ -3508,6 +3596,87 @@ static int32_t server_convert_chmap(struct dspd_rctx *context,
   return ret;
 }
 
+static int32_t server_lock(struct dspd_rctx *context,
+			   uint32_t      req,
+			   const void   *inbuf,
+			   size_t        inbufsize,
+			   void         *outbuf,
+			   size_t        outbufsize)
+
+{
+  struct dspd_pcm_device *dev = dspd_req_userdata(context);
+  const struct dspd_dev_lock_req *lr = inbuf;
+  struct dspd_dev_lock_req result = { 0 };
+  int32_t ret = EBUSY;
+  uint32_t config;
+  uint64_t cookie;
+  if ( dev->mq[0] < 0 )
+    return dspd_req_reply_err(context, 0, EOPNOTSUPP);
+  dspd_dev_lock(dev);
+  if ( dev->excl_client < 0 )
+    {
+      ret = EINVAL;
+      if ( (lr->flags & ~(DSPD_DEV_LOCK_EXCL|DSPD_DEV_LOCK_LATENCY)) )
+	goto out;
+      if ( lr->client >= DSPD_MAX_OBJECTS ||
+	   lr->cookie != 0 )
+	goto out;
+      if ( ! dspd_dev_get_client_attach(dev, lr->client) )
+	{
+	  ret = ESRCH;
+	  goto out;
+	}
+      config = AO_load(&dev->reg.config);
+      if ( (lr->flags & DSPD_DEV_LOCK_EXCL) && 
+	   (dspd_dev_config_get_stream_count(dev, &config, DSPD_PCM_STREAM_PLAYBACK) ||
+	    dspd_dev_config_get_stream_count(dev, &config, DSPD_PCM_STREAM_CAPTURE)) )
+	{
+	  ret = EBUSY;
+	  goto out;
+	}
+      if ( ! dev->seed )
+	dev->seed = dspd_get_time() % UINT32_MAX;
+
+      cookie = rand_r(&dev->seed);
+      cookie <<= 32U;
+      cookie |= rand_r(&dev->seed);
+
+#ifdef DSPD_HAVE_ATOMIC_INT64
+      dspd_store_uint64(&dev->cookie, cookie);
+#else
+      dspd_mutex_lock(&dev->cookie_lock);
+      dev->cookie = cookie;
+      dspd_mutex_unlock(&dev->cookie_lock);
+#endif
+      dev->excl_client = lr->client;
+      dev->access_flags = lr->flags;
+      ret = 0;
+
+      /*
+	The idea is that the client can request immediate attention from the server through client_fd.
+	The internal client could eventually raise POLLIN events on another thread if the buffer is drained
+	during a callback.
+	
+	The required buffer size may be reduced since the client no longer needs extra buffer space to compensate
+	for incorrect wakeup times.  It may also be possible to eliminate most if not all spurious wakeups on
+	the client side.
+
+      */
+      result.server_fd = dev->mq[0];
+      result.client_fd = dev->mq[1];
+      result.client = lr->client;
+      result.flags = dev->access_flags;
+      result.cookie = cookie;
+    }
+ out:
+  dspd_dev_unlock(dev);
+  if ( ret != 0 )
+    ret = dspd_req_reply_err(context, 0, ret);
+  else
+    ret = dspd_req_reply_buf(context, 0, &result, sizeof(result));
+  return ret;
+}
+
 static const struct dspd_req_handler device_req_handlers[] = {
   [SRVIDX(DSPD_SCTL_SERVER_MIN)] = {
     .handler = server_filter,
@@ -3604,6 +3773,14 @@ static const struct dspd_req_handler device_req_handlers[] = {
     .inbufsize = sizeof(struct dspd_chmap),
     .outbufsize = sizeof(struct dspd_chmap),
   },
+  [SRVIDX(DSPD_SCTL_SERVER_LOCK)] = {
+    .handler = server_lock,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = sizeof(struct dspd_dev_lock_req),
+    .outbufsize = sizeof(struct dspd_dev_lock_req)
+  },
+  
 };
 
 static int32_t device_ctl(struct dspd_rctx *rctx,

@@ -2526,6 +2526,48 @@ static int32_t client_synccmd(struct dspd_rctx *context,
   return dspd_req_reply_err(context, 0, ret);
 }
 
+static int32_t client_lock(struct dspd_rctx *context,
+			      uint32_t      req,
+			      const void   *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  int32_t err = EBADFD;
+  int32_t flags = *(int32_t*)inbuf;
+  struct dspd_lock_result res = { 0 };
+  struct dspd_dev_lock_req r = { 0 }, r2 = { 0 };
+  size_t br = 0;
+  if ( cli->device >= 0 )
+    {
+      r.client = cli->index;
+      r.flags = flags;
+      err = dspd_stream_ctl(&dspd_dctx,
+			    cli->device,
+			    DSPD_SCTL_SERVER_LOCK,
+			    &r,
+			    sizeof(r),
+			    &r2,
+			    sizeof(r2),
+			    &br);
+      if ( err == 0 && br != sizeof(r2) )
+	{
+	  err = EPROTO;
+	} else if ( err == 0 )
+	{
+	  res.fd = r2.client_fd;
+	  res.cookie = r2.cookie;
+	  return dspd_req_reply_fd(context,
+				   0,
+				   &res,
+				   sizeof(res),
+				   res.fd);
+	}
+    }
+  return dspd_req_reply_err(context, 0, err);
+}
+
 static const struct dspd_req_handler client_req_handlers[] = {
   [CLIDX(DSPD_SCTL_CLIENT_START)] = {
     .handler = client_start,
@@ -2659,6 +2701,13 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .rflags = 0,
     .inbufsize = sizeof(struct dspd_sync_cmd),
     .outbufsize = 0,
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_LOCK)] = {
+    .handler = client_lock,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = sizeof(struct dspd_lock_result),
   },
 };
 

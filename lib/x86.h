@@ -36,4 +36,12 @@ static inline void dspd_atomic_and (volatile uintptr_t *p, uintptr_t value)
                         "=m" (*p) : "r" (value), "m" (*p)
                         : "memory");
 }
+
+#ifdef __x86_64__
+#define DSPD_HAVE_ATOMIC_INT64
+#define dspd_load_uint64(_a) AO_load(_a)
+#define dspd_store_uint64(_a,_v) AO_store(_a,_v)
+#endif
+
+
 #endif

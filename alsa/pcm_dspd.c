@@ -370,6 +370,7 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
   int32_t avail;
   int err;
   bool waited = false;
+  
   if ( dspd_rclient_get_streams(&dspd->client) != DSPD_PCM_SBIT_PLAYBACK )
     return -EBADFD;
 
@@ -445,7 +446,6 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
     {
       dspd_rclient_poll_notify(&dspd->client, DSPD_PCM_SBIT_PLAYBACK);
     }
-
   return ret;
 }
 
@@ -633,11 +633,11 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   dspd->channels = p->channels;
   snd_pcm_hw_params_copy(params, newparams);
   
- 
  out:
-
+  
   if ( ret > 0 )
     ret *= -1;
+
   return ret;
   
 }
@@ -1076,7 +1076,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   dspd->translate_format = 1;
   dspd->resample = 1;
 
-
+  
+  
   dspd->io.callback = stream == SND_PCM_STREAM_PLAYBACK ?
     &dspd_playback_callback : &dspd_capture_callback;
   dspd->stream = stream == SND_PCM_STREAM_PLAYBACK ?
@@ -1177,6 +1178,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   if ( err )
     goto error;
 
+
   bits = br * 8;
   for ( i = 0; i < bits; i++ )
     {
@@ -1251,6 +1253,9 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   if (err < 0)
     goto error;
 
+
+  
+    
 
   *pcmp = dspd->io.pcm;
 
