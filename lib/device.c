@@ -2436,7 +2436,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
       dev->wakeup_count += 2;
       (void)mq_receive(dev->mq[0], (char*)&event, sizeof(event), &prio);
       if ( dev->wakeup_count > 2 )
-	dspd_scheduler_set_fd_event(sch, fd, 0);
+	dspd_scheduler_set_fd_event(dev->sched, fd, 0);
       goto out;
     }
 

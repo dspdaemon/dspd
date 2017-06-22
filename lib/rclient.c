@@ -26,6 +26,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/eventfd.h>
+#include <mqueue.h>
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
@@ -120,6 +121,7 @@ int32_t dspd_rclient_init(struct dspd_rclient *client, int32_t streams)
   client->bparams.client = -1;
   client->bparams.device = -1;
   client->streams = streams;
+  client->mq_fd = -1;
   client->init = true;
   return 0;
 }
@@ -314,10 +316,13 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
 	} else
 	{
 	  dspd_conn_delete(client->bparams.conn);
+	  if ( client->mq_fd >= 0 )
+	    close(client->mq_fd);
 	}
       client->bparams.conn = NULL;
       client->bparams.client = -1;
       client->bparams.device = -1;
+      client->mq_fd = -1;
     }
   memset(client, 0, sizeof(*client));
 }
@@ -1063,8 +1068,14 @@ int32_t dspd_rclient_write(struct dspd_rclient *client,
 {
   uint32_t offset = 0;
   int32_t ret = 0;
+  bool notify;
   if ( length > INT32_MAX )
     length = INT32_MAX; //Should not happen
+  if ( client->mq_fd >= 0 )
+    notify = dspd_rclient_avail(client, DSPD_PCM_SBIT_PLAYBACK) == client->playback.params.bufsize;
+  else
+    notify = false;
+
   while ( offset < length )
     {
       ret = rclient_write(client, 
@@ -1078,6 +1089,11 @@ int32_t dspd_rclient_write(struct dspd_rclient *client,
     {
       client->playback_xfer = true;
       ret = offset;
+      if ( notify )
+	(void)mq_send(client->mq_fd, 
+		      (const char*)&client->notification, 
+		      sizeof(client->notification),
+		      0);
     }
   return ret;
 }
@@ -2367,5 +2383,47 @@ const struct dspd_cli_params *dspd_rclient_get_hw_params(const struct dspd_rclie
       else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
 	ret = &client->capture.params;
     } 
+  return ret;
+}
+
+int32_t dspd_rclient_set_excl(struct dspd_rclient *client, int32_t flags)
+{
+  
+  int32_t ret = -EBADFD;
+  struct dspd_lock_result res;
+  size_t br;
+  if ( client->bparams.conn != NULL && client->bparams.device >= 0 && client->bparams.client >= 0 &&
+       client->mq_fd < 0 )
+    {
+      ret = dspd_rclient_ctl(client,
+			     DSPD_SCTL_CLIENT_LOCK,
+			     &flags,
+			     sizeof(flags),
+			     &res,
+			     sizeof(res),
+			     &br);
+      if ( ret == 0 )
+	{
+	  if ( br == sizeof(res) )
+	    {
+	      if ( *((int32_t*)client->bparams.conn) == DSPD_OBJ_TYPE_DAEMON_CTX )
+		client->mq_fd = res.fd;
+	      else
+		client->mq_fd = dspd_conn_recv_fd(client->bparams.conn);
+	      if ( client->mq_fd >= 0 )
+		{
+		  client->notification.client = client->bparams.client;
+		  client->notification.flags = flags;
+		  client->notification.cookie = res.cookie;
+		} else
+		{
+		  ret = -EPROTO;
+		}
+	    } else
+	    {
+	      ret = -EPROTO;
+	    }
+	}
+    }
   return ret;
 }

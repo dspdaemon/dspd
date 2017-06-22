@@ -1048,6 +1048,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   int32_t defaultdev = -1;
   snd_config_iterator_t cfgi, next;
   char hwdev[32];
+  bool excl = false;
   *pcmp = NULL;
   dspd = calloc(1, sizeof(*dspd));
   if ( ! dspd )
@@ -1111,6 +1112,9 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 	} else if ( strcmp(id, "hookmode") == 0 )
 	{
 	  hookmode = snd_config_get_bool(n);
+	} else if ( strcmp(id, "exclusive") == 0 )
+	{
+	  excl = snd_config_get_bool(n);
 	}
     }
   if ( subdevice > 0 && device >= 0 )
@@ -1238,10 +1242,35 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 			sizeof(dspd->client_stream),
 			&br);
 
-  if ( err < 0 )
+  if ( err )
     goto error;
 
+  //Create a reservation on the device
+  err = dspd_stream_ctl(dspd->conn,
+			dspd->client_stream,
+			DSPD_SCTL_CLIENT_RESERVE,
+			&dspd->device,
+			sizeof(dspd->device),
+			NULL,
+			0,
+			&br);
+  if ( err )
+    goto error;
 
+  
+  struct dspd_rclient_bindparams bparams = { 0 };
+  bparams.client = dspd->client_stream;
+  bparams.conn = dspd->conn;
+  bparams.device = dspd->device;
+  err = dspd_rclient_bind(&dspd->client, &bparams);
+  if ( err < 0 )
+    goto error;
+  if ( excl )
+    {
+      err = dspd_rclient_set_excl(&dspd->client, DSPD_DEV_LOCK_EXCL|DSPD_DEV_LOCK_LATENCY);
+      if ( err < 0 )
+	goto error;
+    }
 
   err = dspd_rclient_enable_pollfd(&dspd->client, 1);
   if ( err < 0 )

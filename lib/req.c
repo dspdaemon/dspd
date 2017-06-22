@@ -601,7 +601,9 @@ int dspd_stream_ctl(void    *context, //DSPD object, such as dspd_dctx
     {
       ret = -EINVAL;
     }
- 
+  if ( ret > 0 )
+    ret *= -1;
+
   return ret;
 }
 		    
