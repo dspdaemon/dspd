@@ -329,18 +329,31 @@ int32_t dspd_src_new(dspd_src_t *newsrc, int quality, int channels)
 {
   float r, q;
   struct dspd_src_info info;
-
+  current_ops->info(&info);
   //Get default value.
   if ( quality == 0 )
-    quality = dspd_src_get_default_quality();
-
-  //Quality as a percentage if the value is negative.
-  if ( quality < 0 )
     {
-      q = (quality * -1.0) / 100.0;
+      quality = dspd_src_get_default_quality();
+    } else if ( quality == 1 )
+    {
+      quality = info.min_quality;
+    } else if ( quality == 100 )
+    {
+      quality = info.max_quality;
+    } else if ( quality < 0 )
+    {
+      quality *= -1;
+      if ( quality > info.max_quality )
+	quality = info.max_quality;
+      else if ( quality < info.min_quality )
+	quality = info.min_quality;
+    } else
+    {
+      q = quality / 100.0;
       if ( q > 1.0 )
 	q = 1.0;
-      current_ops->info(&info);
+      
+      
       r = info.max_quality - info.min_quality;
       r *= q;
       quality = info.min_quality + r;

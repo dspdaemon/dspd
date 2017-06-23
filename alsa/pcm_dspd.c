@@ -115,6 +115,7 @@ typedef struct _snd_pcm_dspd {
   bool dead;
   bool excl;
   size_t min_periods;
+  long src_quality;
 } snd_pcm_dspd_t;
 
 static void dspd_event_flags_changed(void *arg, uint32_t *flags)
@@ -597,6 +598,8 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
     {
       assert(dspd->stream == DSPD_PCM_SBIT_PLAYBACK || dspd->stream == DSPD_PCM_SBIT_CAPTURE);
     }
+
+  cp.src_quality = dspd->src_quality;
  
   ret = dspd_rclient_set_hw_params(&dspd->client, &hwp);
   if ( ret )
@@ -1119,6 +1122,14 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 	} else if ( strcmp(id, "exclusive") == 0 )
 	{
 	  excl = snd_config_get_bool(n);
+	} else if ( strcmp(id, "quality") == 0 )
+	{
+	  if ( snd_config_get_integer(n, &dspd->src_quality) < 0 )
+	    {
+	      SNDERR("Invalid type for %s", id);
+	      err = -EINVAL;
+	      goto error;
+	    }
 	}
     }
   if ( subdevice > 0 && device >= 0 )

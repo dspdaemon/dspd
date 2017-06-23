@@ -394,7 +394,7 @@ static int32_t dspd_stream_setsrc(struct dspd_client *cli, bool always_realloc)
 	      cli->playback_src.src = NULL;
 	    } else
 	    {
-	      ret = dspd_src_new(&cli->playback_src.src, 0, cli->playback_src.channels);
+	      ret = dspd_src_new(&cli->playback_src.src, cli->playback.params.src_quality, cli->playback_src.channels);
 	      if ( ret )
 		return ret;
 	    }
@@ -441,7 +441,7 @@ static int32_t dspd_stream_setsrc(struct dspd_client *cli, bool always_realloc)
 	      cli->capture_src.src = NULL;
 	    } else
 	    {
-	      ret = dspd_src_new(&cli->capture_src.src, 0, cli->capture_src.channels);
+	      ret = dspd_src_new(&cli->capture_src.src, cli->capture.params.src_quality, cli->capture_src.channels);
 	      if ( ret )
 		return ret;
 	    }
