@@ -4,17 +4,47 @@ it then go ahead and use it.
 
 General Information
 ===================
-DSPD is a Linux sound daemon that tries to emulate one or more sound cards that support
-multiple streams.  It isn't really complete right now but it works well enough
-that I don't need dmix or anything like that anymore.  This software is for Linux only,
+DSPD is a Linux sound daemon that emulates a sound card that supports multiple
+streams (can be opened and used by multiple applications at the same time).  Simultaneous
+use of multiple devices is supported.  It isn't really complete right now but it works well enough
+that I don't need dmix or any other software mixers.  This software is for Linux only,
 with no compromises for any other operating systems.
 
-So far it supports clients for OSSv4, ALSA, and sndio (based on version 1.0.1) as clients.  
+So far it supports OSSv4, ALSA, and sndio (based on version 1.0.1) for clients applications.
 ALSA is the only supported hardware interface for the server.
 
 So far this has been tested with ESS Allegro, HDA Intel (Nvidia, Intel, and
 AMD chipsets), Nvidia AC97, Creative Labs USB, and Griffin Firewave cards.
 
+
+Features
+========
+*Allows multiple applications to play and record simultaneously
+
+*Hardware device hooking so applications can open hw:0, hw:1, etc and
+ dspd will route the output to the appropriate device.  Anything that
+ can detect existing hardware with udev or ALSA APIs can usually open 
+ the equivalent dspd device and get the correct input or output.
+
+*OSSv4 and OSS/Free emulation, including /dev/mixer support
+
+*Network audio with sndio protocol
+
+*Reduced glitches since the audio engine is designed to be preempted
+ and work with a CPU that is barely fast enough.
+
+*Works with existing APIs.  No new public APIs.  If an application
+ supports OSS (especially OSSv4), ALSA, or sndio it will almost
+ always work.
+
+*Simple configuration.  All options should have sane defaults and
+ dependencies are kept to a minimum.
+
+*Low CPU usage.  In the normal mode of operation, clients will be
+ synchronized to the system clock so that the CPU usage will not
+ drastically increase as more audio streams are played.  Clients
+ will generally use the system timer as an IRQ source and only
+ transfer audio and timestamps with shared memory.
 
 
 Dependencies
@@ -25,13 +55,16 @@ Everything else is optionally loaded from binaries.  It probably needs a
 won't work on systems too old to have a HPET, APIC, or something similar.  
 Clang and gcc compilers will both work.
 
-The following modules are supported:
+The following modules and libraries are supported:
 
 ALSA
 Speex DSP
 udev
 CUSE OSS emulation (/dev/cuse kernel interface without libfuse)
 sndio
+libsamplerate
+libcap
+
 
 
 Building
