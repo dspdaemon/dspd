@@ -193,7 +193,7 @@ static int recv_async(struct dspd_conn *conn)
 		   ((conn->header_in.flags & DSPD_REQ_FLAG_EVENT) == 0 &&
 		    conn->header_in.cmd != DSPD_DCTL_ASYNC_EVENT))
 		{
-		  return EPROTO;
+		  return -EPROTO;
 		}
 	    }
 	}
@@ -353,7 +353,7 @@ static int recv_fd(struct dspd_conn *conn, void *buf, size_t len)
   int fd = -1;
   ssize_t ret;
   if ( l < sizeof(int32_t) )
-    return EPROTO;
+    return -EPROTO;
   while ( offset < 1 )
     {
       ret = cmsg_recvfd(conn->sock_fd, 
@@ -405,7 +405,7 @@ static int recv_req(struct dspd_conn *conn, void *outbuf, size_t outbufsize)
 	{
 	  if ( (conn->header_in.len - sizeof(conn->header_in)) > sizeof(conn->data_in) )
 	    {
-	      result = EPROTO;
+	      result = -EPROTO;
 	      break;
 	    }
 	  //Receive async event (not the expected reply)
@@ -432,7 +432,7 @@ static int recv_req(struct dspd_conn *conn, void *outbuf, size_t outbufsize)
 	{
 	  if ( (conn->header_in.len - sizeof(conn->header_in)) > outbufsize )
 	    {
-	      result = EPROTO;
+	      result = -EPROTO;
 	      break;
 	    }
 
@@ -481,7 +481,7 @@ int dspd_ipc_process_messages(struct dspd_conn *conn, int timeout)
   if ( ret < 0 )
     {
       result = -errno;
-      if ( result == EAGAIN || result == EINTR )
+      if ( result == -EAGAIN || result == -EINTR )
 	result = 0;
     }
   
@@ -524,6 +524,8 @@ int dspd_conn_ctl(struct dspd_conn *conn,
 	  if ( conn->header_in.flags & DSPD_REQ_FLAG_ERROR )
 	    {
 	      ret = conn->header_in.rdata.err;
+	      if ( ret > 0 )
+		ret *= -1;
 	    } else if ( bytes_returned )
 	    {
 	      *bytes_returned = conn->header_in.len - sizeof(conn->header_in);

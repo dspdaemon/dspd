@@ -11,19 +11,6 @@
 #define DSPD_REQ_FLAG_POLLHUP 16
 #define DSPD_REQ_FLAG_EVENT   32
 
-/*struct dspd_req {
-  uint32_t len;    //Length of entire packet (actual protocol uses bit 31
-                   //to indicate that the packet contains a file descriptor)
-  uint16_t cmd;    //Command.  The server turns this into a 32 bit integer
-                   //that contains 2 flags
-  uint16_t flags;  //Flags, such as error flag or events
-  int32_t  stream; //Stream number or -1 for socket server
-  union {
-    uint32_t rlen;
-    int32_t  err;
-  } rdata;
-  char pdata[0];   //Payload
-  };*/
 
 struct dspd_req {
   uint32_t len;    //Length of entire packet (actual protocol uses bit 31
