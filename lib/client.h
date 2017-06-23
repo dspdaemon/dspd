@@ -139,7 +139,8 @@ struct dspd_client {
   struct dspd_mbx_header    *sync_start_tstamp;
   struct dspd_client_trigger_state trigger_state;
   dspd_time_t                   min_latency;
-
+  int mq_fd;
+  volatile uint32_t avail_min;
 };
 
 int32_t dspd_client_new(struct dspd_slist *list,

@@ -58,6 +58,7 @@ struct dspd_rclient {
   bool init;
   int32_t mq_fd;
   struct dspd_mq_notification notification;
+  size_t mq_msgsize;
 };
 void dspd_rclient_detach(struct dspd_rclient *client, int32_t stream);
 int32_t dspd_rclient_init(struct dspd_rclient *client, int32_t stream);

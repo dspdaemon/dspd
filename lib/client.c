@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <poll.h>
+#include <mqueue.h>
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
@@ -208,6 +209,7 @@ int32_t dspd_client_new(struct dspd_slist *list,
   cli->index = index;
   cli->list = list;
   cli->device = -1;
+  cli->mq_fd = -1;
   cli->min_latency = dspd_get_tick();
   dspd_store_float32(&cli->playback.volume, 1.0);
   dspd_store_float32(&cli->capture.volume, 1.0);
@@ -892,7 +894,7 @@ static void playback_xfer(void                            *dev,
   float volume = dspd_load_float32(&cli->playback.volume);
   uint32_t client_hwptr;
   uint64_t optr = status->appl_ptr;
-
+  uint32_t len;
 
   client_hwptr = dspd_fifo_optr(&cli->playback.fifo);
        
@@ -1066,6 +1068,17 @@ static void playback_xfer(void                            *dev,
 	  diff = status->appl_ptr - status->hw_ptr;
 	  cli->trigger_state.preferred_start = status->tstamp + (diff * sample_time);
 	  cli->trigger_state.valid = true;
+	}
+    }
+
+  if ( cli->mq_fd >= 0 )
+    {
+      if ( dspd_fifo_len(&cli->playback.fifo, &len) == 0 )
+	{
+	  if ( len >= dspd_load_uint32(&cli->avail_min) )
+	    {
+	      char c = 0;
+	      (void)mq_send(cli->mq_fd, &c, sizeof(c), 0);	    }
 	}
     }
    
@@ -1810,6 +1823,7 @@ static int32_t client_disconnect(struct dspd_rctx *context,
   ret = dspd_client_release(cli);
   cli->device_reserved = 0;
   cli->min_latency = dspd_get_tick();
+  cli->mq_fd = -1;
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_err(context, 0, ret);
 }
@@ -2558,6 +2572,7 @@ static int32_t client_lock(struct dspd_rctx *context,
 	{
 	  res.fd = r2.client_fd;
 	  res.cookie = r2.cookie;
+	  cli->mq_fd = r2.server_fd;
 	  return dspd_req_reply_fd(context,
 				   0,
 				   &res,
@@ -2566,6 +2581,37 @@ static int32_t client_lock(struct dspd_rctx *context,
 	}
     }
   return dspd_req_reply_err(context, 0, err);
+}
+
+
+static int32_t client_swparams(struct dspd_rctx *context,
+			       uint32_t      req,
+			       const void   *inbuf,
+			       size_t        inbufsize,
+			       void         *outbuf,
+			       size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  struct dspd_rclient_swparams swparams = { 0 };
+  int32_t ret;
+  if ( inbuf && inbufsize )
+    {
+      if ( inbufsize > sizeof(swparams) )
+	inbufsize = sizeof(swparams);
+      memcpy(&swparams, inbuf, sizeof(swparams));
+      dspd_store_uint32(&cli->avail_min, swparams.avail_min);
+    }
+  if ( outbuf && outbufsize )
+    {
+      swparams.avail_min = dspd_load_uint32(&cli->avail_min);
+      if ( outbufsize > sizeof(swparams) )
+	outbufsize = sizeof(swparams);
+      ret = dspd_req_reply_buf(context, 0, &swparams, outbufsize);
+    } else
+    {
+      ret = dspd_req_reply_err(context, 0, 0);
+    }
+  return ret;
 }
 
 static const struct dspd_req_handler client_req_handlers[] = {
@@ -2708,6 +2754,14 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .rflags = 0,
     .inbufsize = sizeof(int32_t),
     .outbufsize = sizeof(struct dspd_lock_result),
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_SWPARAMS)] = {
+    .handler = client_swparams,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+
   },
 };
 

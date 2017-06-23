@@ -1539,6 +1539,13 @@ int32_t dspd_rclient_pollfd(struct dspd_rclient *client, uint32_t count, struct 
 	      ret++;
 	    }
 	}
+      if ( count > 3 && client->mq_fd >= 0 )
+	{
+	  pfd[ret].events = POLLIN;
+	  pfd[ret].revents = 0;
+	  pfd[ret].fd = client->mq_fd;
+	  ret++;
+	}
     }
   return ret;
 }
@@ -1552,6 +1559,8 @@ int32_t dspd_rclient_pollfd_count(struct dspd_rclient *client)
     ret = 3;
   else
     ret = 2;
+  if ( client->mq_fd >= 0 )
+    ret++;
   return ret;
 }
 
@@ -1667,8 +1676,11 @@ int32_t dspd_rclient_poll_revents(struct dspd_rclient *client, struct pollfd *pf
   struct pollfd *p;
   int32_t ret;
   uint32_t avail;
-  int en = 0, fd = dspd_ctx_get_fd(client->bparams.conn);
 
+  unsigned u;
+  int en = 0, fd = dspd_ctx_get_fd(client->bparams.conn);
+  char *tmp;
+  tmp = alloca(client->mq_msgsize);
   if ( client->stream_poll_events & DSPD_PCM_SBIT_PLAYBACK )
     revents |= POLLOUT;
   if ( client->stream_poll_events & DSPD_PCM_SBIT_CAPTURE )
@@ -1731,6 +1743,15 @@ int32_t dspd_rclient_poll_revents(struct dspd_rclient *client, struct pollfd *pf
 	    revents |= POLLERR;
 	  else if ( p->revents & POLLIN )
 	    revents |= POLLMSG;
+	} else if ( client->mq_fd >= 0 && p->fd == client->mq_fd )
+	{
+	  
+	  if ( p->revents & POLLIN )
+	    {
+	      if ( mq_receive(client->mq_fd, tmp, client->mq_msgsize, &u) < 0 && errno != EAGAIN )
+		revents |= POLLHUP;
+	    }
+
 	}
     }
   //Make sure the poll event is enabled if some io is possible
@@ -2134,8 +2155,20 @@ int32_t dspd_rclient_reset(struct dspd_rclient *client, int32_t stream)
 
 int32_t dspd_rclient_set_avail_min(struct dspd_rclient *client, uint32_t avail_min)
 {
-  client->swparams.avail_min = avail_min;
-  return 0;
+  int ret;
+  struct dspd_rclient_swparams swp = client->swparams;
+  swp.avail_min = avail_min;
+  ret = dspd_rclient_ctl(client,
+			 DSPD_SCTL_CLIENT_SWPARAMS,
+			 &swp,
+			 sizeof(swp),
+			 NULL,
+			 0,
+			 NULL);
+  if ( ret == 0 )
+    client->swparams.avail_min = avail_min;
+  return ret;
+  
 }
 
 /*
@@ -2391,7 +2424,10 @@ int32_t dspd_rclient_set_excl(struct dspd_rclient *client, int32_t flags)
   
   int32_t ret = -EBADFD;
   struct dspd_lock_result res;
-  size_t br;
+  size_t br, i;
+  char c;
+  unsigned u;
+  struct mq_attr attr;
   if ( client->bparams.conn != NULL && client->bparams.device >= 0 && client->bparams.client >= 0 &&
        client->mq_fd < 0 )
     {
@@ -2415,6 +2451,19 @@ int32_t dspd_rclient_set_excl(struct dspd_rclient *client, int32_t flags)
 		  client->notification.client = client->bparams.client;
 		  client->notification.flags = flags;
 		  client->notification.cookie = res.cookie;
+		  //Empty the queue just in case there are leftover events from another
+		  //client.
+		  for ( i = 0; i < 32; i++ )
+		    {
+		      if ( mq_receive(client->mq_fd, &c, sizeof(c), &u) < 0 )
+			break;
+		    }
+
+		  if ( mq_getattr(client->mq_fd, &attr) == 0 )
+		    client->mq_msgsize = attr.mq_msgsize;
+		  else
+		    client->mq_msgsize = 1;
+		  
 		} else
 		{
 		  ret = -EPROTO;
