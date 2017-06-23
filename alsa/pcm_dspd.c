@@ -113,7 +113,8 @@ typedef struct _snd_pcm_dspd {
   snd_pcm_uframes_t appl_ptr;
 
   bool dead;
-
+  bool excl;
+  size_t min_periods;
 } snd_pcm_dspd_t;
 
 static void dspd_event_flags_changed(void *arg, uint32_t *flags)
@@ -543,9 +544,9 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
     cp.fragsize = dspd_get_fragsize(&dspd->devinfo.playback, cp.rate, frames);
   else
     cp.fragsize = dspd_get_fragsize(&dspd->devinfo.capture, cp.rate, frames);
-  n = cp.fragsize * MIN_PERIODS;
+  n = cp.fragsize * dspd->min_periods;
   if ( n > maxbuf )
-    cp.fragsize = maxbuf / MIN_PERIODS;
+    cp.fragsize = maxbuf / dspd->min_periods;
   cp.latency = cp.fragsize;
  
 
@@ -553,8 +554,8 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
   if ( ret )
     goto out;
   cp.bufsize = frames;
-  if ( cp.bufsize < (cp.fragsize * MIN_PERIODS) )
-    cp.bufsize = cp.fragsize * MIN_PERIODS;
+  if ( cp.bufsize < (cp.fragsize * dspd->min_periods) )
+    cp.bufsize = cp.fragsize * dspd->min_periods;
   if ( cp.bufsize % cp.fragsize )
     {
       ret = cp.bufsize / cp.fragsize;
@@ -1009,19 +1010,22 @@ static int dspd_hw_constraint(snd_pcm_dspd_t *dspd)
 
   
   f = params->rate / min_fragtime;
-  if ( f < MIN_PERIODS )
-    f = MIN_PERIODS;
+  if ( f < dspd->min_periods )
+    f = dspd->min_periods;
   else if ( f > MAX_PERIODS )
     f = MAX_PERIODS;
+
+
+
   err = snd_pcm_ioplug_set_param_minmax(&dspd->io,
 					SND_PCM_IOPLUG_HW_PERIODS,
-					MIN_PERIODS,
+					dspd->min_periods,
 					f);
 
   if ( err < 0 )
     return err;
 
-  minb = MIN_PERIODS * min_fragsize;
+  minb = dspd->min_periods * min_fragsize;
   if ( minb < MINBUF )
     minb = MINBUF;
   maxb = max_rate * max_fmtlen * max_chan;
@@ -1283,8 +1287,11 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
     goto error;
 
 
-  
-    
+  dspd->excl = excl;
+  /*if ( dspd->excl )
+    dspd->min_periods = 2;
+    else*/
+  dspd->min_periods = MIN_PERIODS;
 
   *pcmp = dspd->io.pcm;
 

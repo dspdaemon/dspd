@@ -1075,10 +1075,12 @@ static void playback_xfer(void                            *dev,
     {
       if ( dspd_fifo_len(&cli->playback.fifo, &len) == 0 )
 	{
-	  if ( len >= dspd_load_uint32(&cli->avail_min) )
+	  n = dspd_load_uint32(&cli->avail_min);
+	  if ( n > 0 && len >= n )
 	    {
 	      char c = 0;
-	      (void)mq_send(cli->mq_fd, &c, sizeof(c), 0);	    }
+	      (void)mq_send(cli->mq_fd, &c, sizeof(c), 0);	    
+	    }
 	}
     }
    
