@@ -45,35 +45,13 @@ static int src_q2t(int quality)
   };
   size_t len = sizeof(q) / sizeof(q[0]);
   quality--;
-  if ( quality > len )
+  if ( quality >= len )
     quality = len - 1;
   else if ( quality < 0 )
     quality = 0;
   return q[quality];
 }
 
-/*static int src_t2q(int type)
-{
-  int t[] = {
-    SRC_ZERO_ORDER_HOLD, 
-    SRC_LINEAR,
-    SRC_SINC_FASTEST, 
-    SRC_SINC_MEDIUM_QUALITY, 
-    SRC_SINC_BEST_QUALITY
-  };
-  size_t len = sizeof(t) / sizeof(t[0]);
-  size_t i;
-  int ret = -1;
-  for ( i = 0; i < len; i++ )
-    {
-      if ( t[i] == type )
-	{
-	  ret = i;
-	  break;
-	}
-    }
-  return ret;
-  }*/
 
 static int32_t src_init_cb(void)
 {
