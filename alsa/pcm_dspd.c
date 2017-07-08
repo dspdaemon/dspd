@@ -91,7 +91,7 @@ pcm.realhw {
  */
 
 typedef struct _snd_pcm_dspd {
-  struct dspd_rclient client;
+  struct dspd_rclient *client;
   struct dspd_conn   *conn;
   int32_t             stream;
   int32_t             frame_bytes;
@@ -124,7 +124,7 @@ static void dspd_event_flags_changed(void *arg, uint32_t *flags)
   if ( (*flags) & DSPD_REQ_FLAG_POLLHUP )
     {
       dspd->dead = true;
-      dspd_force_poll_events(&dspd->client, POLLERR|POLLHUP);
+      dspd_force_poll_events(dspd->client, POLLERR|POLLHUP);
     }
   *flags = 0;
 }
@@ -150,9 +150,9 @@ static int dspd_update_pointer(snd_pcm_dspd_t *dspd)
     } else if ( p != dspd->appl_ptr )
     {
       if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
-	ret = dspd_rclient_set_write_ptr(&dspd->client, p);
+	ret = dspd_rclient_set_write_ptr(dspd->client, p);
       else
-	ret = dspd_rclient_set_read_ptr(&dspd->client, p);
+	ret = dspd_rclient_set_read_ptr(dspd->client, p);
       dspd->appl_ptr = p;
     }
   return ret;
@@ -163,24 +163,24 @@ static int dspd_alsa_start(snd_pcm_ioplug_t *io)
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret;
   size_t br;
-  if ( dspd_rclient_get_streams(&dspd->client) != dspd->stream )
+  if ( dspd_rclient_get_streams(dspd->client) != dspd->stream )
     return -EBADFD;
 
-  ret = dspd_rclient_get_error(&dspd->client, dspd->stream);
+  ret = dspd_rclient_get_error(dspd->client, dspd->stream);
   //Don't send an extra trigger because it might cause a glitch.
-  if ( ret == 0 && dspd->client.trigger != dspd->stream )
+  if ( ret == 0 && dspd_rclient_get_trigger(dspd->client) != dspd->stream )
     {
       //Here is where it is possible to get the real monotonic trigger timestamp
       //but ALSA won't allow it to be used.
-      ret = dspd_rclient_ctl(&dspd->client,
+      ret = dspd_rclient_ctl(dspd->client,
 			     DSPD_SCTL_CLIENT_START,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
 			     NULL,
 			     0,
 			     &br);
-      if ( ret == 0 )
-	dspd->client.trigger = dspd->stream;
+      //if ( ret == 0 )
+      //dspd->client.trigger = dspd->stream;
     }
   if ( ret == 0 )
     ret = dspd_update_pointer(dspd);
@@ -193,13 +193,13 @@ static int dspd_stop(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret;
-  if ( dspd->client.trigger != dspd->stream ||
-       dspd_rclient_get_streams(&dspd->client) != dspd->stream )
+  if ( dspd_rclient_get_trigger(dspd->client) != dspd->stream ||
+       dspd_rclient_get_streams(dspd->client) != dspd->stream )
     {
       ret = -EBADFD;
     } else
     {
-      ret = dspd_rclient_reset(&dspd->client, dspd->stream);
+      ret = dspd_rclient_reset(dspd->client, dspd->stream);
       if ( ret == 0 )
 	ret = dspd_update_pointer(dspd);
     }
@@ -211,14 +211,14 @@ static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret;
   size_t br;
-  if ( dspd->client.trigger != dspd->stream ||
-       dspd_rclient_get_streams(&dspd->client) != dspd->stream )
+  if ( dspd_rclient_get_trigger(dspd->client) != dspd->stream ||
+       dspd_rclient_get_streams(dspd->client) != dspd->stream )
     return -EBADFD;
   dspd_update_pointer(dspd);
 
   if ( enable )
     {
-      ret = dspd_rclient_ctl(&dspd->client,
+      ret = dspd_rclient_ctl(dspd->client,
 			     DSPD_SCTL_CLIENT_START,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
@@ -227,7 +227,7 @@ static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
 			     &br);
     } else
     {
-      ret = dspd_rclient_ctl(&dspd->client,
+      ret = dspd_rclient_ctl(dspd->client,
 			     DSPD_SCTL_CLIENT_STOP,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
@@ -235,8 +235,8 @@ static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
 			     0,
 			     &br);
     }
-  if ( ret == 0 )
-    dspd->client.trigger = 0;
+  //if ( ret == 0 )
+  //dspd->client.trigger = 0;
   
   return ret;
 }
@@ -246,11 +246,11 @@ static int dspd_alsa_resume(snd_pcm_ioplug_t *io)
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret;
   size_t br;
-  ret = dspd_rclient_get_error(&dspd->client, dspd->stream);
+  ret = dspd_rclient_get_error(dspd->client, dspd->stream);
   //Don't send an extra trigger because it might theoretically cause a glitch.
   if ( ret == 0 )
     {
-      ret = dspd_rclient_ctl(&dspd->client,
+      ret = dspd_rclient_ctl(dspd->client,
 			     DSPD_SCTL_CLIENT_START,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
@@ -259,7 +259,7 @@ static int dspd_alsa_resume(snd_pcm_ioplug_t *io)
 			     &br);
       if ( ret == 0 )
 	{
-	  dspd->client.trigger = dspd->stream;
+	  //dspd->client.trigger = dspd->stream;
 	  ret = dspd_update_pointer(dspd);
 	}
     }
@@ -279,12 +279,14 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
   int32_t avail;
   int err;
   bool waited = false;
-  if ( dspd_rclient_get_streams(&dspd->client) != DSPD_PCM_SBIT_CAPTURE )
+  const struct dspd_rclient_swparams *swparams;
+  if ( dspd_rclient_get_streams(dspd->client) != DSPD_PCM_SBIT_CAPTURE )
     return -EBADFD;
+  swparams = dspd_rclient_get_sw_params(dspd->client);
 
-  if ( size >= dspd->client.swparams.start_threshold )
+  if ( size >= swparams->start_threshold )
     {
-      if ( dspd->client.trigger == 0 )
+      if ( dspd_rclient_get_trigger(dspd->client) == 0 )
 	{
 	  ret = dspd_alsa_start(io);
 	  if ( ret < 0 )
@@ -304,7 +306,7 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
   while ( pos < size )
     {
       
-      ret = dspd_rclient_read(&dspd->client, &buf[pos*dspd->frame_bytes], size - pos);
+      ret = dspd_rclient_read(dspd->client, &buf[pos*dspd->frame_bytes], size - pos);
       if ( ret < 0 )
 	{
 	  break;
@@ -320,7 +322,7 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
 	      break;
 	  if ( io->nonblock == 0 && pos < size )
 	    {
-	      ret = dspd_rclient_wait(&dspd->client, dspd->stream);
+	      ret = dspd_rclient_wait(dspd->client, dspd->stream);
 	      if ( ret < 0 && ret != -EINTR && ret != -EAGAIN )
 		break;
 	      waited = true;
@@ -338,22 +340,22 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
   if ( ret > 0 )
     {
       dspd->appl_ptr += ret;
-      avail = dspd_rclient_avail(&dspd->client, DSPD_PCM_SBIT_CAPTURE);
+      avail = dspd_rclient_avail(dspd->client, DSPD_PCM_SBIT_CAPTURE);
       if ( avail >= 0 )
 	{
-	  if ( avail >= dspd->client.swparams.avail_min )
+	  if ( avail >= swparams->avail_min )
 	    {
-	      dspd_rclient_poll_notify(&dspd->client, DSPD_PCM_SBIT_CAPTURE);
+	      dspd_rclient_poll_notify(dspd->client, DSPD_PCM_SBIT_CAPTURE);
 	    } else
 	    {
-	      dspd_rclient_poll_clear(&dspd->client, DSPD_PCM_SBIT_CAPTURE);
-	      dspd_rclient_status(&dspd->client, dspd->stream, NULL);
-	      dspd_update_timer(&dspd->client, dspd->stream);
+	      dspd_rclient_poll_clear(dspd->client, DSPD_PCM_SBIT_CAPTURE);
+	      dspd_rclient_status(dspd->client, dspd->stream, NULL);
+	      dspd_update_timer(dspd->client, dspd->stream);
 	    }
 	}
     } else if ( ret != -EAGAIN )
     {
-      dspd_rclient_poll_notify(&dspd->client, DSPD_PCM_SBIT_CAPTURE);
+      dspd_rclient_poll_notify(dspd->client, DSPD_PCM_SBIT_CAPTURE);
     }
   return ret;
 }
@@ -372,10 +374,11 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
   int32_t avail;
   int err;
   bool waited = false;
-  
-  if ( dspd_rclient_get_streams(&dspd->client) != DSPD_PCM_SBIT_PLAYBACK )
+  const struct dspd_rclient_swparams *swparams;
+  if ( dspd_rclient_get_streams(dspd->client) != DSPD_PCM_SBIT_PLAYBACK )
     return -EBADFD;
 
+  swparams = dspd_rclient_get_sw_params(dspd->client);
   buf = (char *)areas->addr + (areas->first + areas->step * offset) / 8;
 
   err = dspd_update_pointer(dspd);
@@ -384,7 +387,7 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
   
   while ( pos < size )
     {
-      ret = dspd_rclient_write(&dspd->client, &buf[pos*dspd->frame_bytes], size - pos);
+      ret = dspd_rclient_write(dspd->client, &buf[pos*dspd->frame_bytes], size - pos);
 
       
 
@@ -396,9 +399,9 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
 	  waited = false;
 	  pos += ret;
 	  dspd->xfer += ret;
-	  if ( dspd->xfer >= dspd->client.swparams.start_threshold )
+	  if ( dspd->xfer >= swparams->start_threshold )
 	    {
-	      if ( dspd->client.trigger == 0 )
+	      if ( dspd_rclient_get_trigger(dspd->client) == 0 )
 		{
 		  ret = dspd_alsa_start(io);
 		  if ( ret < 0 )
@@ -413,7 +416,7 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
 
 	  if ( io->nonblock == 0 && pos < offset )
 	    {
-	      ret = dspd_rclient_wait(&dspd->client, dspd->stream);
+	      ret = dspd_rclient_wait(dspd->client, dspd->stream);
 	      if ( ret < 0 && ret != -EINTR && ret != -EAGAIN )
 		break;
 	      waited = true;
@@ -431,22 +434,22 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
   if ( ret > 0 )
     {
       dspd->appl_ptr += ret;
-      avail = dspd_rclient_avail(&dspd->client, DSPD_PCM_SBIT_PLAYBACK);
+      avail = dspd_rclient_avail(dspd->client, DSPD_PCM_SBIT_PLAYBACK);
       if ( avail >= 0 )
 	{
-	  if ( avail >= dspd->client.swparams.avail_min )
+	  if ( avail >= swparams->avail_min )
 	    {
-	      dspd_rclient_poll_notify(&dspd->client, DSPD_PCM_SBIT_PLAYBACK);
+	      dspd_rclient_poll_notify(dspd->client, DSPD_PCM_SBIT_PLAYBACK);
 	    } else
 	    {
-	      dspd_rclient_poll_clear(&dspd->client, DSPD_PCM_SBIT_PLAYBACK);
-	      dspd_rclient_status(&dspd->client, dspd->stream, NULL);
-	      dspd_update_timer(&dspd->client, dspd->stream);
+	      dspd_rclient_poll_clear(dspd->client, DSPD_PCM_SBIT_PLAYBACK);
+	      dspd_rclient_status(dspd->client, dspd->stream, NULL);
+	      dspd_update_timer(dspd->client, dspd->stream);
 	    }
 	}
     } else if ( ret != -EAGAIN )
     {
-      dspd_rclient_poll_notify(&dspd->client, DSPD_PCM_SBIT_PLAYBACK);
+      dspd_rclient_poll_notify(dspd->client, DSPD_PCM_SBIT_PLAYBACK);
     }
   return ret;
 }
@@ -456,20 +459,20 @@ static snd_pcm_sframes_t dspd_pointer(snd_pcm_ioplug_t *io)
   snd_pcm_dspd_t *dspd = io->private_data;
   int32_t ret;
   uint32_t ptr;
-  if ( dspd_rclient_get_streams(&dspd->client) == 0 )
+  if ( dspd_rclient_get_streams(dspd->client) == 0 )
     {
       ret = -EBADFD;
-    } else if ( io->state == SND_PCM_STATE_XRUN && dspd->stream == dspd->client.trigger )
+    } else if ( io->state == SND_PCM_STATE_XRUN && dspd->stream == dspd_rclient_get_trigger(dspd->client) )
     {
       //xrun only if it was first triggered
-      dspd_rclient_poll_notify(&dspd->client, dspd->stream);
+      dspd_rclient_poll_notify(dspd->client, dspd->stream);
       ret = -EPIPE;
     } else
     {
       ret = dspd_update_pointer(dspd);
       if ( ret == 0 )
 	{
-	  ret = dspd_rclient_get_hw_ptr(&dspd->client, dspd->stream, &ptr);
+	  ret = dspd_rclient_get_hw_ptr(dspd->client, dspd->stream, &ptr);
 	  if ( ret == 0 )
 	    {
 	      ret = ptr % io->buffer_size;
@@ -477,7 +480,7 @@ static snd_pcm_sframes_t dspd_pointer(snd_pcm_ioplug_t *io)
 	    {
 	      snd_pcm_ioplug_set_state(io, SND_PCM_STATE_XRUN);
 	      ret = ptr % io->buffer_size;
-	      dspd_rclient_poll_notify(&dspd->client, dspd->stream);
+	      dspd_rclient_poll_notify(dspd->client, dspd->stream);
 	    }
 	} else
 	{
@@ -493,7 +496,7 @@ static int dspd_alsa_close(snd_pcm_ioplug_t *io)
   snd_pcm_dspd_t *dspd = io->private_data;
   if ( io->name != default_plugin_name )
     io->name = default_plugin_name;
-  dspd_rclient_destroy(&dspd->client);
+  dspd_rclient_delete(dspd->client);
   dspd_conn_delete(dspd->conn);
   free(dspd);
   return 0;
@@ -601,11 +604,11 @@ int dspd_hw_params(snd_pcm_ioplug_t *io,
 
   cp.src_quality = dspd->src_quality;
  
-  ret = dspd_rclient_set_hw_params(&dspd->client, &hwp);
+  ret = dspd_rclient_set_hw_params(dspd->client, &hwp);
   if ( ret )
     goto out;
 
-  p = dspd_rclient_get_hw_params(&dspd->client, dspd->stream);
+  p = dspd_rclient_get_hw_params(dspd->client, dspd->stream);
   if ( ! p )
     {
       ret = -EINVAL;
@@ -652,33 +655,33 @@ int dspd_sw_params(snd_pcm_ioplug_t *io,
   int err;
   snd_pcm_uframes_t val;
   snd_pcm_dspd_t *dspd = io->private_data;
-
+  struct dspd_rclient_swparams swparams = *dspd_rclient_get_sw_params(dspd->client);
   err = snd_pcm_sw_params_get_avail_min(params, &val);
   if ( err != 0 )
     return err;
-  dspd->client.swparams.avail_min = val;
+  swparams.avail_min = val;
   
   err = snd_pcm_sw_params_get_start_threshold(params, &val);
   if ( err != 0 )
     return err;
-  dspd->client.swparams.start_threshold = val;
+  swparams.start_threshold = val;
 
   err = snd_pcm_sw_params_get_stop_threshold(params, &val);
   if ( err != 0 )
     return err;
-  dspd->client.swparams.stop_threshold = val;
-  return 0;
+  swparams.stop_threshold = val;
+  return dspd_rclient_set_sw_params(dspd->client, &swparams);
 }
 
 static int dspd_prepare(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret;
-  ret = dspd_rclient_reset(&dspd->client, dspd->stream);
+  ret = dspd_rclient_reset(dspd->client, dspd->stream);
   if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK && ret == 0 )
-    dspd_rclient_poll_notify(&dspd->client, dspd->stream);
+    dspd_rclient_poll_notify(dspd->client, dspd->stream);
   else
-    dspd_rclient_poll_notify(&dspd->client, 0);
+    dspd_rclient_poll_notify(dspd->client, 0);
   return ret;
 }
 
@@ -686,13 +689,13 @@ static int dspd_drain(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
 
-  if ( dspd->stream != dspd->client.trigger )
+  if ( dspd->stream != dspd_rclient_get_trigger(dspd->client) )
     {
       int ret = dspd_alsa_start(io);
       if ( ret < 0 )
 	return ret;
     }
-  return dspd_rclient_drain(&dspd->client);
+  return dspd_rclient_drain(dspd->client);
 }
 
 static int dspd_delay(snd_pcm_ioplug_t *io, snd_pcm_sframes_t *delayp)
@@ -700,18 +703,18 @@ static int dspd_delay(snd_pcm_ioplug_t *io, snd_pcm_sframes_t *delayp)
   snd_pcm_dspd_t *dspd = io->private_data;
   int ret, avail;
   struct dspd_pcmcli_status status;
-  if ( ! dspd->client.trigger == dspd->stream )
+  if ( dspd_rclient_get_trigger(dspd->client) != dspd->stream )
     return -EBADFD;
   ret = dspd_update_pointer(dspd);
   if ( ret < 0 )
     return ret;
-  ret = dspd_rclient_avail(&dspd->client, dspd->stream);
+  ret = dspd_rclient_avail(dspd->client, dspd->stream);
   if ( ret < 0 )
     return ret;
   if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK && ret == io->buffer_size )
     return -EIO;
   avail = ret;
-  ret = dspd_rclient_status(&dspd->client, dspd->stream, &status);
+  ret = dspd_rclient_status(dspd->client, dspd->stream, &status);
   if ( status.delay < 0 && dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
     {
       if ( avail > 0 && avail < io->buffer_size )
@@ -745,7 +748,7 @@ static int dspd_poll_revents(snd_pcm_ioplug_t *io,
   snd_pcm_dspd_t *dspd = io->private_data;
   int ev;
   dspd_update_pointer(dspd);
-  ev = dspd_rclient_poll_revents(&dspd->client, pfd, nfds);
+  ev = dspd_rclient_poll_revents(dspd->client, pfd, nfds);
   if ( ev & POLLMSG )
     dspd_ipc_process_messages(dspd->conn, 1);
   if ( dspd->dead )
@@ -762,14 +765,14 @@ static int dspd_poll_descriptors(snd_pcm_ioplug_t *io,
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   dspd_update_pointer(dspd);
-  return dspd_rclient_pollfd(&dspd->client, space, pfd);
+  return dspd_rclient_pollfd(dspd->client, space, pfd);
 }
 
 static int dspd_poll_descriptors_count(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   dspd_update_pointer(dspd);
-  return dspd_rclient_pollfd_count(&dspd->client);
+  return dspd_rclient_pollfd_count(dspd->client);
 }
 
 static snd_pcm_chmap_t *dspd_get_chmap(snd_pcm_ioplug_t *io)
@@ -1142,7 +1145,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 
   dspd_time_init();
 
-  err = dspd_rclient_init(&dspd->client, dspd->stream);
+  err = dspd_rclient_new(&dspd->client, dspd->stream);
   if ( err < 0 )
     goto error;
 
@@ -1277,17 +1280,17 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   bparams.client = dspd->client_stream;
   bparams.conn = dspd->conn;
   bparams.device = dspd->device;
-  err = dspd_rclient_bind(&dspd->client, &bparams);
+  err = dspd_rclient_bind(dspd->client, &bparams);
   if ( err < 0 )
     goto error;
   if ( excl )
     {
-      err = dspd_rclient_set_excl(&dspd->client, DSPD_DEV_LOCK_EXCL|DSPD_DEV_LOCK_LATENCY);
+      err = dspd_rclient_set_excl(dspd->client, DSPD_DEV_LOCK_EXCL|DSPD_DEV_LOCK_LATENCY);
       if ( err < 0 )
 	goto error;
     }
 
-  err = dspd_rclient_enable_pollfd(&dspd->client, 1);
+  err = dspd_rclient_enable_pollfd(dspd->client, 1);
   if ( err < 0 )
     goto error;
 
@@ -1314,7 +1317,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   bp.conn = dspd->conn;
   bp.client = dspd->client_stream;
   bp.device = dspd->device;
-  err = dspd_rclient_bind(&dspd->client, &bp);
+  err = dspd_rclient_bind(dspd->client, &bp);
   if ( err < 0 )
     goto error;
   
@@ -1332,6 +1335,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   free(mask);
   if ( dspd->conn )
     dspd_conn_delete(dspd->conn);
+  dspd_rclient_delete(dspd->client);
   free(dspd);
   assert(err != 0);
   if ( err > 0 )

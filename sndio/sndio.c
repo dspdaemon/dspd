@@ -1269,7 +1269,7 @@ static int client_fd_event(void *data,
 {
   struct sndio_client *cli = data;
   int32_t ret;
-  
+ 
   if ( revents & (POLLHUP|POLLRDHUP|POLLNVAL|POLLERR) )
     ret = -1;
   else if ( revents & POLLIN )

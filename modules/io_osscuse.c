@@ -95,6 +95,7 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
   struct dspd_cli_params devparams, cliparams;
   size_t maxio;
   struct dspd_fchmap map;
+  struct dspd_rclient_swparams swp = { 0 };
   if ( cli->dsp.params_set )
     return 0;
   if ( cli->mode == O_RDONLY )
@@ -139,23 +140,27 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
     cliparams.channels;
 
 
-  //FIXME: rclient and server do not support bytes or nanoseconds
+
   cliparams.latency /= cli->dsp.frame_bytes;
   cliparams.fragsize /= cli->dsp.frame_bytes;
   cliparams.bufsize /= cli->dsp.frame_bytes;
+
+  swp = *dspd_rclient_get_sw_params(cli->dsp.rclient);
 
   if ( cli->dsp.low_water )
     {
       fr = cli->dsp.low_water / cli->dsp.frame_bytes;
       if ( fr == 0 )
 	fr = 1;
-      cli->dsp.rclient.swparams.avail_min = fr;
+      swp.avail_min = fr;
     } else
     {
       //OSSv4 default is 1 fragment.
-      cli->dsp.rclient.swparams.avail_min = cli->dsp.params.latency / 
-	cli->dsp.frame_bytes;
+      swp.avail_min = cli->dsp.params.latency / cli->dsp.frame_bytes;
     }
+  ret = dspd_rclient_set_sw_params(cli->dsp.rclient, &swp);
+  if ( ret < 0 )
+    return ret * -1;
 
   struct dspd_rclient_hwparams hwp = { 0 };
 
@@ -163,16 +168,16 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
     hwp.playback_params = &cliparams;
   if ( cli->dsp.params.stream & DSPD_PCM_SBIT_CAPTURE )
     hwp.capture_params = &cliparams;
-  ret = dspd_rclient_set_hw_params(&cli->dsp.rclient, &hwp);
+  ret = dspd_rclient_set_hw_params(cli->dsp.rclient, &hwp);
   if ( ret < 0 )
     return ret * -1;
 
   
   
   if ( cli->mode == O_RDONLY )
-    cli->dsp.params = cli->dsp.rclient.capture.params;
+    cli->dsp.params = *dspd_rclient_get_hw_params(cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE);
   else if ( cli->mode == O_WRONLY )
-    cli->dsp.params = cli->dsp.rclient.playback.params;
+    cli->dsp.params = *dspd_rclient_get_hw_params(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
   else
     dspd_fullduplex_parameters(&cli->dsp.devinfo.playback,
 			       &cli->dsp.devinfo.capture,
@@ -214,6 +219,7 @@ void dsp_read(struct oss_cdev_client *cli, size_t size, off_t off, int flags)
   uint32_t s;
   bool alertable = 1;
   dspd_time_t abstime;
+  int32_t latency;
   err = dsp_commit_params(cli);
   if ( err )
     {
@@ -231,7 +237,7 @@ void dsp_read(struct oss_cdev_client *cli, size_t size, off_t off, int flags)
        (cli->dsp.started & PCM_ENABLE_INPUT) == 0 )
     {
       s = DSPD_PCM_SBIT_CAPTURE;
-      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+      ret = dspd_rclient_ctl(cli->dsp.rclient,
 			     DSPD_SCTL_CLIENT_START,
 			     &s,
 			     sizeof(s),
@@ -251,9 +257,10 @@ void dsp_read(struct oss_cdev_client *cli, size_t size, off_t off, int flags)
       oss_reply_error(cli, EAGAIN);
       return;
     }
+  latency = dspd_rclient_get_hw_params(cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE)->latency;
   while ( offset < size )
     {
-      ret = dspd_rclient_read(&cli->dsp.rclient,
+      ret = dspd_rclient_read(cli->dsp.rclient,
 			      &cli->dsp.readbuf[offset],
 			      (size - offset) / cli->dsp.frame_bytes);
       if ( ret < 0 )
@@ -277,7 +284,7 @@ void dsp_read(struct oss_cdev_client *cli, size_t size, off_t off, int flags)
 	      break;
 	    }
 
-	  ret = dspd_rclient_status(&cli->dsp.rclient,
+	  ret = dspd_rclient_status(cli->dsp.rclient,
 				    DSPD_PCM_SBIT_CAPTURE,
 				    NULL);
 	  if ( ret < 0 && ret != -EAGAIN )
@@ -285,9 +292,9 @@ void dsp_read(struct oss_cdev_client *cli, size_t size, off_t off, int flags)
 	      err = ret;
 	      break;
 	    }
-	  ret = dspd_rclient_get_next_wakeup_avail(&cli->dsp.rclient,
+	  ret = dspd_rclient_get_next_wakeup_avail(cli->dsp.rclient,
 						   DSPD_PCM_SBIT_CAPTURE,
-						   cli->dsp.rclient.capture.params.latency,
+						   latency,
 						   &abstime);
 	  if ( ret < 0 )
 	    {
@@ -341,6 +348,7 @@ void dsp_write(struct oss_cdev_client *cli,
   ssize_t fill, avail;
   uint32_t s;
   bool alertable = true;
+  const struct dspd_cli_params *hwp;
   ret = dsp_commit_params(cli);
   if ( ret )
     {
@@ -357,9 +365,10 @@ void dsp_write(struct oss_cdev_client *cli,
 
   size = (size / cli->dsp.frame_bytes) * cli->dsp.frame_bytes;
 
+  hwp = dspd_rclient_get_hw_params(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
   while ( offset < size )
     {
-      ret = dspd_rclient_write(&cli->dsp.rclient,
+      ret = dspd_rclient_write(cli->dsp.rclient,
 			       &buf[offset],
 			       (size - offset) / cli->dsp.frame_bytes);
       if ( ret < 0 )
@@ -370,7 +379,7 @@ void dsp_write(struct oss_cdev_client *cli,
       if ( ret == 0 )
 	{
 	  //Buffer is full.  Will need to either sleep or trigger.
-	  avail = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
+	  avail = dspd_rclient_avail(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
 	  if ( avail < 0 )
 	    {
 	      ret = avail;
@@ -381,7 +390,7 @@ void dsp_write(struct oss_cdev_client *cli,
 	  if ( (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 && fill >= (cli->dsp.params.fragsize * 2) )
 	    {
 	      s = DSPD_PCM_SBIT_PLAYBACK;
-	      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+	      ret = dspd_rclient_ctl(cli->dsp.rclient,
 				     DSPD_SCTL_CLIENT_START,
 				     &s,
 				     sizeof(s),
@@ -403,12 +412,12 @@ void dsp_write(struct oss_cdev_client *cli,
 	      if ( offset > 0 && alertable == false )
 		break; //Can't sleep because the client is trying to do concurrent io.
                        //Finish early so it doesn't block.
-	      ret = dspd_rclient_status(&cli->dsp.rclient,
+	      ret = dspd_rclient_status(cli->dsp.rclient,
 					DSPD_PCM_SBIT_PLAYBACK,
 					NULL);
 	      if ( ret == -EAGAIN )
 		{
-		  if ( cli->dsp.rclient.playback.trigger_tstamp == 0 )
+		  if ( dspd_rclient_get_trigger_tstamp(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK) == 0 )
 		    {
 		      usleep(1);
 		      continue;
@@ -417,9 +426,9 @@ void dsp_write(struct oss_cdev_client *cli,
 		{
 		  break;
 		}
-	      ret = dspd_rclient_get_next_wakeup_avail(&cli->dsp.rclient,
+	      ret = dspd_rclient_get_next_wakeup_avail(cli->dsp.rclient,
 						       DSPD_PCM_SBIT_PLAYBACK,
-						       cli->dsp.rclient.playback.params.latency,
+						       hwp->latency,
 						       &abstime);
 	      if ( ret < 0 )
 		break;
@@ -454,14 +463,14 @@ void dsp_write(struct oss_cdev_client *cli,
   //processes another command.
   if ( (cli->dsp.trigger & PCM_ENABLE_OUTPUT) != 0 && (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 && offset > 0 )
     {
-      avail = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
+      avail = dspd_rclient_avail(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
       if ( avail >= 0 )
 	{
 	  fill = cli->dsp.params.bufsize - (avail * cli->dsp.frame_bytes);
 	  if ( fill >= (cli->dsp.params.fragsize * 2) )
 	    {
 	      s = DSPD_PCM_SBIT_PLAYBACK;
-	      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+	      ret = dspd_rclient_ctl(cli->dsp.rclient,
 				     DSPD_SCTL_CLIENT_START,
 				     &s,
 				     sizeof(s),
@@ -479,216 +488,7 @@ void dsp_write(struct oss_cdev_client *cli,
 }
 
 
-void dsp_write_old(struct oss_cdev_client *cli, 
-	       const char *buf, 
-	       size_t size, 
-	       off_t off, 
-	       int flags)
-{
-  int err, ret;
-  size_t offset = 0;
-  bool alertable = 1;
-  dspd_time_t abstime;
-  uint32_t s, w;
 
-  //dsp_write2(cli, buf, size, off, flags); return;
-
-  err = dsp_commit_params(cli);
-  if ( err )
-    {
-      oss_reply_error(cli, err);
-      return;
-    }
- 
- 
-
-  
-  flags |= cli->dsp.fflags;
-
-  //flags &= ~O_NONBLOCK;
-
-  /*
-    Reject sizes that are not a multiple of the frame size.
-    This is not technically correct.  With OSS the next write
-    would not necessarily be aligned to the last one because you
-    aren't supposed to do that.
-  */
-  size = (size / cli->dsp.frame_bytes) * cli->dsp.frame_bytes;
-  
-  while ( offset < size )
-    {
-      
-      ret = dspd_rclient_write(&cli->dsp.rclient,
-			       &buf[offset],
-			       (size - offset) / cli->dsp.frame_bytes);
-      //fprintf(stderr, "RCLIENT WRITE %d\n", ret);
-       if ( ret < 0 )
-	 {
-	   err = ret * -1;
-	   break;
-	 } else if ( ret > 0 )
-	 {
-	   offset += (ret * cli->dsp.frame_bytes);
-	   cli->dsp.playback_written += ret;
-	   /*
-	     Write enough data, not started, should be automatically started.
-	     The specs don't say exactly when it is started.  It says "must write at least
-	     one fragment" for the trigger bits to work.  Knowing how this software actually
-	     works and how clients always seem to work, it should be good enough to start when
-	     more than one fragment is written.
-	   */
-	   if ( (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 )
-	     {
-	       err = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
-	       if ( err < 0 )
-		 {
-		   err *= -1;
-		   break;
-		 } else
-		 {
-		   w = cli->dsp.params.bufsize - (err * cli->dsp.frame_bytes);
-		 }
-	       if ( w >= (cli->dsp.params.fragsize * 2) &&
-		    (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 &&
-		    (cli->dsp.trigger & PCM_ENABLE_OUTPUT) != 0 )
-		 {
-		   s = DSPD_PCM_SBIT_PLAYBACK;
-		   // fprintf(stderr, "START @ FILL %u\n", (unsigned)w);
-		   ret = dspd_rclient_ctl(&cli->dsp.rclient,
-					  DSPD_SCTL_CLIENT_START,
-					  &s,
-					  sizeof(s),
-					  NULL,
-					  0,
-					  NULL);
-		   if ( ret < 0 )
-		     ret *= -1;
-		   else
-		     cli->dsp.started |= PCM_ENABLE_OUTPUT;
-		   if ( ret )
-		     {
-		       err = ret;
-		       break;
-		     }
-		 }
-	     }
-	 } else
-	 {
-
-	   if ( (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 )
-	     {
-	       err = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
-	       if ( err < 0 )
-		 {
-		   err *= -1;
-		   break;
-		 } else
-		 {
-		   w = cli->dsp.params.bufsize - (err * cli->dsp.frame_bytes);
-		 }
-
-	       if ( w > cli->dsp.params.fragsize &&
-		    (cli->dsp.started & PCM_ENABLE_OUTPUT) == 0 &&
-		    (cli->dsp.trigger & PCM_ENABLE_OUTPUT) != 0 )
-		 {
-		   s = DSPD_PCM_SBIT_PLAYBACK;
-		   ret = dspd_rclient_ctl(&cli->dsp.rclient,
-					  DSPD_SCTL_CLIENT_START,
-					  &s,
-					  sizeof(s),
-					  NULL,
-					  0,
-					  NULL);
-	
-		   if ( ret < 0 )
-		     ret *= -1;
-		   else
-		     cli->dsp.started |= PCM_ENABLE_OUTPUT;
-		   if ( ret )
-		     {
-		       err = ret;
-		       break;
-		     }
-		 } 
-	     }
-	   
-	   int32_t avail = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
-	   if ( (flags & O_NONBLOCK) || (avail < 0) || 
-		(avail == 0 && (cli->dsp.trigger & PCM_ENABLE_OUTPUT) == 0) ||
-		(alertable == 0 && offset > 0) )
-	     {
-	       break;
-	     }
-	    if ( oss_req_interrupted(cli) )
-	      {
-		if ( offset == 0 )
-		  err = EINTR;
-		break;
-	      }
-	    if ( offset > 0 && alertable == 0 )
-	      break;
-	    ret = dspd_rclient_status(&cli->dsp.rclient,
-				      DSPD_PCM_SBIT_PLAYBACK,
-				      NULL);
-	    if ( ret < 0 )
-	      {
-		if ( ret == -EAGAIN )
-		  {
-		    if ( cli->dsp.rclient.playback.trigger_tstamp == 0 )
-		      {
-			usleep(1);
-			continue;
-		      }
-		  } else
-		  {
-		    err = ret * -1;
-		    break;
-		  }
-	      } 
-	    ret = dspd_rclient_get_next_wakeup_avail(&cli->dsp.rclient,
-						     DSPD_PCM_SBIT_PLAYBACK,
-						     cli->dsp.rclient.playback.params.latency,
-						     &abstime);
-	    if ( ret < 0 )
-	      {
-		err = ret * -1;
-		break;
-	      }
-	    ret = dspd_cdev_client_sleep(cli, &abstime, alertable);
-
-	    //ret = 0;
-	    if ( ret != 0 )
-	      {
-		if ( ret != ETIMEDOUT && ret != EINPROGRESS )
-		  {
-		    err = ret;
-		    break;
-		  } else if ( ret == EINTR )
-		  {
-		    if ( offset == 0 )
-		      err = EINTR;
-		    break;
-		  } else
-		  {
-		    //Need to hurry up but also need to do some work.
-		    alertable = 0;
-		    
-		  }
-	      }
-	 }
-    }
- 
-  if ( offset > 0 )
-    {
-      oss_reply_write(cli, offset);
-    } else if ( err != 0 )
-    {
-      oss_reply_error(cli, err);
-    } else
-    {
-      oss_reply_error(cli, EAGAIN);
-    }
-}
 
 
 static void dsp_poll(struct oss_cdev_client *cli, uint64_t ph)
@@ -709,7 +509,7 @@ static void dsp_release(struct oss_cdev_client *cli)
        (cli->error == 0) && cli->dsp.params_set )
     {
       s = DSPD_PCM_SBIT_PLAYBACK;
-      err = dspd_rclient_ctl(&cli->dsp.rclient,
+      err = dspd_rclient_ctl(cli->dsp.rclient,
 			     DSPD_SCTL_CLIENT_START,
 			     &s,
 			     sizeof(s),
@@ -717,7 +517,7 @@ static void dsp_release(struct oss_cdev_client *cli)
 			     0,
 			     NULL);
       if ( err == 0 )
-	err = dspd_rclient_drain(&cli->dsp.rclient);
+	err = dspd_rclient_drain(cli->dsp.rclient);
     }
   oss_reply_error(cli, 0);
 }
@@ -966,7 +766,7 @@ static int32_t dsp_req_getospace(struct dspd_rctx *context,
     }
   ai->fragstotal = dsp->params.bufsize / dsp->params.fragsize;
   ai->fragsize = dsp->params.fragsize;
-  ai->bytes = dspd_rclient_avail(&dsp->rclient, DSPD_PCM_SBIT_PLAYBACK) * dsp->frame_bytes;
+  ai->bytes = dspd_rclient_avail(dsp->rclient, DSPD_PCM_SBIT_PLAYBACK) * dsp->frame_bytes;
   //This isn't completely correct.  If more than maxwrite is written then the write will be short
   //whether it blocks or not.
   if ( ai->bytes > dsp->max_write )
@@ -995,7 +795,7 @@ static int32_t dsp_req_getispace(struct dspd_rctx *context,
     }
   ai->fragstotal = dsp->params.bufsize / dsp->params.fragsize;
   ai->fragsize = dsp->params.fragsize;
-  ai->bytes = dspd_rclient_avail(&dsp->rclient, DSPD_PCM_SBIT_CAPTURE) * dsp->frame_bytes;
+  ai->bytes = dspd_rclient_avail(dsp->rclient, DSPD_PCM_SBIT_CAPTURE) * dsp->frame_bytes;
   if ( ai->bytes > dsp->max_read )
     ai->bytes = dsp->max_read;
   ai->fragments = ai->bytes / dsp->params.fragsize;
@@ -1132,7 +932,7 @@ static int32_t dsp_req_settrigger(struct dspd_rctx *context,
 	t |= DSPD_PCM_SBIT_CAPTURE;
       if ( trigger & PCM_ENABLE_OUTPUT )
 	t |= DSPD_PCM_SBIT_PLAYBACK;
-      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+      ret = dspd_rclient_ctl(cli->dsp.rclient,
 			     DSPD_SCTL_CLIENT_SETTRIGGER,
 			     &t,
 			     sizeof(t),
@@ -1173,7 +973,7 @@ static int32_t dsp_req_sync(struct dspd_rctx *context,
   if ( dsp->params.stream & DSPD_PCM_SBIT_PLAYBACK )
     {
       s = DSPD_PCM_SBIT_PLAYBACK;
-      err = dspd_rclient_ctl(&dsp->rclient,
+      err = dspd_rclient_ctl(dsp->rclient,
 			     DSPD_SCTL_CLIENT_START,
 			     &s,
 			     sizeof(s),
@@ -1181,7 +981,7 @@ static int32_t dsp_req_sync(struct dspd_rctx *context,
 			     0,
 			     NULL);
       if ( err == 0 )
-	err = dspd_rclient_drain(&dsp->rclient);
+	err = dspd_rclient_drain(dsp->rclient);
     }
   return dspd_req_reply_err(context, 0, err);
 }
@@ -1197,7 +997,7 @@ static int32_t dsp_req_reset(struct dspd_rctx *context,
   if ( dsp->params_set )
     {
       //      fprintf(stderr, "RESET\n");
-      dspd_rclient_disconnect(&dsp->rclient, true);
+      dspd_rclient_disconnect(dsp->rclient, true);
       dsp->started = 0;
       if ( dsp->params.stream & DSPD_PCM_SBIT_PLAYBACK )
 	dsp->trigger |= PCM_ENABLE_OUTPUT;
@@ -1229,7 +1029,7 @@ static int32_t dsp_req_halt_output(struct dspd_rctx *context,
 	and some others don't allow specifying which direction.
       */
       s = DSPD_PCM_SBIT_PLAYBACK;
-      err = dspd_rclient_ctl(&dsp->rclient,
+      err = dspd_rclient_ctl(dsp->rclient,
 			     DSPD_SCTL_CLIENT_STOP,
 			     &s,
 			     sizeof(s),
@@ -1273,7 +1073,7 @@ static int32_t dsp_req_halt_input(struct dspd_rctx *context,
 	and some others don't allow specifying which direction.
       */
       s = DSPD_PCM_SBIT_CAPTURE;
-      err = dspd_rclient_ctl(&dsp->rclient,
+      err = dspd_rclient_ctl(dsp->rclient,
 			     DSPD_SCTL_CLIENT_STOP,
 			     &s,
 			     sizeof(s),
@@ -1377,7 +1177,7 @@ static int32_t dsp_req_post(struct dspd_rctx *context,
       if ( err == 0 )
 	{
 	  s = DSPD_PCM_SBIT_PLAYBACK;
-	  err = dspd_rclient_ctl(&dsp->rclient,
+	  err = dspd_rclient_ctl(dsp->rclient,
 				 DSPD_SCTL_CLIENT_START,
 				 &s,
 				 sizeof(s),
@@ -1448,7 +1248,7 @@ static int32_t dsp_req_getoptr(struct dspd_rctx *context,
       memset(ci, 0, sizeof(*ci));
       if ( cli->dsp.params_set )
 	{
-	  ret = dspd_rclient_get_hw_ptr(&cli->dsp.rclient,
+	  ret = dspd_rclient_get_hw_ptr(cli->dsp.rclient,
 					DSPD_PCM_SBIT_PLAYBACK,
 					&p);
 	  if ( ret == 0 )
@@ -1485,7 +1285,7 @@ static int32_t dsp_req_getiptr(struct dspd_rctx *context,
       memset(ci, 0, sizeof(*ci));
       if ( cli->dsp.params_set )
 	{
-	  ret = dspd_rclient_get_hw_ptr(&cli->dsp.rclient,
+	  ret = dspd_rclient_get_hw_ptr(cli->dsp.rclient,
 					DSPD_PCM_SBIT_CAPTURE,
 					&p);
 	  if ( ret == 0 )
@@ -1533,6 +1333,7 @@ static int32_t dsp_req_get_current_ptr(struct dspd_rctx *context,
   uint32_t s, n, fill;
   struct dspd_pcmcli_status status;
   int32_t ret;
+  const struct dspd_cli_params *hwp = dspd_rclient_get_hw_params(dsp->rclient, DSPD_PCM_SBIT_PLAYBACK);
   memset(&oc, 0, sizeof(oc));
   if ( req == SNDCTL_DSP_CURRENT_IPTR )
     s = DSPD_PCM_SBIT_CAPTURE;
@@ -1541,11 +1342,11 @@ static int32_t dsp_req_get_current_ptr(struct dspd_rctx *context,
 
   if ( dsp->params_set && (dsp->params.stream & s) )
     {
-      ret = dspd_rclient_status(&dsp->rclient, s, &status);
+      ret = dspd_rclient_status(dsp->rclient, s, &status);
       if ( ret == 0 )
 	{
 	  if ( s == DSPD_PCM_SBIT_PLAYBACK )
-	    fill = dsp->rclient.playback.params.bufsize - status.avail;
+	    fill = hwp->bufsize - status.avail;
 	  else
 	    fill = status.avail;
 	  if ( status.delay < fill )
@@ -1558,11 +1359,11 @@ static int32_t dsp_req_get_current_ptr(struct dspd_rctx *context,
 	}
       if ( s == DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  n = dsp->rclient.playback.params.bufsize - dspd_rclient_avail(&dsp->rclient, s);
+	  n = hwp->bufsize - dspd_rclient_avail(dsp->rclient, s);
 	  oc.samples = dsp->playback_written - n;
 	} else
 	{
-	  n = dspd_rclient_avail(&dsp->rclient, s);
+	  n = dspd_rclient_avail(dsp->rclient, s);
 	  oc.samples = dsp->capture_read + n;
 	}
     }
@@ -1580,6 +1381,7 @@ static int32_t dsp_req_low_water(struct dspd_rctx *context,
   int bytes = *(int*)inbuf;
   int err;
   size_t fr;
+  struct dspd_rclient_swparams swp;
   if ( bytes > 0 )
     {
       err = 0;
@@ -1589,7 +1391,9 @@ static int32_t dsp_req_low_water(struct dspd_rctx *context,
 	  fr = dsp->low_water / dsp->frame_bytes;
 	  if ( fr == 0 )
 	    fr = 1;
-	  dsp->rclient.swparams.avail_min = fr;
+	  swp = *dspd_rclient_get_sw_params(dsp->rclient);
+	  swp.avail_min = fr;
+	  err = dspd_rclient_set_sw_params(dsp->rclient, &swp);
 	}
     } else
     {
@@ -1641,13 +1445,13 @@ static int32_t dsp_req_getodelay(struct dspd_rctx *context,
 	    return dspd_req_reply_err(context, 0, ret);
 	}
 
-      ret = dspd_rclient_status(&dsp->rclient, dsp->params.stream, &status);
+      ret = dspd_rclient_status(dsp->rclient, dsp->params.stream, &status);
       if ( ret == 0 )
 	{
 	  odelay = status.delay * dsp->frame_bytes;
 	} else if ( ret == -EAGAIN )
 	{
-	  ret = dspd_rclient_avail(&dsp->rclient, DSPD_PCM_SBIT_PLAYBACK);
+	  ret = dspd_rclient_avail(dsp->rclient, DSPD_PCM_SBIT_PLAYBACK);
 	  if ( ret >= 0 )
 	    {
 	      odelay = ret * dsp->frame_bytes;
@@ -1707,7 +1511,7 @@ static int32_t dsp_req_set_volume(struct dspd_rctx *context,
       vol /= 100.0;
       sv.stream = stream;
       sv.volume = vol;
-      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+      ret = dspd_rclient_ctl(cli->dsp.rclient,
 			     DSPD_SCTL_CLIENT_SETVOLUME,
 			     &sv,
 			     sizeof(sv),
@@ -1735,7 +1539,7 @@ static int32_t dsp_req_get_volume(struct dspd_rctx *context,
   struct oss_cdev_client *cli = dspd_req_userdata(context);
   if ( cli->dsp.params.flags & stream )
     {
-      ret = dspd_rclient_ctl(&cli->dsp.rclient,
+      ret = dspd_rclient_ctl(cli->dsp.rclient,
 			     DSPD_SCTL_CLIENT_GETVOLUME,
 			     &stream,
 			     sizeof(stream),
@@ -2068,7 +1872,7 @@ static int32_t dsp_req_syncstart(struct dspd_rctx *context,
   memset(&scmd, 0, sizeof(scmd));
   scmd.cmd = SGCMD_STARTALL;
   scmd.sgid = *(unsigned int*)inbuf;
-  ret = dspd_rclient_ctl(&cli->dsp.rclient,
+  ret = dspd_rclient_ctl(cli->dsp.rclient,
 			 DSPD_SCTL_CLIENT_START,
 			 &scmd,
 			 sizeof(scmd),

@@ -503,7 +503,7 @@ static void free_client_cb(struct cbpoll_ctx *ctx,
       cli->ops->free(cli);
     } else
     {
-      dspd_rclient_destroy(&cli->dsp.rclient);
+      dspd_rclient_delete(cli->dsp.rclient);
       dspd_rtalloc_delete(cli->alloc);
       dspd_fifo_delete(cli->eventq);
       dspd_mutex_destroy(&cli->lock);
@@ -689,7 +689,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   else if ( cli->mode == O_WRONLY )
     s = DSPD_PCM_SBIT_PLAYBACK;
   
-  err = dspd_rclient_init(&cli->dsp.rclient, s);
+  err = dspd_rclient_new(&cli->dsp.rclient, s);
   if ( err )
     {
       err *= -1;
@@ -868,7 +868,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   bp.conn = &dspd_dctx;
   bp.client = cli->client_index;
   bp.device = cli->device_index;
-  err = dspd_rclient_bind(&cli->dsp.rclient, &bp);
+  err = dspd_rclient_bind(cli->dsp.rclient, &bp);
   if ( err )
     goto error;
  
@@ -896,7 +896,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 
   if ( cli )
     {
-      dspd_rclient_destroy(&cli->dsp.rclient);
+      dspd_rclient_delete(cli->dsp.rclient);
       if ( cli->client_index > 0 )
 	dspd_daemon_unref(cli->client_index);
       if ( cli->device_index > 0 )
@@ -1645,6 +1645,7 @@ uint32_t dsp_check_revents(struct oss_cdev_client *cli)
 {
   int32_t revents = 0;
   int ret;
+  const struct dspd_rclient_swparams *swp = dspd_rclient_get_sw_params(cli->dsp.rclient);
   if ( cli->error )
     {
       revents |= POLLHUP;
@@ -1655,18 +1656,18 @@ uint32_t dsp_check_revents(struct oss_cdev_client *cli)
     }
   if ( cli->dsp.params.stream & DSPD_PCM_SBIT_PLAYBACK )
     {
-      ret = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
+      ret = dspd_rclient_avail(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK);
       if ( ret < 0 && ret != -EPIPE )
 	revents |= (POLLHUP | POLLOUT);
-      else if ( ret >= cli->dsp.rclient.swparams.avail_min || ret == -EPIPE )
+      else if ( ret >= swp->avail_min || ret == -EPIPE )
 	revents |= POLLOUT;
     }
   if ( cli->dsp.params.stream & DSPD_PCM_SBIT_CAPTURE )
     {
-      ret = dspd_rclient_avail(&cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE);
+      ret = dspd_rclient_avail(cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE);
       if ( ret < 0 && ret != -EPIPE )
 	revents |= (POLLHUP | POLLIN);
-      else if ( ret >= cli->dsp.rclient.swparams.avail_min || ret == -EPIPE )
+      else if ( ret >= swp->avail_min || ret == -EPIPE )
 	revents |= POLLIN;
     }
   return revents;
@@ -1733,11 +1734,11 @@ static void *dsp_worker(void *p)
 	      if ( ! queue_ready(cli) )
 		{
 		  if ( cli->dsp.params.stream & DSPD_PCM_SBIT_PLAYBACK )
-		    dspd_rclient_status(&cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK, NULL);
+		    dspd_rclient_status(cli->dsp.rclient, DSPD_PCM_SBIT_PLAYBACK, NULL);
 		  if ( cli->dsp.params.stream & DSPD_PCM_SBIT_CAPTURE )
-		    dspd_rclient_status(&cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE, NULL);
+		    dspd_rclient_status(cli->dsp.rclient, DSPD_PCM_SBIT_CAPTURE, NULL);
 
-		  ret = dspd_rclient_get_next_wakeup(&cli->dsp.rclient,
+		  ret = dspd_rclient_get_next_wakeup(cli->dsp.rclient,
 						     cli->dsp.params.stream,
 						     &waketime);
 

@@ -146,6 +146,8 @@ static int32_t dspd_client_release(struct dspd_client *cli);
 static void client_destructor(void *obj)
 {
   struct dspd_client *cli = obj;
+
+  assert(cli->alloc);
   if ( cli->syncgroup )
     {
       dspd_sg_remove(cli->syncgroup, cli->index);
@@ -168,6 +170,7 @@ static void client_destructor(void *obj)
     dspd_src_delete(cli->playback_src.src);
   dspd_mbx_delete(cli->sync_start_tstamp);
   dspd_mutex_destroy(&cli->sync_start_lock);
+  cli->alloc = false;
   free(cli);
 }
 
@@ -177,9 +180,11 @@ int32_t dspd_client_new(struct dspd_slist *list,
   struct dspd_client *cli;
   intptr_t index = -1;
   int32_t ret;
+
   cli = calloc(1, sizeof(*cli));
   if ( ! cli )
     return -ENOMEM;
+  cli->alloc = true;
   ret = dspd_mutex_init(&cli->sync_start_lock, NULL);
   if ( ret != 0 )
     {
@@ -274,10 +279,13 @@ static int32_t dspd_client_release(struct dspd_client *cli)
 			    NULL,
 			    0,
 			    &br);
-      dspd_slist_entry_wrlock(cli->list, cli->device);
-      dspd_slist_unref(cli->list, cli->device);
-      dspd_slist_entry_rw_unlock(cli->list, cli->device);
-      cli->device = -1;
+      if ( cli->device >= 0 )
+	{
+	  dspd_slist_entry_wrlock(cli->list, cli->device);
+	  dspd_slist_unref(cli->list, cli->device);
+	  dspd_slist_entry_rw_unlock(cli->list, cli->device);
+	  cli->device = -1;
+	}
       dspd_slist_entry_srvlock(cli->list, cli->index);
       dspd_slist_entry_set_key(cli->list, cli->index, 0);
       dspd_slist_entry_srvunlock(cli->list, cli->index);
@@ -2136,9 +2144,9 @@ static int32_t client_reserve(struct dspd_rctx *context,
 			    &br);
       if ( ret == 0 )
 	{
-	  dspd_slist_ref(cli->list, cli->index);
 	  cli->device = server;
 	  cli->device_reserved = 1;
+	  dspd_slist_ref(cli->list, cli->index);
 	} else
 	{
 	  dspd_daemon_unref(server);

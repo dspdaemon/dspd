@@ -341,7 +341,18 @@ static int32_t req_delcli(struct dspd_rctx         *context,
     {
       stream = *(int32_t*)inbuf;
       if ( stream > 0 )
-	dspd_daemon_unref(stream);
+	{
+	  dspd_stream_ctl(&dspd_dctx, 
+			  stream,
+			  DSPD_SCTL_CLIENT_DISCONNECT,
+			  NULL,
+			  0,
+			  NULL,
+			  0,
+			  NULL);
+
+	  dspd_daemon_unref(stream);
+	}
       ret = dspd_req_reply_err(context, 0, 0);
     } else
     {

@@ -141,6 +141,7 @@ struct dspd_client {
   dspd_time_t                   min_latency;
   int mq_fd;
   volatile uint32_t avail_min;
+  bool alloc;
 };
 
 int32_t dspd_client_new(struct dspd_slist *list,

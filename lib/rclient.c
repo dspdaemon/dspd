@@ -30,6 +30,7 @@
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
+#include "rclient_priv.h"
 #ifndef POLLRDHUP
 #define POLLRDHUP 0
 #endif
@@ -287,6 +288,7 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
       close(client->eventfd);
       dspd_timer_destroy(&client->timer);
     }
+
   dspd_rclient_detach(client, DSPD_PCM_SBIT_PLAYBACK);
   dspd_rclient_detach(client, DSPD_PCM_SBIT_CAPTURE);
 
@@ -295,8 +297,8 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
       uint32_t t = *(int32_t*)client->bparams.conn;
       if ( t == DSPD_OBJ_TYPE_DAEMON_CTX )
 	{
-	  
-	  dspd_stream_ctl(client->bparams.conn,
+	  int ret;
+	  ret = dspd_stream_ctl(client->bparams.conn,
 			  -1,
 			  DSPD_SOCKSRV_REQ_UNREFSRV,
 			  &client->bparams.device,
@@ -304,14 +306,16 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
 			  NULL,
 			  0,
 			  &br);
-	  dspd_stream_ctl(client->bparams.conn,
-			  -1,
-			  DSPD_SOCKSRV_REQ_DELCLI,
-			  &client->bparams.client,
-			  sizeof(client->bparams.client),
-			  NULL,
-			  0,
-			  &br);
+	
+	  ret = dspd_stream_ctl(client->bparams.conn,
+				-1,
+				DSPD_SOCKSRV_REQ_DELCLI,
+				&client->bparams.client,
+				sizeof(client->bparams.client),
+				NULL,
+				0,
+				&br);
+	
 	  
 	} else
 	{
@@ -2475,4 +2479,31 @@ int32_t dspd_rclient_set_excl(struct dspd_rclient *client, int32_t flags)
 	}
     }
   return ret;
+}
+
+const struct dspd_rclient_swparams *dspd_rclient_get_sw_params(struct dspd_rclient *client)
+{
+  return &client->swparams;
+}
+
+int32_t dspd_rclient_set_sw_params(struct dspd_rclient *client, const struct dspd_rclient_swparams *params)
+{
+  client->swparams = *params;
+  return 0;
+}
+
+dspd_time_t dspd_rclient_get_trigger_tstamp(struct dspd_rclient *client, int32_t sbit)
+{
+  dspd_time_t ret;
+  if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+    ret = client->playback.trigger_tstamp;
+  else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+    ret = client->capture.trigger_tstamp;
+  else
+    ret = 0;
+  return ret;
+}
+int32_t dspd_rclient_get_trigger(struct dspd_rclient *client)
+{
+  return client->trigger;
 }

@@ -2,6 +2,7 @@
 #define _MOD_OSSCUSE_H_
 #include <sys/ioctl.h>
 #include "soundcard.h"
+#include "../lib/rclient_priv.h"
 enum {
   IORP_OK,        //Queued
   IORP_CANCELED,  //Canceled (deferred)
@@ -80,7 +81,7 @@ struct dspd_oss_server {
 
 
 struct dsp_data {
-  struct dspd_rclient    rclient;
+  struct dspd_rclient    *rclient;
   uint32_t rate;
   uint32_t channels;
   int32_t  format;
