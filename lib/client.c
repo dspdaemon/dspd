@@ -32,6 +32,50 @@
 #include "syncgroup.h"
 
 
+struct dspd_client {
+  struct dspd_client_stream     playback;
+  struct dspd_client_stream     capture;
+  const struct dspd_pcmcli_ops *ops;
+  uint32_t                      latency;
+  int32_t                       index;
+  int32_t                       device;
+  bool                          device_reserved;
+  struct dspd_slist            *list;
+  int                           err;
+
+  //A bunch of channel maps.  I am not dynamically allocating
+  //them because it is easier this way.
+
+  struct dspd_fchmap             playback_cmap;
+  struct dspd_fchmap             capture_cmap;
+  struct dspd_pcmdev_ops        *server_ops;
+  void                          *server;
+
+
+  struct dspd_fchmap            playback_inmap, capture_inmap;
+  size_t                        playback_schan, capture_schan; 
+
+  struct dspd_client_src        playback_src;
+  struct dspd_client_src        capture_src;
+
+  void (*error_cb)(void *dev, int32_t index, void *client, int32_t err, void *arg);
+  void *error_arg;
+
+  int32_t  trigger;
+ 
+
+  struct dspd_syncgroup        *syncgroup;
+
+  dspd_mutex_t               sync_start_lock;
+  struct dspd_mbx_header    *sync_start_tstamp;
+  struct dspd_client_trigger_state trigger_state;
+  dspd_time_t                   min_latency;
+  int mq_fd;
+  volatile uint32_t avail_min;
+  bool alloc;
+};
+
+
 static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams);
 
 

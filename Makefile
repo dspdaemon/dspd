@@ -2,7 +2,7 @@ include config.makefile
 include rules.makefile
 LIBDIRS=lib alsa
 BINDIRS=modules daemon $(XBINDIRS)
-SUBDIRS=$(LIBDIRS) $(BINDIRS) $(M32DIR)
+SUBDIRS=$(LIBDIRS) $(BINDIRS) $(M32DIR) sndio
 
 all:
 	sh -c 'OWD="$$PWD";for f in $(SUBDIRS); do cd $$OWD/$$f && make all || exit 1; done'

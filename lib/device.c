@@ -34,7 +34,62 @@
 #include "sslib.h"
 #include "daemon.h"
 
+struct dspd_pcm_device {
+  struct dspd_pcmdev_stream        playback;
+  struct dspd_pcmdev_stream        capture;
+  struct dspd_scheduler  *sched;
+  dspd_mutex_t            reg_lock;
+  struct dspd_dev_reg     reg;
+  uint32_t                current_config;
+  void (*process_data)(void *arg, struct dspd_pcm_device *device);
 
+  uint8_t lock_mask[DSPD_MAX_OBJECTS/8];
+
+  //This basically indicates that an IRQ occurred.  It is up to the client
+  //to decide what to do with it.
+  void (*process_client)(struct dspd_pcm_device *device,
+			 uint32_t client, //client number
+			 uint32_t ioc,    //io cycle type (lock,release,both)
+			 uint32_t key);    //Identifier for this device
+
+
+  void  *arg;
+  uintptr_t current_latency;
+  bool trigger;
+  dspd_thread_t iothread;
+  struct dspd_slist *list;
+ 
+
+
+  //8 bits per client: 3-7=latency, 2=present, 1=capture, 0=playback
+  uint8_t client_configs[DSPD_MAX_OBJECTS];
+
+  volatile intptr_t current_client;
+  int32_t  key;
+
+  sigjmp_buf sbh_env, sbh_except;
+  volatile int current_exception, exc_client;
+  volatile AO_t error;
+
+  volatile AO_t irq_count, ack_count;
+  volatile bool reset_scheduler, idle;
+  struct sched_param sched_param;
+  int sched_policy;
+  int32_t mq[2];
+  
+#ifndef DSPD_HAVE_ATOMIC_INT64
+  dspd_mutex_t cookie_lock;
+  uint64_t cookie;
+#else
+  volatile uint64_t cookie;
+#endif
+
+
+  uint32_t access_flags;
+  int32_t  excl_client;
+  unsigned int seed;
+  uint32_t wakeup_count;
+};
 
 #define DSPD_DEV_USE_TLS
 static int stream_recover_fcn(struct dspd_pcmdev_stream *stream);
