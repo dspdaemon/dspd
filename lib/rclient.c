@@ -1025,7 +1025,6 @@ int32_t dspd_rclient_get_hw_ptr(struct dspd_rclient *client, int32_t stream, uin
     {
       ret = -EINVAL;
     }
-  ret = 0;
   return ret;
 }
 

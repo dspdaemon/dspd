@@ -375,6 +375,7 @@ static snd_pcm_sframes_t dspd_write_pcm(snd_pcm_ioplug_t *io,
   int err;
   bool waited = false;
   const struct dspd_rclient_swparams *swparams;
+
   if ( dspd_rclient_get_streams(dspd->client) != DSPD_PCM_SBIT_PLAYBACK )
     return -EBADFD;
 
@@ -475,6 +476,7 @@ static snd_pcm_sframes_t dspd_pointer(snd_pcm_ioplug_t *io)
 	  ret = dspd_rclient_get_hw_ptr(dspd->client, dspd->stream, &ptr);
 	  if ( ret == 0 )
 	    {
+	      
 	      ret = ptr % io->buffer_size;
 	    } else if ( ret == -EPIPE )
 	    {

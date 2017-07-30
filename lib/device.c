@@ -2949,7 +2949,9 @@ void *dspd_pcm_device_get_driver_handle(struct dspd_pcm_device *dev, uint32_t st
 static int stream_compatible(const struct dspd_cli_params *cparams,
 			     const struct dspd_drv_params *dparams)
 {
-  //fprintf(stderr, "CPARAMS %d %d\n", cparams->rate, cparams->latency);
+  /*
+    Some values can be "default" (0 or -1).
+  */
   return ( (cparams->rate == dparams->rate || cparams->rate == 0) &&
 	   (cparams->latency >= dparams->min_latency || cparams->latency == 0) &&
 	   (cparams->channels == dparams->channels || cparams->channels == -1));
@@ -3221,6 +3223,9 @@ static int32_t server_getvolume(struct dspd_rctx *context,
   return dspd_req_reply_buf(context, 0, vol, len);
 }
 
+/*
+  Unimplemented commands are sent to the driver.
+*/
 static int32_t server_filter(struct dspd_rctx *context,
 			     uint32_t      req,
 			     const void   *inbuf,
