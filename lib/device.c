@@ -3067,11 +3067,14 @@ static int32_t server_disconnect(struct dspd_rctx *context,
   int32_t ret;
   dspd_dev_lock(dev);
   ret = dspd_dev_detach_client(dev, client);
-  dspd_dev_unlock(dev);
   if ( ret == 0 )
     {
       dspd_dev_client_configure(dev, client);
+      dspd_dev_unlock(dev);
       dspd_slist_unref(dev->list, client);
+    } else
+    {
+      dspd_dev_unlock(dev);
     }
   return dspd_req_reply_err(context, 0, ret);
 }
