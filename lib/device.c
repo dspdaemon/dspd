@@ -3191,11 +3191,20 @@ static int32_t server_setvolume(struct dspd_rctx *context,
 {
   struct dspd_pcm_device *dev = dspd_req_userdata(context);
   const struct dspd_stream_volume *sv = inbuf;
-  if ( sv->stream & DSPD_PCM_SBIT_PLAYBACK )
-    dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK, sv->volume);
-  if ( sv->stream & DSPD_PCM_SBIT_CAPTURE )
-    dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE, sv->volume);
-  return dspd_req_reply_err(context, 0, 0);
+  int err;
+  if ( ((sv->stream & DSPD_PCM_SBIT_PLAYBACK) != 0 && dev->playback.ops == NULL) ||
+       ((sv->stream & DSPD_PCM_SBIT_CAPTURE) != 0 && dev->capture.ops == NULL) )
+    {
+      err = EINVAL;
+    } else
+    {
+      if ( sv->stream & DSPD_PCM_SBIT_PLAYBACK )
+	dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK, sv->volume);
+      if ( sv->stream & DSPD_PCM_SBIT_CAPTURE )
+	dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE, sv->volume);
+      err = 0;
+    }
+  return dspd_req_reply_err(context, 0, err);
 }
 
 static int32_t server_getvolume(struct dspd_rctx *context,
@@ -3207,21 +3216,37 @@ static int32_t server_getvolume(struct dspd_rctx *context,
 {
   struct dspd_pcm_device *dev = dspd_req_userdata(context);
   int32_t stream = *(int32_t*)inbuf;
-  size_t len = 0;
-  float vol[2];
+  size_t len = 0, i;
+  float vol[2] = { 0.0, 0.0 };
   if ( (stream & DSPD_PCM_SBIT_PLAYBACK) && (stream & DSPD_PCM_SBIT_CAPTURE) )
     {
+      if ( outbufsize < sizeof(vol) || (dev->playback.ops == NULL || dev->capture.ops == NULL) )
+	return dspd_req_reply_err(context, 0, EINVAL);
       vol[DSPD_PCM_STREAM_PLAYBACK] = dspd_dev_get_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK);
       vol[DSPD_PCM_STREAM_CAPTURE] = dspd_dev_get_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE);
       len = sizeof(vol);
     } else if ( stream & DSPD_PCM_SBIT_PLAYBACK )
     {
       vol[0] = dspd_dev_get_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK);
-      len = sizeof(vol[0]);
+      if ( outbufsize == sizeof(vol) )
+	len = outbufsize;
+      else
+	len = sizeof(vol[0]);
+    } else if ( stream & DSPD_PCM_SBIT_CAPTURE )
+    {
+      if ( outbufsize == sizeof(vol) )
+	{
+	  i = DSPD_PCM_STREAM_CAPTURE;
+	  len = outbufsize;
+	} else
+	{
+	  len = sizeof(vol[0]);
+	  i = 0;
+	}
+      vol[i] = dspd_dev_get_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE);
     } else
     {
-      vol[0] = dspd_dev_get_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE);
-      len = sizeof(vol[0]);
+      return dspd_req_reply_err(context, 0, EINVAL);
     }
   return dspd_req_reply_buf(context, 0, vol, len);
 }
@@ -3792,7 +3817,7 @@ static const struct dspd_req_handler device_req_handlers[] = {
     .xflags = DSPD_REQ_FLAG_CMSG_FD,
     .rflags = 0,
     .inbufsize = sizeof(int32_t),
-    .outbufsize = sizeof(struct dspd_stream_volume),
+    .outbufsize = sizeof(float),
   },
   [SRVIDX(DSPD_SCTL_SERVER_GETLATENCY)] = {
     .handler = server_getlatency,
