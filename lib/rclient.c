@@ -2394,7 +2394,7 @@ bool dspd_rclient_test_xrun(struct dspd_rclient *client, int sbits)
 		diff = (dspd_get_time() - client->playback.trigger_tstamp) / client->playback.sample_time;
 	      else
 		diff = 0;
-	      if ( diff > client->playback.params.fragsize )
+	      if ( diff > (client->playback.params.fragsize / 2) )
 		ret = true;
 	      //else it is probably close enough to recover on the server side (actually tested, not just a theory)
 	    }

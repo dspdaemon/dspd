@@ -219,7 +219,7 @@ static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
   if ( enable )
     {
       ret = dspd_rclient_ctl(dspd->client,
-			     DSPD_SCTL_CLIENT_START,
+			     DSPD_SCTL_CLIENT_STOP,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
 			     NULL,
@@ -228,7 +228,7 @@ static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
     } else
     {
       ret = dspd_rclient_ctl(dspd->client,
-			     DSPD_SCTL_CLIENT_STOP,
+			     DSPD_SCTL_CLIENT_START,
 			     &dspd->stream,
 			     sizeof(dspd->stream),
 			     NULL,
