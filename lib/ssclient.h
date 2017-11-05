@@ -35,6 +35,10 @@ enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_DELCLI,
   DSPD_SOCKSRV_REQ_REFSRV,
   DSPD_SOCKSRV_REQ_UNREFSRV,
+  DSPD_SOCKSRV_REQ_NMCLI,
+  DSPD_SOCKSRV_REQ_DMCLI,
+  DSPD_SOCKSRV_REQ_RMSRV,
+  DSPD_SOCKSRV_REQ_UMSRV,
  };
 
 int32_t dspd_conn_recv_fd(struct dspd_conn *conn);

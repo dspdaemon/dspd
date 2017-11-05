@@ -1052,7 +1052,7 @@ static int32_t rclient_write(struct dspd_rclient *client,
 	{
 	  memset(&ptr[offset*client->playback.params.channels], 
 		 0, 
-		 sizeof(*buf) * client->playback.params.channels * length);
+		 sizeof(*ptr) * client->playback.params.channels * length);
 	}
 
       dspd_fifo_wcommit(&client->playback.fifo, length);

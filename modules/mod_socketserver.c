@@ -42,6 +42,11 @@ struct ss_cctx {
   int32_t stream;
   intptr_t device;
 
+  int32_t playback_device;
+  int32_t capture_device;
+  int32_t playback_stream;
+  int32_t capture_stream;
+
   struct dspd_req *pkt_in;
   int32_t          pkt_cmd;
   size_t           pkt_size;
@@ -77,6 +82,18 @@ struct ss_sctx {
   }*/
 #define sendreq(cli) dspd_req_send(cli->req_ctx)
 
+static inline bool stream_valid(struct ss_cctx *ctx, int32_t stream)
+{
+  return (ctx->stream == stream ||
+	  ctx->playback_stream == stream ||
+	  ctx->capture_stream == stream);
+}
+static inline bool device_valid(struct ss_cctx *ctx, int32_t device)
+{
+  return (ctx->device == device ||
+	  ctx->playback_device == device ||
+	  ctx->capture_device == device);
+}
 
 static int32_t client_reply_buf(struct dspd_rctx *arg, 
 				int32_t flags, 
@@ -202,6 +219,80 @@ static void socksrv_error(void *dev, int32_t index, void *client, int32_t err, v
       dspd_mutex_unlock(&cli->lock);
     }
 }
+static int32_t open_client_stream(struct ss_cctx *cli)
+{
+  int32_t ret;
+  void *clptr;
+  struct dspd_client_cb cb;
+  size_t br;
+  ret = dspd_client_new(dspd_dctx.objects, &clptr);
+  if ( ret == 0 )
+    {
+      cb.arg = cli;
+      cb.callback = socksrv_error;
+      cb.index = DSPD_CLIENT_CB_ERROR;
+      dspd_stream_ctl(&dspd_dctx,
+		      cli->stream,
+		      DSPD_SCTL_CLIENT_SETCB,
+		      &cb,
+		      sizeof(cb),
+		      NULL,
+		      0,
+		      &br);
+      ret = dspd_client_get_index(clptr);
+    }
+  return ret;
+}
+static void close_client_stream(struct ss_cctx *cli, int32_t stream)
+{
+  size_t br;
+  (void)cli;
+  //The server retains the client, so disconnect to make sure
+  //it is actually released.
+  dspd_stream_ctl(&dspd_dctx, 
+		  stream,
+		  DSPD_SCTL_CLIENT_DISCONNECT,
+		  NULL,
+		  0,
+		  NULL,
+		  0,
+		  &br);
+  dspd_daemon_unref(stream);
+}
+
+static int32_t open_device(struct ss_cctx *cli, int32_t sbits, int32_t dev, struct dspd_device_stat *info)
+{
+  int32_t ret;
+  size_t br;
+  ret = dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
+  if ( ret == 0 )
+    {
+      br = sizeof(*info);
+      ret = dspd_stream_ctl(&dspd_dctx,
+			    dev,
+			    DSPD_SCTL_SERVER_STAT,
+			    NULL,
+			    0,
+			    info,
+			    sizeof(*info),
+			    &br);
+      if ( ret == 0 )
+	{
+	  if ( (info->streams & sbits) == sbits )
+	    {
+	      ret = dev;
+	    } else
+	    {
+	      ret = -ENOSR;
+	      dspd_daemon_unref(dev);
+	    }
+	} else
+	{
+	  dspd_daemon_unref(dev);
+	}
+    }
+  return ret;
+}
 
 static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				uint32_t             req,
@@ -212,11 +303,12 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 {
   struct ss_cctx *cli = dspd_req_userdata(rctx);
   int ret, err;
-  void *clptr;
   size_t br;
   uint32_t dev;
   uint64_t val;
-  struct dspd_client_cb cb;
+  int64_t i64;
+  int32_t i32;
+  struct dspd_device_stat info;
   switch(req)
     {
     case DSPD_SOCKSRV_REQ_NEWCLI:
@@ -228,23 +320,10 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
 	} else
 	{
-	  ret = dspd_client_new(dspd_dctx.objects, &clptr);
-	  if ( ret == 0 )
+	  ret = open_client_stream(cli);
+	  if ( ret >= 0 )
 	    {
-	      cli->stream = dspd_client_get_index(clptr);
-	      cb.arg = cli;
-	      cb.callback = socksrv_error;
-	      cb.index = DSPD_CLIENT_CB_ERROR;
-	      dspd_stream_ctl(&dspd_dctx,
-			      cli->stream,
-			      DSPD_SCTL_CLIENT_SETCB,
-			      &cb,
-			      sizeof(cb),
-			      NULL,
-			      0,
-			      &br);
-
-	      cli->stream = dspd_client_get_index(clptr);
+	      cli->stream = ret;
 	      ret = dspd_req_reply_buf(rctx, 0, &cli->stream, sizeof(cli->stream));
 	    } else
 	    {
@@ -255,15 +334,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
     case DSPD_SOCKSRV_REQ_DELCLI:
       if ( cli->stream >= 0 )
 	{
-	  dspd_stream_ctl(&dspd_dctx, 
-			  cli->stream,
-			  DSPD_SCTL_CLIENT_DISCONNECT,
-			  NULL,
-			  0,
-			  NULL,
-			  0,
-			  &br);
-	  dspd_daemon_unref(cli->stream);
+	  close_client_stream(cli, cli->stream);
 	  cli->stream = -1;
 	  ret = dspd_req_reply_err(rctx, 0, 0);
 	} else
@@ -340,6 +411,196 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = dspd_req_reply_err(rctx, 0, ENOENT);
 	}
       break;
+    case DSPD_SOCKSRV_REQ_NMCLI:
+      if ( inbufsize == sizeof(int32_t) &&
+	   outbufsize == sizeof(int64_t) )
+	{
+	  i32 = *(int32_t*)inbuf;
+	  ret = 0;
+	  if ( i32 )
+	    {
+	      if ( (i32 & DSPD_PCM_SBIT_PLAYBACK) && cli->playback_stream >= 0 )
+		{
+		  ret = open_client_stream(cli);
+		  if ( ret >= 0 )
+		    {
+		      cli->playback_stream = ret;
+		      ret = 0;
+		    }
+		}
+	      if ( (i32 & DSPD_PCM_SBIT_CAPTURE) && cli->capture_stream >= 0 && ret == 0 )
+		{
+		  ret = open_client_stream(cli);
+		  if ( ret >= 0 )
+		    {
+		      cli->capture_stream = ret;
+		      ret = 0;
+		    }
+		}
+	    } else
+	    {
+	      if ( cli->playback_stream < 0 && cli->capture_stream < 0 && cli->stream < 0 )
+		{
+		  ret = open_client_stream(cli);
+		  if ( ret >= 0 )
+		    {
+		      cli->stream = ret;
+		      cli->playback_stream = ret;
+		      dspd_slist_ref(dspd_dctx.objects, cli->playback_stream);
+		      cli->capture_stream = ret;
+		      dspd_slist_ref(dspd_dctx.objects, cli->capture_stream);
+		      ret = 0; 
+		    }
+		}
+	    }
+	  if ( ret < 0 )
+	    {
+	      ret = dspd_req_reply_err(rctx, 0, ret);
+	    } else
+	    {
+	      i64 = cli->playback_stream;
+	      i64 <<= 32U;
+	      i64 |= cli->capture_stream;
+	      ret = dspd_req_reply_buf(rctx, 0, &i64, sizeof(i64));
+	    }
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+      break;
+    case DSPD_SOCKSRV_REQ_DMCLI:
+      if ( inbufsize == sizeof(int32_t) )
+	{
+	  i32 = *(int32_t*)inbuf;
+	  if ( cli->playback_stream == cli->capture_stream &&
+	       cli->playback_stream == cli->stream &&
+	       cli->stream >= 0 &&
+	       i32 == DSPD_PCM_SBIT_FULLDUPLEX )
+	    {
+	      dspd_slist_unref(dspd_dctx.objects, cli->playback_stream);
+	      dspd_slist_unref(dspd_dctx.objects, cli->capture_stream);
+	      close_client_stream(cli, cli->stream);
+	    } else
+	    {
+	      if ( cli->playback_stream >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
+		{
+		  close_client_stream(cli, cli->playback_stream);
+		  cli->playback_stream = -1;
+		}
+	      if ( cli->capture_stream >= 0 && (i32 & DSPD_PCM_SBIT_CAPTURE) )
+		{
+		  close_client_stream(cli, cli->capture_stream);
+		  cli->capture_stream = -1;
+		}
+	    }
+	  ret = dspd_req_reply_err(rctx, 0, 0);
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+      break;
+    case DSPD_SOCKSRV_REQ_RMSRV:
+      if ( inbufsize == sizeof(int64_t) )
+	{
+	  i64 = *(int64_t*)inbuf;
+	  i32 = i64 >> 32U;
+	  dev = i64 & 0xFFFFFFFFLL;
+	  ret = open_device(cli, dev, i32, &info);
+	  if ( ret >= 0 )
+	    {
+	      if ( (i32 & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
+		{
+		  if ( cli->playback_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		  if ( cli->capture_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		  if ( cli->device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->device);
+		  cli->device = ret;
+		  cli->playback_device = cli->device;
+		  dspd_slist_ref(dspd_dctx.objects, cli->playback_device);
+		  cli->capture_device = cli->device;
+		  dspd_slist_ref(dspd_dctx.objects, cli->capture_device);
+		} else if ( i32 & DSPD_PCM_SBIT_PLAYBACK )
+		{
+		  if ( cli->playback_device >= 0 )
+		    dspd_daemon_unref(cli->playback_device);
+		  cli->playback_device = ret;
+		} else if ( i32 & DSPD_PCM_SBIT_CAPTURE )
+		{
+		  if ( cli->capture_device >= 0 )
+		    dspd_daemon_unref(cli->capture_device);
+		  cli->capture_device = ret;
+		} else
+		{
+		  if ( cli->device >= 0 )
+		    dspd_daemon_unref(cli->device);
+		  cli->device = ret;
+		}
+	      if ( outbufsize == sizeof(struct dspd_device_stat) )
+		ret = dspd_req_reply_buf(rctx, 0, &info, sizeof(info));
+	      else
+		ret = dspd_req_reply_err(rctx, 0, 0);
+	    } else
+	    {
+	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	    }
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+      break;
+    case DSPD_SOCKSRV_REQ_UMSRV:
+      if ( inbufsize == sizeof(int32_t) )
+	{
+	  i32 = *(int32_t*)inbuf;
+	  if ( i32 == DSPD_PCM_SBIT_FULLDUPLEX &&
+	       cli->playback_device == cli->capture_device &&
+	       cli->capture_device == cli->device &&
+	       cli->device >= 0 )
+	    {
+	      dspd_daemon_unref(cli->playback_device);
+	      cli->playback_device = -1;
+	      dspd_daemon_unref(cli->capture_device);
+	      cli->capture_device = -1;
+	      dspd_daemon_unref(cli->device);
+	      cli->device = -1;
+	    } else if ( i32 == 0 )
+	    {
+	      if ( cli->playback_device >= 0 )
+		{
+		  dspd_daemon_unref(cli->playback_device);
+		  cli->playback_device = -1;
+		}
+	      if ( cli->capture_device >= 0 )
+		{
+		  dspd_daemon_unref(cli->capture_device);
+		  cli->capture_device = -1;
+		}
+	      if ( cli->device >= 0 )
+		{
+		  dspd_daemon_unref(cli->device);
+		  cli->device = -1;
+		}
+	    } else
+	    {
+	      if ( cli->playback_device >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
+		{
+		  dspd_daemon_unref(cli->playback_device);
+		  cli->playback_device = -1;
+		}
+	      if ( cli->capture_device >= 0 && (i32 & DSPD_PCM_SBIT_CAPTURE) )
+		{
+		  dspd_daemon_unref(cli->capture_device);
+		  cli->capture_device = -1;
+		}
+	    }
+	  ret = dspd_req_reply_err(rctx, 0, 0);
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+      break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);
       break;
@@ -400,7 +661,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
 			   len,
 			   optr,
 			   cli->rctx.outbufsize);
-    } else if ( req->stream == cli->stream )
+    } else if ( stream_valid(cli, req->stream) )
     {
       //Can make any request
       ret = dspd_slist_ctl(dspd_dctx.objects,
@@ -486,7 +747,7 @@ static int client_dispatch_packet(struct ss_cctx *cli)
 {
   struct dspd_req *req = cli->pkt_in;
   int ret;
-  if ( req->stream == cli->stream && 
+  if ( stream_valid(cli, req->stream) &&
        (cli->pkt_cmd == DSPD_SCTL_CLIENT_START ||
 	cli->pkt_cmd == DSPD_SCTL_CLIENT_STOP ||
 	cli->pkt_cmd == DSPD_SCTL_CLIENT_SETTRIGGER) )
@@ -615,14 +876,14 @@ int client_pipe_event(void *data,
       dev = event->arg >> 32;
       if ( dev >= 0 )
 	{
-	  if ( (cli->device == dev) && ((cli->stream == event->stream) || (cli->stream < 0)) )
+	  if ( device_valid(cli, dev) && (stream_valid(cli, event->stream) || (cli->stream < 0)) )
 	    {
 	      cli->event_flags |= event->arg & 0xFFFF;
 	      ret = prepare_events(context, index, cli);
 	    }
 	} else
 	{
-	  if ( (cli->stream < 0) || (cli->stream == event->stream) )
+	  if ( (cli->stream < 0) || stream_valid(cli, event->stream) )
 	    {
 	      cli->event_flags |= event->arg & 0xFFFF;
 	      ret = prepare_events(context, index, cli);
@@ -644,27 +905,26 @@ static bool client_destructor(void *data,
 			      int fd)
 {
   struct ss_cctx *cli = data;
-  size_t br;
+
   dspd_mutex_lock(&cli->lock);
   cli->fd = -1;
   dspd_mutex_unlock(&cli->lock);
   if ( cli->stream >= 0 )
-    {
-      //Server retains the client, so disconnect to make sure
-      //it is actually released.
-      dspd_stream_ctl(&dspd_dctx, 
-		      cli->stream,
-		      DSPD_SCTL_CLIENT_DISCONNECT,
-		      NULL,
-		      0,
-		      NULL,
-		      0,
-		      &br);
-      dspd_daemon_unref(cli->stream);
-    }
+    close_client_stream(cli, cli->stream);
+  
+  if ( cli->playback_stream >= 0 )
+    close_client_stream(cli, cli->playback_stream);
+
+  if ( cli->capture_stream >= 0 )
+    close_client_stream(cli, cli->capture_stream);
+
   dspd_mutex_destroy(&cli->lock);
   if ( cli->device >= 0 )
     dspd_daemon_unref(cli->device);
+  if ( cli->playback_device >= 0 )
+    dspd_daemon_unref(cli->playback_device);
+  if ( cli->capture_device >= 0 )
+    dspd_daemon_unref(cli->capture_device);
   if ( cli->req_ctx )
     dspd_req_ctx_delete(cli->req_ctx);
   if ( cli->pkt_fd >= 0 )
@@ -698,6 +958,10 @@ static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx)
 
   ctx->stream = -1;
   ctx->device = -1;
+  ctx->playback_device = -1;
+  ctx->capture_device = -1;
+  ctx->playback_stream = -1;
+  ctx->capture_stream = -1;
   ctx->cbctx = cbctx;
   ctx->fd = fd;
   ctx->index = -1;
