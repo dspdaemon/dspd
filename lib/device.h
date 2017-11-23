@@ -318,6 +318,7 @@ struct dspd_pcmdev_ops {
 
 };
 
+
 struct dspd_cli_params {
   int32_t format;
   int32_t channels; //0 if disabled.
@@ -360,9 +361,18 @@ struct dspd_cli_params {
    */
 #define DSPD_CLI_XFLAG_EXACTSIZE   8
 
+  /*
+    Channels are (playback|(capture << 16)) instead of
+    count.  If playback or capture is 0, then that stream
+    is not being specified in this instance (could be not used
+    or specified separately).
+  */
+#define DSPD_CLI_PCHAN(_c) (_c&0xFFFFU)
+#define DSPD_CLI_CCHAN(_c) ((_c>>16U)&0xFFFF)
+#define DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS 16
+
 };
 struct dspd_cli_stat {
-  char    dest[128];
   int32_t streams;
   int32_t flags;
   int32_t error;
