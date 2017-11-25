@@ -66,4 +66,16 @@ void dspd_conn_set_event_flag_cb(struct dspd_conn *conn,
 				 void *arg);
 uint32_t dspd_conn_get_event_flags(struct dspd_conn *conn, bool clear);
 
+#define SELECT_DEV_OK     1
+#define SELECT_DEV_REJECT 0
+#define SELECT_DEV_ABORT -1
+#define SELECT_DEV_OK_ABORT -2
+int32_t dspd_select_device(struct dspd_conn *ssc, 
+			   int32_t streams,
+			   int32_t (*select_device)(void *arg, int32_t streams, const struct dspd_device_stat *info),
+			   void *arg);
+			   
+			   
+			   
+
 #endif

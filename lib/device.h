@@ -8,6 +8,11 @@ struct dspd_pcmcli_status;
 struct dspd_pcmcli_ops;
 
 #include "atomic.h"
+//Maximum objects supported.  Don't change this.
+#define DSPD_OBJLIST_MAX 256
+#define DSPD_MASK_MAX ((DSPD_OBJLIST_MAX/8)+1)
+
+//Objects supported in this program.  May be adjusted from 4 to DSPD_OBJLIST_MAX
 #define DSPD_MAX_OBJECTS 256
 #define DSPD_MASK_SIZE ((DSPD_MAX_OBJECTS/8)+1)
 struct dspd_pcm_status {

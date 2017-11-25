@@ -11,6 +11,7 @@
 #include "ssclient.h"
 
 
+
 static bool check_async_event(struct dspd_conn *conn)
 {
   bool ret;
@@ -630,4 +631,164 @@ uint32_t dspd_conn_get_event_flags(struct dspd_conn *conn, bool clear)
     conn->event_flags = 0;
   dspd_mutex_unlock(&conn->lock);
   return ret;
+}
+
+
+int32_t dspd_select_device(struct dspd_conn *ssc, 
+			   int32_t streams,
+			   int32_t (*select_device)(void *arg, int32_t streams, const struct dspd_device_stat *info),
+			   void *arg)
+{
+  int32_t pdef = -1, cdef = -1, def = -1, s, dev;
+  uint8_t mask[DSPD_MASK_MAX];
+  int32_t err = 0, ret;
+  size_t br;
+  struct dspd_device_stat dstat;
+  uint32_t mtype;
+  size_t n, i;
+  if ( select_device == NULL )
+    {
+      err = dspd_stream_ctl(ssc, 0, DSPD_DCTL_GET_DEFAULTDEV, &streams, sizeof(streams), &def, sizeof(def), &br);
+      if ( err == 0 && def == -1 )
+	{
+	  if ( streams == DSPD_PCM_SBIT_FULLDUPLEX )
+	    {
+	      s = DSPD_PCM_SBIT_PLAYBACK;
+	      err = dspd_stream_ctl(ssc, 
+				    0, 
+				    DSPD_DCTL_GET_DEFAULTDEV, 
+				    &s, 
+				    sizeof(s), 
+				    &pdef, 
+				    sizeof(pdef), 
+				    &br);
+	      if ( err == 0 )
+		{
+		  s = DSPD_PCM_SBIT_CAPTURE;
+		  err = dspd_stream_ctl(ssc, 
+					0, 
+					DSPD_DCTL_GET_DEFAULTDEV, 
+					&s, 
+					sizeof(s), 
+					&cdef, 
+					sizeof(cdef), 
+					&br);
+		}
+	    }
+	} else
+	{
+	  if ( s & DSPD_PCM_SBIT_PLAYBACK )
+	    pdef = def;
+	  if ( s & DSPD_PCM_SBIT_CAPTURE )
+	    cdef = def;
+	}
+      if ( err == 0 && pdef >= 0 )
+	{
+	  err = dspd_stream_ctl(ssc,
+				-1,
+				DSPD_SOCKSRV_REQ_REFSRV,
+				&pdef,
+				sizeof(pdef),
+				&dstat,
+				sizeof(dstat),
+				&br);
+	  if ( err == 0 && (dstat.streams & DSPD_PCM_SBIT_PLAYBACK) )
+	    {
+	      s = DSPD_PCM_SBIT_PLAYBACK;
+	      if ( cdef >= 0 )
+		s |= DSPD_PCM_SBIT_CAPTURE;
+	      err = dspd_stream_ctl(ssc,
+				    -1,
+				    DSPD_SOCKSRV_REQ_SETSRV,
+				    &s,
+				    sizeof(s),
+				    NULL,
+				    0,
+				    &br);
+	    }
+	}
+      if ( err == 0 && cdef >= 0 && cdef != pdef )
+	{
+	  s = DSPD_PCM_SBIT_CAPTURE;
+	  err = dspd_stream_ctl(ssc,
+				-1,
+				DSPD_SOCKSRV_REQ_SETSRV,
+				&s,
+				sizeof(s),
+				NULL,
+				0,
+				&br);
+	}
+    } else
+    {
+      mtype = DSPD_DCTL_ENUM_TYPE_SERVER;
+      err = dspd_stream_ctl(ssc,
+			    0,
+			    DSPD_DCTL_ENUMERATE_OBJECTS,
+			    &mtype,
+			    sizeof(mtype),
+			    mask,
+			    sizeof(mask),
+			    &br);
+      if ( err == 0 )
+	{
+	  n = br * 8;
+	  memset(&dstat, 0, sizeof(dstat));
+	  br = 0;
+	  for ( i = 0; i < n; i++ )
+	    {
+	      if ( dspd_test_bit(mask, i) )
+		{
+		  dev = i;
+		  err = dspd_stream_ctl(ssc,
+					-1,
+					DSPD_SOCKSRV_REQ_REFSRV,
+					&dev,
+					sizeof(dev),
+					&dstat,
+					sizeof(dstat),
+					&br);
+		  if ( err < 0 && err != -ENOENT )
+		    break;
+		  if ( br == sizeof(dstat) && (streams == 0 || (dstat.streams & streams)) )
+		    {
+		      ret = select_device(arg, streams, &dstat);
+		      if ( ret == SELECT_DEV_OK )
+			{
+			  err = dspd_stream_ctl(ssc,
+						-1,
+						DSPD_SOCKSRV_REQ_SETSRV,
+						&dstat.streams,
+						sizeof(dstat.streams),
+						NULL,
+						0,
+						&br);
+			} else if ( ret == SELECT_DEV_REJECT )
+			{
+			  continue;
+			} else if ( ret == SELECT_DEV_ABORT )
+			{
+			  err = -EINTR;
+			  break;
+			} else if ( ret == SELECT_DEV_OK_ABORT )
+			{
+			  err = dspd_stream_ctl(ssc,
+						-1,
+						DSPD_SOCKSRV_REQ_SETSRV,
+						&dstat.streams,
+						sizeof(dstat.streams),
+						NULL,
+						0,
+						&br);
+			  break;
+			}
+		      if ( err < 0 )
+			break;
+ 		    }
+		}
+	    }
+	}
+    }
+
+  return err;
 }

@@ -74,6 +74,8 @@ struct ss_sctx {
   struct cbpoll_ctx  cbctx;
 };
 
+
+
 static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
 				      uint32_t             req,
 				      const void          *inbuf,
@@ -101,6 +103,8 @@ static inline bool device_valid(struct ss_cctx *ctx, int32_t device)
 	  ctx->playback_device == device ||
 	  ctx->capture_device == device);
 }
+
+
 
 static int32_t client_reply_buf(struct dspd_rctx *arg, 
 				int32_t flags, 
@@ -426,7 +430,8 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = 0;
 	  if ( i32 )
 	    {
-	      if ( (i32 & DSPD_PCM_SBIT_PLAYBACK) && cli->playback_stream >= 0 )
+	      //Open one or two half duplex streams.
+	      if ( (i32 & DSPD_PCM_SBIT_PLAYBACK) && cli->playback_stream < 0 )
 		{
 		  ret = open_client_stream(cli);
 		  if ( ret >= 0 )
@@ -435,7 +440,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		      ret = 0;
 		    }
 		}
-	      if ( (i32 & DSPD_PCM_SBIT_CAPTURE) && cli->capture_stream >= 0 && ret == 0 )
+	      if ( (i32 & DSPD_PCM_SBIT_CAPTURE) && cli->capture_stream < 0 && ret == 0 )
 		{
 		  ret = open_client_stream(cli);
 		  if ( ret >= 0 )
@@ -446,6 +451,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		}
 	    } else
 	    {
+	      //Open one full duplex stream
 	      if ( cli->playback_stream < 0 && cli->capture_stream < 0 && cli->stream < 0 )
 		{
 		  ret = open_client_stream(cli);
@@ -484,9 +490,12 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	       cli->stream >= 0 &&
 	       i32 == DSPD_PCM_SBIT_FULLDUPLEX )
 	    {
-	      dspd_slist_unref(dspd_dctx.objects, cli->playback_stream);
-	      dspd_slist_unref(dspd_dctx.objects, cli->capture_stream);
+	      close_client_stream(cli, cli->playback_stream);
+	      close_client_stream(cli, cli->capture_stream);
 	      close_client_stream(cli, cli->stream);
+	      cli->playback_stream = -1;
+	      cli->capture_stream = -1;
+	      cli->stream = -1;
 	    } else
 	    {
 	      if ( cli->playback_stream >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
@@ -566,6 +575,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	       cli->capture_device == cli->device &&
 	       cli->device >= 0 )
 	    {
+	      //Unref full duplex
 	      dspd_daemon_unref(cli->playback_device);
 	      cli->playback_device = -1;
 	      dspd_daemon_unref(cli->capture_device);
@@ -574,6 +584,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	      cli->device = -1;
 	    } else if ( i32 == 0 )
 	    {
+	      //Unref all
 	      if ( cli->playback_device >= 0 )
 		{
 		  dspd_daemon_unref(cli->playback_device);
@@ -591,6 +602,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		}
 	    } else
 	    {
+	      //Unref specified stream
 	      if ( cli->playback_device >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
 		{
 		  dspd_daemon_unref(cli->playback_device);
@@ -612,15 +624,16 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
       if ( inbufsize == sizeof(int32_t) )
 	{
 	  i32 = *(int32_t*)inbuf;
+	  //Must have already referenced the device
 	  if ( cli->device >= 0 )
 	    {
 	      ret = 0;
 	      if ( i32 == DSPD_PCM_SBIT_FULLDUPLEX )
 		{
 		  if ( cli->playback_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		    dspd_daemon_unref(cli->playback_device);
 		  if ( cli->capture_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		    dspd_daemon_unref(cli->capture_device);
 		  cli->playback_device = cli->device;
 		  cli->device = -1;
 		  cli->capture_device = cli->capture_device;
@@ -628,13 +641,13 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		} else if ( i32 == DSPD_PCM_SBIT_CAPTURE )
 		{
 		  if ( cli->playback_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		    dspd_daemon_unref(cli->playback_device);
 		  cli->playback_device = cli->device;
 		  cli->device = -1;
 		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
 		{
 		   if ( cli->capture_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		     dspd_daemon_unref(cli->capture_device);
 		  cli->capture_device = cli->device;
 		  cli->device = -1;
 		} else
