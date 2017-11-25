@@ -452,6 +452,9 @@ int dspd_ipc_process_messages(struct dspd_conn *conn, int timeout)
 {
   struct pollfd pfd;
   int ret, result = 0;
+  uint32_t objtype = *(uint32_t*)conn;
+  if ( objtype != DSPD_OBJ_TYPE_IPC )
+    return 0;
   dspd_mutex_lock(&conn->lock);
   pfd.fd = conn->sock_fd;
   pfd.events = POLLIN | POLLRDHUP;

@@ -608,6 +608,46 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
 	}
       break;
+    case DSPD_SOCKSRV_REQ_SETSRV:
+      if ( inbufsize == sizeof(int32_t) )
+	{
+	  i32 = *(int32_t*)inbuf;
+	  if ( cli->device >= 0 )
+	    {
+	      ret = 0;
+	      if ( i32 == DSPD_PCM_SBIT_FULLDUPLEX )
+		{
+		  if ( cli->playback_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		  if ( cli->capture_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		  cli->playback_device = cli->device;
+		  cli->device = -1;
+		  cli->capture_device = cli->capture_device;
+		  dspd_slist_ref(dspd_dctx.objects, cli->capture_device);
+		} else if ( i32 == DSPD_PCM_SBIT_CAPTURE )
+		{
+		  if ( cli->playback_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		  cli->playback_device = cli->device;
+		  cli->device = -1;
+		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
+		{
+		   if ( cli->capture_device >= 0 )
+		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		  cli->capture_device = cli->device;
+		  cli->device = -1;
+		} else
+		{
+		  ret = EINVAL;
+		}
+	    }
+	} else
+	{
+	  ret = EINVAL;
+	}
+      ret = dspd_req_reply_err(rctx, 0, ret);
+      break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);
       break;

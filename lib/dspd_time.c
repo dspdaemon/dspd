@@ -161,28 +161,34 @@ int dspd_timer_new(struct dspd_timer **tmr)
 int dspd_timer_set(struct dspd_timer *tmr, dspd_time_t abstime, uint32_t per)
 {
   struct itimerspec new_val, old_val;
-  int err;
-  if ( abstime == tmr->oneshot_next && per == tmr->interval )
+  int err = 0;
+  if ( abstime == tmr->oneshot_next && per == tmr->interval && tmr->unlatch == false )
     return 0;
-  if ( per > 0 )
+  if ( ! tmr->latched )
     {
-      new_val.it_interval.tv_sec = per / 1000000000;
-      new_val.it_interval.tv_nsec = per % 1000000000;
-    } else
-    {
-      new_val.it_interval.tv_sec = 0;
-      new_val.it_interval.tv_nsec = 0;
+      if ( per > 0 )
+	{
+	  new_val.it_interval.tv_sec = per / 1000000000;
+	  new_val.it_interval.tv_nsec = per % 1000000000;
+	} else
+	{
+	  new_val.it_interval.tv_sec = 0;
+	  new_val.it_interval.tv_nsec = 0;
+	}
+      new_val.it_value.tv_sec = abstime / 1000000000;
+      new_val.it_value.tv_nsec = abstime % 1000000000;
+      tmr->oneshot_next = abstime;
+      tmr->interval = per;
+      err = timerfd_settime(tmr->fd, 
+			    TFD_TIMER_ABSTIME,
+			    &new_val,
+			    &old_val);
+      if ( err < 0 )
+	return -errno;
     }
-  new_val.it_value.tv_sec = abstime / 1000000000;
-  new_val.it_value.tv_nsec = abstime % 1000000000;
   tmr->oneshot_next = abstime;
   tmr->interval = per;
-  err = timerfd_settime(tmr->fd, 
-			TFD_TIMER_ABSTIME,
-			&new_val,
-			&old_val);
-  if ( err < 0 )
-    return -errno;
+  tmr->trigger = false;
   return 0;
 }
 
@@ -224,6 +230,49 @@ void dspd_timer_delete(struct dspd_timer *tmr)
   dspd_timer_destroy(tmr);
   free(tmr);
 }
+
+int dspd_timer_fire(struct dspd_timer *tmr, bool latch)
+{
+  int ret;
+  uint64_t t;
+  if ( tmr->trigger == false )
+    {
+      t = tmr->oneshot_next;
+      ret = dspd_timer_set(tmr, 1, tmr->interval);
+      if ( ret == 0 )
+	{
+	  if ( latch == true )
+	    tmr->latched = true;
+	  tmr->trigger = true;
+	}
+      tmr->oneshot_next = t;
+    }
+  return ret;
+}
+
+int dspd_timer_ack(struct dspd_timer *tmr)
+{
+  uint64_t val;
+  int32_t ret = 0;
+  if ( read(tmr->fd, &val, sizeof(val)) == sizeof(val) )
+    {
+      if ( tmr->latched )
+	{
+	  tmr->unlatch = true;
+	  tmr->latched = false;
+	  ret = dspd_timer_set(tmr, tmr->oneshot_next, tmr->interval);
+	  tmr->unlatch = false;
+	}
+      tmr->trigger = false;
+    }
+  return ret;
+}
+
+bool dspd_timer_triggered(struct dspd_timer *tmr)
+{
+  return tmr->trigger;
+}
+
 
 int dspd_sleep(dspd_time_t abstime, dspd_time_t *waketime)
 {

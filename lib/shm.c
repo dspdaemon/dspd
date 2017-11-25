@@ -91,7 +91,10 @@ static int dspd_shm_open(int flags)
     shm_unlink(name);
   pthread_mutex_unlock(&lock);
   if ( ret < 0 )
-    errno = e;
+    {
+      errno = e;
+      ret = -e;
+    }
   return ret;
 }
 
@@ -165,9 +168,9 @@ int dspd_shm_create(struct dspd_shm_map *map,
   int fd = -1, flags, p, ret;
   len = calculate_size(sect, nsect);
   if ( len == 0 )
-    return EINVAL;
+    return -EINVAL;
   if ( map->flags & (DSPD_SHM_FLAG_MMAP | DSPD_SHM_FLAG_SVIPC) )
-    return EINVAL; //Can't specify SHM type
+    return -EINVAL; //Can't specify SHM type
   flags = map->flags;
   if ( map->flags & DSPD_SHM_FLAG_PRIVATE )
     {
@@ -228,7 +231,7 @@ int dspd_shm_create(struct dspd_shm_map *map,
       ret = 0;
     } else
     {
-      ret = errno;
+      ret = -errno;
 
       if ( fd >= 0 )
 	close(fd);
@@ -269,15 +272,15 @@ static int dspd_shm_attach_mmap(struct dspd_shm_map *map)
 	      ret = 0;
 	    } else
 	    {
-	      ret = errno;
+	      ret = -errno;
 	    }
 	} else
 	{
-	  ret = errno;
+	  ret = -errno;
 	}
     } else
     {
-      ret = errno;
+      ret = -errno;
     }
   return ret;
 }
@@ -285,7 +288,7 @@ static int dspd_shm_attach_mmap(struct dspd_shm_map *map)
 static int dspd_shm_attach_private(struct dspd_shm_map *map)
 {
   if ( ! map->addr )
-    return EINVAL;
+    return -EINVAL;
   return 0;
 }
 
@@ -294,7 +297,7 @@ static int dspd_shm_attach_private(struct dspd_shm_map *map)
 */
 int dspd_shm_attach(struct dspd_shm_map *map)
 {
-  int ret = EINVAL, t;
+  int ret = -EINVAL, t;
   uint32_t l;
   if ( map->length <= UINT32_MAX &&
        map->section_count < UINT32_MAX )
@@ -359,7 +362,7 @@ static int dspd_verify_section(const struct dspd_shm_map *map,
       ret = 0;
     } else
     {
-      ret = EBADFD;
+      ret = -EBADFD;
     }
   return ret;
 }
@@ -372,7 +375,7 @@ int dspd_shm_get_addr(const struct dspd_shm_map *map,
 		      struct dspd_shm_addr *addr)
 {
   uint32_t i, sectid;
-  int ret = ENOENT;
+  int ret = -ENOENT;
   const struct dspd_shm_section *sect;
   for ( i = 0; i < map->section_count; i++ )
     {

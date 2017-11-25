@@ -19,8 +19,11 @@ struct dspd_timer {
   int      fd;
   uint64_t oneshot_next;
   uint32_t interval;
+  bool     latched;
+  bool     unlatch;
+  bool     trigger;
 };
-
+#define DSPD_EVENT_DISABLE ((dspd_time_t*)UINTPTR_MAX)
 int dspd_timer_init(struct dspd_timer *tmr);
 void dspd_timer_destroy(struct dspd_timer *tmr);
 
@@ -31,7 +34,8 @@ int dspd_timer_set(struct dspd_timer *tmr, uint64_t abstime, uint32_t per);
 int dspd_timer_getexp(struct dspd_timer *tmr, uint64_t *exp);
 int dspd_timer_getpollfd(struct dspd_timer *tmr, struct pollfd *pfd);
 void dspd_timer_destroy(struct dspd_timer *tmr);
-
+int dspd_timer_fire(struct dspd_timer *tmr, bool latch);
+int dspd_timer_ack(struct dspd_timer *tmr);
 #define dspd_timer_reset(_t) dspd_timer_set(_t, 0, 0)
 
 struct dspd_intrp {
