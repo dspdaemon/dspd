@@ -511,7 +511,7 @@ int dspd_conn_ctl(struct dspd_conn *conn,
   conn->header_out.flags = 0;
   conn->header_out.cmd = req & 0xFFFF; //16 bits for now
   conn->header_out.stream = stream;
-  conn->header_out.reserved = 0;
+  conn->header_out.bytes_returned = 0;
   conn->header_out.rdata.rlen = outbufsize;
 
   if ( conn->fd_in >= 0 )
@@ -636,7 +636,7 @@ uint32_t dspd_conn_get_event_flags(struct dspd_conn *conn, bool clear)
 
 int32_t dspd_select_device(struct dspd_conn *ssc, 
 			   int32_t streams,
-			   int32_t (*select_device)(void *arg, int32_t streams, const struct dspd_device_stat *info),
+			   int32_t (*select_device)(void *arg, int32_t streams, int32_t index, const struct dspd_device_stat *info),
 			   void *arg)
 {
   int32_t pdef = -1, cdef = -1, def = -1, s, dev;
@@ -752,7 +752,7 @@ int32_t dspd_select_device(struct dspd_conn *ssc,
 		    break;
 		  if ( br == sizeof(dstat) && (streams == 0 || (dstat.streams & streams)) )
 		    {
-		      ret = select_device(arg, streams, &dstat);
+		      ret = select_device(arg, streams, dev, &dstat);
 		      if ( ret == SELECT_DEV_OK )
 			{
 			  err = dspd_stream_ctl(ssc,
@@ -792,3 +792,15 @@ int32_t dspd_select_device(struct dspd_conn *ssc,
 
   return err;
 }
+
+int dspd_conn_get_socket(struct dspd_conn *conn)
+{
+  uint32_t objtype = *(uint32_t*)conn;
+  int32_t ret;
+  if ( objtype == DSPD_OBJ_TYPE_IPC )
+    ret = conn->sock_fd;
+  else
+    ret = -ENOTSOCK;
+  return ret;
+}
+

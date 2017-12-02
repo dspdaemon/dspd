@@ -108,7 +108,7 @@ void cbpoll_unref(struct cbpoll_ctx *ctx, int index)
   fd->refcnt--;
   if ( fd->refcnt == 0 )
     {
-      if ( ! (fd->flags & CBPOLLFD_FLAG_REMOVED) )
+      if ( (fd->flags & CBPOLLFD_FLAG_REMOVED) == 0 && fd->fd >= 0 )
 	epoll_ctl(ctx->epfd,
 		  EPOLL_CTL_DEL,
 		  fd->fd,
@@ -119,10 +119,14 @@ void cbpoll_unref(struct cbpoll_ctx *ctx, int index)
 				   ctx,
 				   index,
 				   fd->fd) )
-	    close(fd->fd);
+	    {
+	      if ( fd->fd >= 0 )
+		close(fd->fd);
+	    }
 	} else
 	{
-	  close(fd->fd);
+	  if ( fd->fd >= 0 )
+	    close(fd->fd);
 	}
       fd->data = NULL;
       fd->fd = -1;
@@ -142,12 +146,36 @@ void cbpoll_ref(struct cbpoll_ctx *ctx, int index)
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index)
 {
   struct cbpoll_fd *fd = &ctx->fdata[index];
-  epoll_ctl(ctx->epfd,
-	    EPOLL_CTL_DEL,
-	    fd->fd,
-	    NULL);
+  if ( fd->fd >= 0 && (fd->flags & CBPOLLFD_FLAG_REMOVED) == 0 )
+    {
+      epoll_ctl(ctx->epfd,
+		EPOLL_CTL_DEL,
+		fd->fd,
+		NULL);
+    }
   fd->flags |= CBPOLLFD_FLAG_REMOVED;
   cbpoll_unref(ctx, index);
+}
+
+/*
+  The idea is to be able to add events for virtual file descriptors while dispatching.  This will
+  work because virtual file descriptors won't ever be set by epoll_wait() and there is guaranteed to
+  be a slot available for each file descriptor.  The real file descriptor that triggers the event
+  will always be lower than the first unused event slot so any new events will always be handled.
+*/
+int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events)
+{
+  int32_t ret;
+  if ( ctx->dispatch_count >= 0 )
+    {
+      *events = ctx->events;
+      *count = &ctx->dispatch_count;
+      ret = 0;
+    } else
+    {
+      ret = -EAGAIN;
+    }
+  return ret;
 }
 
 static void *cbpoll_thread(void *p)
@@ -166,6 +194,7 @@ static void *cbpoll_thread(void *p)
     set_thread_name(ctx->name);
   while ( AO_load(&ctx->abort) == 0 )
     {
+      ctx->dispatch_count = -1;
       if ( ctx->sleep )
 	ctx->sleep(ctx->arg, ctx);
       ret = epoll_wait(ctx->epfd, ctx->events, ctx->max_fd, -1);
@@ -181,7 +210,8 @@ static void *cbpoll_thread(void *p)
 	    }
 	}
       ctx->wq.overflow.fd = -1;
-      for ( i = 0; i < ret; i++ )
+      ctx->dispatch_count = ret;
+      for ( i = 0; i < ctx->dispatch_count; i++ )
 	{
 	  ev = &ctx->events[i];
 	  fd = ev->data.u64 & 0xFFFFFFFF;
@@ -367,17 +397,24 @@ int32_t cbpoll_set_events(struct cbpoll_ctx *ctx,
        (events & EPOLLONESHOT) )
     {
       assert(f->refcnt);
-      evt.events = events;
-      if ( evt.events & (EPOLLIN|EPOLLOUT) )
-	evt.events |= EPOLLRDHUP;
-      evt.data.u64 = index;
-      evt.data.u64 <<= 32;
-      evt.data.u64 |= f->fd;
-      ret = epoll_ctl(ctx->epfd, EPOLL_CTL_MOD, f->fd, &evt);
-      if ( ret < 0 )
-	ret = -errno;
-      else
-	f->events = events;
+      if ( f->fd >= 0 )
+	{
+	  evt.events = events;
+	  if ( evt.events & (EPOLLIN|EPOLLOUT) )
+	    evt.events |= EPOLLRDHUP;
+	  evt.data.u64 = index;
+	  evt.data.u64 <<= 32;
+	  evt.data.u64 |= f->fd;
+	  ret = epoll_ctl(ctx->epfd, EPOLL_CTL_MOD, f->fd, &evt);
+	  if ( ret < 0 )
+	    ret = -errno;
+	  else
+	    f->events = events;
+	} else
+	{
+	  f->events = events;
+	  ret = 0;
+	}
     } else
     {
       ret = 0;
@@ -401,13 +438,19 @@ int32_t cbpoll_add_fd(struct cbpoll_ctx *ctx,
       if ( f->refcnt == 0 )
 	{
 	  evt.events = events;
-	  evt.data.u64 = i;
-	  evt.data.u64 <<= 32;
-	  evt.data.u64 |= fd;
-	  ret = epoll_ctl(ctx->epfd, 
-			  EPOLL_CTL_ADD,
-			  fd,
-			  &evt);
+	  if ( fd >= 0 )
+	    {
+	      evt.data.u64 = i;
+	      evt.data.u64 <<= 32;
+	      evt.data.u64 |= fd;
+	      ret = epoll_ctl(ctx->epfd, 
+			      EPOLL_CTL_ADD,
+			      fd,
+			      &evt);
+	    } else
+	    {
+	      ret = 0;
+	    }
 	  if ( ret == 0 )
 	    {
 	      index = i;

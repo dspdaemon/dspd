@@ -55,10 +55,12 @@ struct dspd_shm_map {
 
 int dspd_shm_get_addr(const struct dspd_shm_map *map,
 		      struct dspd_shm_addr *addr);
-void dspd_shm_close(struct dspd_shm_map *map);
+
 int dspd_shm_attach(struct dspd_shm_map *map);
 int dspd_shm_create(struct dspd_shm_map *map,
 		    const struct dspd_shm_addr *sect,
 		    uint32_t nsect);
+void dspd_shm_close2(struct dspd_shm_map *map, bool unmap);
 
+#define dspd_shm_close(_map) dspd_shm_close2(_map, true);
 #endif

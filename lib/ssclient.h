@@ -72,10 +72,10 @@ uint32_t dspd_conn_get_event_flags(struct dspd_conn *conn, bool clear);
 #define SELECT_DEV_OK_ABORT -2
 int32_t dspd_select_device(struct dspd_conn *ssc, 
 			   int32_t streams,
-			   int32_t (*select_device)(void *arg, int32_t streams, const struct dspd_device_stat *info),
+			   int32_t (*select_device)(void *arg, int32_t streams, int32_t index, const struct dspd_device_stat *info),
 			   void *arg);
 			   
 			   
 			   
-
+int dspd_conn_get_socket(struct dspd_conn *conn);
 #endif

@@ -65,6 +65,7 @@ struct ss_cctx {
   dspd_mutex_t  lock;
 
   uint16_t event_flags;
+  bool     local;
   //bool     event_sent;
 };
 
@@ -114,14 +115,21 @@ static int32_t client_reply_buf(struct dspd_rctx *arg,
   struct ss_cctx *cli = arg->ops_arg;
   struct dspd_req *req = (struct dspd_req*)cli->pkt_out;
   int32_t ret;
-  if ( buf != req->pdata && len > 0 )
-    memcpy(req->pdata, buf, len);
-  req->len = len + sizeof(struct dspd_req);
+  if ( buf != arg->outbuf && len > 0 )
+    memcpy(arg->outbuf, buf, len);
   req->cmd = cli->pkt_cmd & 0xFFFF;
- 
   req->flags = flags & 0xFFFF;
   req->flags |= cli->event_flags;
- 
+  req->len = sizeof(struct dspd_req);
+  
+  if ( arg->flags & DSPD_REQ_FLAG_POINTER )
+    {
+      req->bytes_returned = len;
+    } else
+    {
+      req->len += len;
+      req->bytes_returned = 0;
+    } 
 
 
   cli->event_flags = 0;
@@ -142,11 +150,21 @@ static int32_t client_reply_fd(struct dspd_rctx *arg,
   struct ss_cctx *cli = arg->ops_arg;
   struct dspd_req *req = (struct dspd_req*)cli->pkt_out;
   int32_t ret;
-  if ( buf != req->pdata && len > 0 )
-    memcpy(req->pdata, buf, len);
-  memcpy(req->pdata, &fd, sizeof(fd));
-  req->len = len + sizeof(struct dspd_req);
-  //req->len |= DSPD_REQ_FLAG_CMSG_FD;
+  if ( buf != arg->outbuf && len > 0 )
+    memcpy(arg->outbuf, buf, len);
+  memcpy(arg->outbuf, &fd, sizeof(fd));
+  req->len = sizeof(struct dspd_req);
+  if ( arg->flags & DSPD_REQ_FLAG_POINTER )
+    {
+      req->bytes_returned = len;
+    } else
+    {
+      req->len += len;
+      req->bytes_returned = 0;
+    } 
+  
+  
+
   req->cmd = cli->pkt_cmd & 0xFFFF;
 
 
@@ -184,9 +202,12 @@ static int32_t client_reply_err(struct dspd_rctx *arg,
   req->flags = DSPD_REQ_FLAG_ERROR | (flags & 0xFFFF);
   req->len = sizeof(*req);
   req->stream = cli->pkt_stream;
+  if ( err > 0 )
+    err *= -1;
   req->rdata.err = err;
   req->flags |= cli->event_flags;
   req->cmd = cli->pkt_cmd & 0xFFFF;
+  req->bytes_returned = 0;
   cli->event_flags = 0;
   ret = sendreq(cli);
   if ( ret == req->len )
@@ -270,6 +291,8 @@ static void close_client_stream(struct ss_cctx *cli, int32_t stream)
 		  &br);
   dspd_daemon_unref(stream);
 }
+
+
 
 static int32_t open_device(struct ss_cctx *cli, int32_t sbits, int32_t dev, struct dspd_device_stat *info)
 {
@@ -654,6 +677,9 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		{
 		  ret = EINVAL;
 		}
+	    } else
+	    {
+	      ret = -EBADFD;
 	    }
 	} else
 	{
@@ -1787,7 +1813,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   int ret = 0;
   size_t len;
   void *iptr, *optr;
-
+  struct dspd_req_pointers *ptrs;
   cli->rctx.user_data = NULL;
   cli->rctx.bytes_returned = 0;
   if ( cli->rctx.flags & DSPD_REQ_FLAG_ERROR )
@@ -1804,15 +1830,37 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   cli->rctx.index = req->stream;
   cli->rctx.flags = cli->pkt_flags;
   cli->rctx.flags &= ~(DSPD_REQ_FLAG_UNIX_FAST_IOCTL|DSPD_REQ_FLAG_UNIX_IOCTL);
+  //Remote connections can't send pointers.
+  if ( cli->local == false )
+    cli->rctx.flags &= ~DSPD_REQ_FLAG_POINTER;
   len = cli->pkt_size - sizeof(*cli->pkt_in);
-  if ( len == 0 )
-    iptr = NULL;
-  else
-    iptr = cli->pkt_in->pdata;
-  if ( cli->rctx.outbufsize == 0 )
-    optr = NULL;
-  else
-    optr = cli->rctx.outbuf;
+
+  if ( cli->rctx.flags & DSPD_REQ_FLAG_POINTER )
+    {
+      if ( cli->local == false || len != sizeof(struct dspd_req_pointers) )
+	return dspd_req_reply_err(&cli->rctx, 0, EINVAL);
+    }
+
+  if ( cli->rctx.flags & DSPD_REQ_FLAG_POINTER )
+    {
+      ptrs = (struct dspd_req_pointers*)cli->pkt_in->pdata;
+      cli->rctx.outbuf = ptrs->outbuf;
+      cli->rctx.outbufsize = ptrs->outbufsize;
+      iptr = ptrs->inbuf;
+      len = ptrs->inbufsize;
+      optr = ptrs->outbuf;
+    } else
+    {
+      if ( len == 0 )
+	iptr = NULL;
+      else
+	iptr = cli->pkt_in->pdata;
+      if ( cli->rctx.outbufsize == 0 )
+	optr = NULL;
+      else
+	optr = cli->rctx.outbuf;
+      cli->rctx.outbuf = cli->pkt_out->pdata;
+    }
   if ( req->stream == -1 )
     {
       //Socket server request
@@ -1961,7 +2009,7 @@ static int prepare_event_pkt(struct cbpoll_ctx *context, int index, struct ss_cc
   //cli->event_sent = true;
   req->stream = -1;
   req->rdata.rlen = 0;
-  req->reserved = 0;
+  req->bytes_returned = 0;
   ret = sendreq(cli);
   if ( ret == req->len )
     {
@@ -2002,7 +2050,10 @@ static int client_fd_event(void *data,
 	      if ( ret < 0 )
 		return -1;
 	      cli->pkt_cmd = cli->pkt_in->cmd;
-	      cli->pkt_flags = DSPD_REQ_FLAG_REMOTE;
+	      if ( ! cli->local )
+		cli->pkt_flags = DSPD_REQ_FLAG_REMOTE;
+	      else
+		cli->pkt_flags = 0;
 	      if ( cli->pkt_fd >= 0 )
 		cli->pkt_flags |= DSPD_REQ_FLAG_CMSG_FD;
 	      cli->pkt_flags |= cli->pkt_in->flags;
@@ -2199,6 +2250,7 @@ static void accept_fd(struct cbpoll_ctx *ctx,
     {
       cli = NULL;
     }
+  memset(&evt, 0, sizeof(evt));
   evt.fd = fd;
   evt.index = index;
   evt.stream = -1;

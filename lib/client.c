@@ -2038,7 +2038,7 @@ static int32_t client_getchannelmap(struct dspd_rctx *context,
     }
   if ( imap )
     {
-      len = dspd_chmap_sizeof(omap);
+      len = dspd_chmap_sizeof(imap);
       if ( len <= outbufsize )
 	{
 	  memcpy(omap, imap, len);

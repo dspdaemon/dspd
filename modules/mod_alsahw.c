@@ -2369,7 +2369,7 @@ static int alsahw_score(void *arg, const struct dspd_dict *device)
 static uint64_t dspd_alsa_selem_getflags(snd_mixer_elem_t *elem)
 {
   uint64_t ret = 0;
-  long maxval, minval;
+  long maxval = 0, minval = 0;
   if ( snd_mixer_selem_has_playback_volume(elem) )
     ret |= DSPD_MIXF_PVOL;
   if ( snd_mixer_selem_has_capture_volume(elem) )

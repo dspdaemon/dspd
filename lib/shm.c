@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <assert.h>
+#include <stdbool.h>
 #include "shm.h"
 static int dspd_verify_section(const struct dspd_shm_map *map,
 			       const struct dspd_shm_section *sect,
@@ -322,20 +323,33 @@ int dspd_shm_attach(struct dspd_shm_map *map)
 /*
   Detach from memory location.
 */
-void dspd_shm_close(struct dspd_shm_map *map)
+void dspd_shm_close2(struct dspd_shm_map *map, bool unmap)
 {
   if ( map->flags & DSPD_SHM_FLAG_MMAP )
     {
-      munmap(map->addr, map->length);
-      close(map->arg);
-      map->flags &= ~DSPD_SHM_FLAG_MMAP;
+      if ( unmap )
+	{
+	  munmap(map->addr, map->length);
+	  map->flags &= ~DSPD_SHM_FLAG_MMAP;
+	}
+      if ( map->arg >= 0 )
+	{
+	  close(map->arg);
+	  map->arg = -1;
+	}
     } else if ( map->flags & DSPD_SHM_FLAG_PRIVATE )
     {
-      map->flags &= ~DSPD_SHM_FLAG_PRIVATE;
-      free(map->addr);
+      if ( unmap )
+	{
+	  map->flags &= ~DSPD_SHM_FLAG_PRIVATE;
+	  free(map->addr);
+	}
     }
-  map->length = 0;
-  map->addr = NULL;
+  if ( unmap )
+    {
+      map->length = 0;
+      map->addr = NULL;
+    }
 }
 
 static int dspd_verify_section(const struct dspd_shm_map *map,

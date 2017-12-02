@@ -233,7 +233,7 @@ void dspd_timer_delete(struct dspd_timer *tmr)
 
 int dspd_timer_fire(struct dspd_timer *tmr, bool latch)
 {
-  int ret;
+  int ret = 0;
   uint64_t t;
   if ( tmr->trigger == false )
     {

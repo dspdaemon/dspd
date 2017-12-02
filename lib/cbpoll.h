@@ -90,7 +90,12 @@ struct cbpoll_ctx {
   struct cbpoll_wq    wq;
   dspd_thread_t thread;
   char *name;
+  int32_t dispatch_count;
 };
+
+int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events);
+
+
 void cbpoll_unref(struct cbpoll_ctx *ctx, int index);
 void cbpoll_ref(struct cbpoll_ctx *ctx, int index);
 uint32_t cbpoll_refcnt(struct cbpoll_ctx *ctx, int index);

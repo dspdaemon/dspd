@@ -19,7 +19,7 @@ struct dspd_req {
   uint32_t cmd;    //Command.  The server turns this into a 32 bit integer
                    //that contains 2 flags
   int32_t  stream; //Stream number or -1 for socket server
-  int32_t  reserved;
+  int32_t  bytes_returned; //Bytes returned from a pointer request
   union {
     uint32_t rlen;
     int32_t  err;
@@ -27,6 +27,12 @@ struct dspd_req {
   char pdata[0];   //Payload
 };
 
+struct dspd_req_pointers {
+  void   *inbuf;
+  size_t  inbufsize;
+  void   *outbuf;
+  size_t  outbufsize;
+};
 
 struct dspd_rcb {
   int32_t (*reply_buf)(struct dspd_rctx *arg, 
@@ -83,6 +89,9 @@ int32_t dspd_req_index(struct dspd_rctx *rctx);
 #define DSPD_REQ_FLAG_REMOTE       (1<<30)
 #define DSPD_REQ_FLAG_UNIX_FAST_IOCTL   (1<<29)
 #define DSPD_REQ_FLAG_UNIX_IOCTL (1<<28)
+//Input and output are pointers.
+#define DSPD_REQ_FLAG_POINTER (1<<27)
+
 
 typedef int32_t (*dspd_req_callback_t)(struct dspd_rctx *context,
 				       uint32_t      req,
