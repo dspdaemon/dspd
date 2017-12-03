@@ -732,12 +732,44 @@ static int32_t client_start(struct dspd_rctx *context,
 			    size_t        outbufsize)
 {
   struct ss_cctx *cli = dspd_req_userdata(context);
-  uint32_t stream = *(int32_t*)inbuf;
+  uint32_t stream = *(int32_t*)inbuf, s;
   int32_t ret = 0;
   dspd_time_t tstamps[2] = { 0, 0 }, tmp;
   size_t br = 0;
-  //Is the new protocol being used?
-  if ( cli->playback_stream >= 0 || cli->capture_stream >= 0 )
+  struct dspd_sync_cmd cmd;
+  if ( cli->playback_stream >= 0 && cli->capture_stream >= 0 && cli->playback_stream != cli->capture_stream && stream == DSPD_PCM_SBIT_FULLDUPLEX )
+    {
+      //Start both at the same time without a real syncgroup.
+      memset(&cmd, 0, sizeof(cmd));
+      cmd.streams = DSPD_PCM_SBIT_PLAYBACK;
+      cmd.cmd = SGCMD_START;
+      s = DSPD_PCM_SBIT_CAPTURE;
+      ret = dspd_stream_ctl(&dspd_dctx,
+			    cli->capture_stream,
+			    req,
+			    &s,
+			    sizeof(s),
+			    tstamps,
+			    sizeof(tstamps),
+			    &br);
+      if ( ret == 0 )
+	{
+	  cmd.tstamp = tstamps[DSPD_PCM_STREAM_CAPTURE];
+	  ret = dspd_stream_ctl(&dspd_dctx,
+				cli->playback_stream,
+				req,
+				&cmd,
+				sizeof(cmd),
+				NULL,
+				0,
+				&br);
+	  if ( ret == 0 )
+	    {
+	      tstamps[DSPD_PCM_STREAM_PLAYBACK] = cmd.tstamp;
+	      br = sizeof(tstamps);
+	    }
+	}
+    } else if ( cli->playback_stream >= 0 || cli->capture_stream >= 0 )
     {
       if ( cli->playback_stream >= 0 && (stream & DSPD_PCM_SBIT_PLAYBACK) )
 	{
@@ -787,7 +819,7 @@ static int32_t client_start(struct dspd_rctx *context,
       ret = -EBADF;
     }
   //The internal request always generates timestamps
-  if ( ret == 0 && br == sizeof(tstamps))
+  if ( ret == 0 && br == sizeof(tstamps) )
     {
       if ( outbufsize == sizeof(tstamps) )
 	ret = dspd_req_reply_buf(context, 0, tstamps, sizeof(tstamps));
@@ -1438,32 +1470,35 @@ static int32_t client_settrigger(struct dspd_rctx *context,
   int32_t streams, s;
   dspd_time_t result[2], pts = 0, cts = 0;
   streams = *(int32_t*)inbuf;
+  if ( streams == DSPD_PCM_SBIT_FULLDUPLEX )
+    return client_start(context, req, inbuf, inbufsize, outbuf, outbufsize);
+  else if ( streams == 0 )
+    return client_stop(context, req, inbuf, inbufsize, outbuf, outbufsize);
+
   ret = get_streams(context, &cli, &pstream, &cstream, streams);
   if ( ret == 0 )
     {
-      if ( pstream >= 0 && (streams & DSPD_PCM_SBIT_PLAYBACK) )
+      if ( pstream >= 0 )
 	{
-	  if ( cstream == pstream && streams == DSPD_PCM_SBIT_FULLDUPLEX )
-	    {
-	      cstream = -1;
-	      s = streams;
-	    } else
-	    {
-	      s = DSPD_PCM_SBIT_PLAYBACK;
-	    }
-	  ret = dspd_stream_ctl(&dspd_dctx, pstream, req, &s, sizeof(s), result, sizeof(result), &br);
-	  if ( ret == 0 )
-	    pts = result[0];
+	  ret = dspd_stream_ctl(&dspd_dctx, pstream, req, &streams, sizeof(s), result, sizeof(result), &br);
+	  if ( ret == 0 && br != sizeof(result) )
+	    ret = -EPROTO;
+	  else
+	    pts = result[DSPD_PCM_STREAM_PLAYBACK];
 	}
-      if ( ret == 0 && cstream >= 0 && (streams & DSPD_PCM_SBIT_CAPTURE) )
+      if ( cstream >= 0 && cstream != pstream )
 	{
-	  s = DSPD_PCM_SBIT_CAPTURE;
-	  ret = dspd_stream_ctl(&dspd_dctx, cstream, req, &s, sizeof(s), result, sizeof(result), &br);
-	  if ( ret == 0 )
-	    cts = result[1];
+	  ret = dspd_stream_ctl(&dspd_dctx, cstream, req, &streams, sizeof(s), result, sizeof(result), &br);
+	  if ( ret == 0 && br != sizeof(result) )
+	    ret = -EPROTO;
+	  else
+	    cts = result[DSPD_PCM_STREAM_CAPTURE];
+	} else
+	{
+	  cts = result[DSPD_PCM_STREAM_CAPTURE];
 	}
     }
-  if ( ret == 0 && br > 0 && br <= outbufsize )
+  if ( ret == 0 && br > 0 && br == outbufsize )
     {
       result[0] = pts;
       result[1] = cts;
@@ -1507,7 +1542,7 @@ static int32_t client_gettrigger(struct dspd_rctx *context,
     }
   if ( ret == 0 && br == sizeof(s) )
     {
-      ret = dspd_req_reply_buf(context, 0, &s, sizeof(s));
+      ret = dspd_req_reply_buf(context, 0, &streams, sizeof(streams));
     } else
     {
       ret = dspd_req_reply_err(context, 0, ret);
@@ -1994,7 +2029,7 @@ static int client_dispatch_packet(struct ss_cctx *cli)
 {
   struct dspd_req *req = cli->pkt_in;
   int ret;
-  if ( stream_valid(cli, req->stream) &&
+  if ( (req->stream == -1 || stream_valid(cli, req->stream)) &&
        (cli->pkt_cmd == DSPD_SCTL_CLIENT_START ||
 	cli->pkt_cmd == DSPD_SCTL_CLIENT_STOP ||
 	cli->pkt_cmd == DSPD_SCTL_CLIENT_SETTRIGGER) )
