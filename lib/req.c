@@ -559,6 +559,7 @@ int dspd_stream_ctl(void    *context, //DSPD object, such as dspd_dctx
       else
 	return -EFAULT;
     }
+  *bytes_returned = 0;
   //fprintf(stderr, "REQ %u STREAM %u LEN=%lu,%lu\n", req, stream, (long)inbufsize, (long)outbufsize);
   if ( objtype == DSPD_OBJ_TYPE_DAEMON_CTX )
     {

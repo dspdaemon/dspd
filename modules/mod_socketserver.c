@@ -496,7 +496,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	    {
 	      i64 = cli->playback_stream;
 	      i64 <<= 32U;
-	      i64 |= cli->capture_stream;
+	      i64 |= cli->capture_stream & 0x00000000FFFFFFFFULL;
 	      ret = dspd_req_reply_buf(rctx, 0, &i64, sizeof(i64));
 	    }
 	} else
@@ -1237,6 +1237,7 @@ static int32_t client_mapbuf(struct dspd_rctx *context,
   int32_t pstream = -1, cstream = -1, s;
   int32_t stream = *(int32_t*)inbuf, ret = EINVAL;
   size_t br = 0;
+  struct dspd_client_shm *shm = outbuf;
   ret = get_streams(context, &cli, &pstream, &cstream, stream);
   if ( ret == 0 )
     {
@@ -1254,9 +1255,15 @@ static int32_t client_mapbuf(struct dspd_rctx *context,
 			    &br);
     }
   if ( ret == 0 && br > 0 )
-    ret = dspd_req_reply_buf(context, 0, outbuf, br);
-  else
-    ret = dspd_req_reply_err(context, 0, 0);
+    {
+      if ( shm->flags & DSPD_SHM_FLAG_MMAP )
+	ret = dspd_req_reply_fd(context, 0, shm, br, shm->arg);
+      else
+	ret = dspd_req_reply_buf(context, 0, shm, br);
+    } else
+    {
+      ret = dspd_req_reply_err(context, 0, 0);
+    }
   return ret;
 }
 
@@ -1383,6 +1390,8 @@ static int32_t client_reserve(struct dspd_rctx *context,
   int32_t server = -1;
   if ( inbufsize == sizeof(server) )
     server = *(int32_t*)inbuf;
+
+
   ret = get_streams(context, &cli, &pstream, &cstream, 0);
   if ( ret == 0 )
     {
@@ -1795,9 +1804,12 @@ static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
 				      size_t        outbufsize)
 {
   int ret;
+  uint64_t r = req;
+  r <<= 32U;
+  r |= CLIDX(req);
   ret = dspd_daemon_dispatch_ctl(rctx, client_req_handlers, 
 				 ARRAY_SIZE(client_req_handlers), 
-				 req,
+				 r,
 				 inbuf,
 				 inbufsize,
 				 outbuf,
@@ -1865,9 +1877,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
     {
       //Socket server request
       cli->rctx.user_data = cli;
-      if ( cli->pkt_cmd >= DSPD_SCTL_CLIENT_MIN && cli->pkt_cmd <= DSPD_SCTL_CLIENT_MAX &&
-	   (cli->playback_stream >= 0 || cli->capture_stream >= 0) )
-	  
+      if ( cli->pkt_cmd >= DSPD_SCTL_CLIENT_MIN && cli->pkt_cmd <= DSPD_SCTL_CLIENT_MAX )
 	{
 	  ret = socksrv_dispatch_multi_req(&cli->rctx,
 					   cli->pkt_cmd,

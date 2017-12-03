@@ -2213,9 +2213,9 @@ static int32_t client_settrigger(struct dspd_rctx *context,
 				 size_t        outbufsize)
 {
   struct dspd_client *cli = dspd_req_userdata(context);
-  uint32_t val = *(uint32_t*)inbuf, v = 0;
-  int32_t ret, old = cli->trigger, noset = 0;
-  dspd_time_t now, ts, result[2];
+  uint32_t val = *(uint32_t*)inbuf;
+  int32_t ret;
+  dspd_time_t now, result[2];
   if ( cli->device < 0 || cli->server_ops == NULL )
     return dspd_req_reply_err(context, 0, EINVAL);
   if ( val )
@@ -2228,52 +2228,6 @@ static int32_t client_settrigger(struct dspd_rctx *context,
   else
     ret = dspd_req_reply_err(context, 0, ret);
   return ret;
-  
-
-  
-  if ( val & DSPD_PCM_SBIT_TRIGGER_BOTH )
-    {
-      if ( ! cli->playback.enabled )
-	val &= ~DSPD_PCM_SBIT_PLAYBACK;
-      if ( ! cli->capture.enabled )
-	val &= ~DSPD_PCM_SBIT_CAPTURE;
-    }
-
-  if ( val & DSPD_PCM_SBIT_PLAYBACK )
-    v |= DSPD_PCM_SBIT_PLAYBACK;
-  if ( val & DSPD_PCM_SBIT_CAPTURE )
-    v |= DSPD_PCM_SBIT_CAPTURE;
-  if ( (val & (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) == (DSPD_PCM_SBIT_CAPTURE|DSPD_PCM_SBIT_PLAYBACK) &&
-       cli->trigger == 0 )
-    {
-      cli->trigger = DSPD_PCM_SBIT_FULLDUPLEX | DSPD_PCM_SBIT_TRIGGER_BOTH;
-      noset = 1;
-    }
-  ret = cli->server_ops->trigger(cli->server, (uint32_t)cli->index, v);
-  if ( ret == 0 )
-    {
-      ts = now + ((dspd_get_time()-now)/2);
-      if ( val & DSPD_PCM_SBIT_PLAYBACK )
-	cli->playback.trigger_tstamp = ts;
-      else
-	cli->playback.trigger_tstamp = 0;
-      if ( val & DSPD_PCM_SBIT_CAPTURE )
-	cli->capture.trigger_tstamp = ts;
-      else
-	cli->capture.trigger_tstamp = 0;
-      if ( ! noset )
-	cli->trigger = val;
-      if ( outbufsize == sizeof(result) )
-	{
-	  result[0] = cli->playback.trigger_tstamp;
-	  result[1] = cli->capture.trigger_tstamp;
-	  return dspd_req_reply_buf(context, 0, result, sizeof(result));
-	}
-    } else
-    {
-      cli->trigger = old;
-    }
-  return dspd_req_reply_err(context, 0, ret);
 }
 
 static int32_t client_gettrigger(struct dspd_rctx *context,
@@ -2403,6 +2357,8 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams)
 {
   int32_t ret, old;
   struct dspd_client_trigger_tstamp *ts;
+  if ( ! cli->server_ops )
+    return -EBADFD;
   dspd_mutex_lock(&cli->sync_start_lock);
   if ( cli->playback.ready == false )
     streams &= ~DSPD_PCM_SBIT_PLAYBACK;
@@ -2463,6 +2419,8 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
 {
   int32_t ret, old;
   struct dspd_client_trigger_tstamp *ts;
+  if ( ! cli->server_ops )
+    return -EBADFD;
 
   //This lock is almost never held by anything else.  It is necessary because
   //this structure might be accessed by another thread.
