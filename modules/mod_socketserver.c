@@ -661,13 +661,13 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		  cli->device = -1;
 		  cli->capture_device = cli->capture_device;
 		  dspd_slist_ref(dspd_dctx.objects, cli->capture_device);
-		} else if ( i32 == DSPD_PCM_SBIT_CAPTURE )
+		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
 		{
 		  if ( cli->playback_device >= 0 )
 		    dspd_daemon_unref(cli->playback_device);
 		  cli->playback_device = cli->device;
 		  cli->device = -1;
-		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
+		} else if ( i32 == DSPD_PCM_SBIT_CAPTURE )
 		{
 		   if ( cli->capture_device >= 0 )
 		     dspd_daemon_unref(cli->capture_device);
@@ -1144,13 +1144,13 @@ static int32_t client_connect(struct dspd_rctx *context,
 	       (cstream >= 0 && cli->capture_device >= 0) )
 	    {
 	      //Connect all
-	      if ( pstream >= 0 )
+	      if ( pstream >= 0 && cli->playback_device >= 0 )
 		{
 		  ret = dspd_stream_ctl(&dspd_dctx,
 					pstream,
 					req,
-					&cli->playback_stream,
-					sizeof(cli->playback_stream),
+					&cli->playback_device,
+					sizeof(cli->playback_device),
 					NULL,
 					0,
 					&br);
@@ -1158,17 +1158,20 @@ static int32_t client_connect(struct dspd_rctx *context,
 		{
 		  ret = 0;
 		}
-	      if ( ret == 0 && cstream >= 0 && cstream != pstream )
+	      if ( ret == 0 && cstream >= 0 && cstream != pstream && cli->capture_device >= 0 )
 		{
 		  ret = dspd_stream_ctl(&dspd_dctx,
 					cstream,
 					req,
-					&cli->capture_stream,
-					sizeof(cli->capture_stream),
+					&cli->capture_device,
+					sizeof(cli->capture_device),
 					NULL,
 					0,
 					&br);
 		}
+	    } else
+	    {
+	      ret = EBADFD;
 	    }
 	} else if ( index == cli->playback_device )
 	{
