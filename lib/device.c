@@ -1003,7 +1003,7 @@ static bool process_rewound_playback(struct dspd_pcm_device *dev,
 			 client,
 			 &buf[o * dev->playback.params.channels],
 			 len,
-			 dev->playback.cycle.start_count,
+			 &dev->playback.cycle,
 			 dev->playback.status);
       ret = dev->playback.ops->mmap_commit(dev->playback.handle,
 					   o,
@@ -1209,7 +1209,7 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 				 client,
 				 &ptr[offset],
 				 client_space,
-				 dev->playback.cycle.start_count,
+				 &dev->playback.cycle,
 				 dev->playback.status);
 	      
 	      if ( f > 0 )

@@ -43,8 +43,7 @@ struct dspd_client_stream {
   dspd_time_t                   last_hw_tstamp;
   size_t                        frame_size;
   bool                          started;
-  
-  
+
 };
 struct dspd_pcmcli_status {
   uint64_t appl_ptr;
@@ -73,7 +72,7 @@ struct dspd_pcmcli_ops {
 			void                            *client,
 			double                          *buf,
 			uintptr_t                        frames,
-			uint64_t                         start_count,
+			const struct dspd_io_cycle   *cycle,
 			const struct dspd_pcm_status *status);
 
   int32_t (*get_capture_status)(void *dev,

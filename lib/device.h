@@ -23,6 +23,8 @@ struct dspd_pcm_status {
   uint32_t space;
   int32_t  delay;
   int32_t  error;
+  uint32_t cycle_length;
+  uint32_t reserved;
 };
 
 struct dspd_drv_params {

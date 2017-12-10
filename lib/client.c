@@ -43,9 +43,6 @@ struct dspd_client {
   struct dspd_slist            *list;
   int                           err;
 
-  //A bunch of channel maps.  I am not dynamically allocating
-  //them because it is easier this way.
-
   struct dspd_fchmap             playback_cmap;
   struct dspd_fchmap             capture_cmap;
   struct dspd_pcmdev_ops        *server_ops;
@@ -112,7 +109,7 @@ static void playback_xfer(void                            *dev,
 			  void                            *client,
 			  double                          *buf,
 			  uintptr_t                        frames,
-			  uint64_t                         start_count,
+			  const struct dspd_io_cycle      *cycle,
 			  const struct dspd_pcm_status    *status);
 
 static int32_t get_capture_status(void     *dev,
@@ -931,7 +928,7 @@ static void playback_xfer(void                            *dev,
 			  void                            *client,
 			  double                          *buf,
 			  uintptr_t                        frames,
-			  uint64_t                         start_count,
+			  const struct dspd_io_cycle      *cycle,
 			  const struct dspd_pcm_status    *status)
 {
   struct dspd_client *cli = client;
@@ -947,9 +944,10 @@ static void playback_xfer(void                            *dev,
   uint32_t client_hwptr;
   uint64_t optr = status->appl_ptr;
   uint32_t len;
-
+  uint64_t start_count = cycle->start_count;
+  uint32_t client_aptr;
   client_hwptr = dspd_fifo_optr(&cli->playback.fifo);
-       
+  client_aptr = dspd_fifo_iptr(&cli->playback.fifo);
 
 
   cli->playback.start_count = start_count;
@@ -1057,11 +1055,13 @@ static void playback_xfer(void                            *dev,
   cs = dspd_mbx_acquire_write(&cli->playback.mbx);
   if ( cs )
     {
-      cs->appl_ptr = dspd_fifo_iptr(&cli->playback.fifo);
-      cs->hw_ptr = client_hwptr; //dspd_fifo_optr(&cli->playback.fifo);
+      cs->appl_ptr = client_aptr;
+      cs->hw_ptr = client_hwptr;
       cs->tstamp = status->tstamp;
       cs->fill = cs->appl_ptr - cs->hw_ptr;
       cs->space = cli->playback.params.bufsize - cs->fill;
+      
+      
 
       /*
 	Translate server frames to client frames.  This is the
@@ -1078,10 +1078,19 @@ static void playback_xfer(void                            *dev,
 	  cs->delay = dspd_src_get_frame_count(cli->playback_src.rate,
 					       cli->playback.params.rate,
 					       status->delay);
+	  cs->cycle_length = dspd_src_get_frame_count(cli->playback_src.rate, cli->playback.params.rate, cycle->len);
 	} else
 	{
 	  cs->delay = status->delay;
+	  cs->cycle_length = cycle->len;
 	}
+      len = cs->appl_ptr - cs->hw_ptr;
+      if ( cs->cycle_length > len )
+	cs->cycle_length = len;
+      if ( cs->cycle_length > cli->playback.params.latency )
+	cs->cycle_length = cli->playback.params.latency;
+      
+
       cs->error = status->error;
       dspd_mbx_release_write(&cli->playback.mbx, cs);
       cli->playback.last_hw_tstamp = status->tstamp;
