@@ -862,7 +862,8 @@ static int32_t get_playback_status(void     *dev,
 
 static int32_t playback_src_read(struct dspd_client *cli,
 				 float **ptr,
-				 uint32_t *len)
+				 uint32_t *len,
+				 uint32_t *rem)
 {
   size_t frames_requested = *len;
   size_t count, maxf, offset, l, infr;
@@ -903,6 +904,8 @@ static int32_t playback_src_read(struct dspd_client *cli,
 	infr = count;
       else
 	infr = n;
+      if ( infr > *rem )
+	infr = *rem;
       if ( dspd_src_process(cli->playback_src.src,
 			    0,
 			    fbuf,
@@ -913,6 +916,7 @@ static int32_t playback_src_read(struct dspd_client *cli,
 	  break;
 	}
       dspd_fifo_rcommit(&cli->playback.fifo, infr);
+      (*rem) -= infr;
       if ( count > 0 )
 	count -= infr;
       offset += l;
@@ -946,9 +950,13 @@ static void playback_xfer(void                            *dev,
   uint32_t len;
   uint64_t start_count = cycle->start_count;
   uint32_t client_aptr;
+  uint32_t rem;
   client_hwptr = dspd_fifo_optr(&cli->playback.fifo);
   client_aptr = dspd_fifo_iptr(&cli->playback.fifo);
 
+  //Frames remaining.  This is the amount that will be read from the client fifo.  It is technically
+  //possible to read more due to a race condition, but that could cause inaccurate status updates.
+  rem = client_aptr - client_hwptr;
 
   cli->playback.start_count = start_count;
   cli->playback.dev_appl_ptr = status->appl_ptr;
@@ -963,7 +971,8 @@ static void playback_xfer(void                            *dev,
 	  c = count;
 	  ret = playback_src_read(cli,
 				  &ptr,
-				  &count);
+				  &count,
+				  &rem);
 	
 	    
 	  if ( count == 0 )
@@ -982,6 +991,8 @@ static void playback_xfer(void                            *dev,
 	      if ( count > c )
 		count = c;
 	      commit_size = count;
+	      if ( commit_size > rem )
+		commit_size = rem;
 	    } else
 	    {
 	      ret = -EAGAIN;
@@ -1037,7 +1048,10 @@ static void playback_xfer(void                            *dev,
 	  count = 0;
 	}
       if ( commit_size )
-	dspd_fifo_rcommit(&cli->playback.fifo, commit_size);
+	{
+	  dspd_fifo_rcommit(&cli->playback.fifo, commit_size);
+	  rem -= commit_size;
+	}
       cli->playback.dev_appl_ptr += count;
     } 
     
@@ -1047,16 +1061,24 @@ static void playback_xfer(void                            *dev,
     fprintf(stderr, "CLIENT PLAYBACK XRUN: wanted %lu got %lu\n", (long)offset, (long)frames);
 
   assert(cli->playback.dev_appl_ptr == (optr+offset));
-  if ( status->tstamp == cli->playback.last_hw_tstamp )
+  //  if ( status->tstamp == cli->playback.last_hw_tstamp )
+  //return;
+  
+   
+  //If this io cycle is not complete and there is data left in the client fifo then don't update the status.
+  if ( cycle->remaining > cycle->len && rem > 0 )
     return;
 
- 
+
 
   cs = dspd_mbx_acquire_write(&cli->playback.mbx);
   if ( cs )
     {
+      //The client application pointer moved a certain amount.
+      len = (client_aptr - client_hwptr) - rem;
+
       cs->appl_ptr = client_aptr;
-      cs->hw_ptr = client_hwptr;
+      cs->hw_ptr = client_hwptr + len;
       cs->tstamp = status->tstamp;
       cs->fill = cs->appl_ptr - cs->hw_ptr;
       cs->space = cli->playback.params.bufsize - cs->fill;
@@ -1072,18 +1094,28 @@ static void playback_xfer(void                            *dev,
 	an appropriate way to figure out if an operation will block.
 	Fill and delay are often the same on real hardware (or really close
 	and the drivers fudge it) but that does not have to be the case.
+
+	The actual delay is the status delay plus whatever was just added to the device buffer.  This is usually
+	equal to the expected latency for the client.
+
+	The cycle length is the size to be fetched from the buffer.  Normally this will be 0, but sometimes a client
+	may run out of data.  This can be expected (draining the buffer) or unexpected (xrun).  A nonzero cycle length
+	could be compensated for by adjusting the timestamp backwards.  That would normally still be ahead of the
+	previous timestamp.  If not, then interpolating with the current monotonic time should fix it.
       */
+      len = status->delay + (cli->playback.dev_appl_ptr - status->appl_ptr);
       if ( cli->playback_src.rate != cli->playback.params.rate )
 	{
 	  cs->delay = dspd_src_get_frame_count(cli->playback_src.rate,
 					       cli->playback.params.rate,
-					       status->delay);
-	  cs->cycle_length = dspd_src_get_frame_count(cli->playback_src.rate, cli->playback.params.rate, cycle->len);
+					       len);
+	  cs->cycle_length = dspd_src_get_frame_count(cli->playback_src.rate, cli->playback.params.rate, cycle->remaining - frames);
 	} else
 	{
-	  cs->delay = status->delay;
-	  cs->cycle_length = cycle->len;
+	  cs->delay = len;
+	  cs->cycle_length = cycle->remaining - frames;
 	}
+      
       len = cs->appl_ptr - cs->hw_ptr;
       if ( cs->cycle_length > len )
 	cs->cycle_length = len;

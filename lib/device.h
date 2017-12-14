@@ -237,6 +237,7 @@ struct dspd_io_cycle {
   //instance if it does not have the same start count.
   //This counter is always nonzero when a client is called.
   uint64_t   start_count;
+  uintptr_t  remaining;
 };
 
 struct dspd_pcm_status;

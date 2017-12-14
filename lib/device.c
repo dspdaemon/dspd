@@ -986,6 +986,8 @@ static bool process_rewound_playback(struct dspd_pcm_device *dev,
   double *buf;
   uintptr_t len;
   bool result = true;
+  uintptr_t rem = dev->playback.cycle.remaining, cl = dev->playback.cycle.len;
+  dev->playback.cycle.remaining = frames;
   while ( offset < frames )
     {
       l = frames - offset;
@@ -999,12 +1001,14 @@ static bool process_rewound_playback(struct dspd_pcm_device *dev,
 	  result = false;
 	  break;
 	}
+      dev->playback.cycle.len = len;
       ops->playback_xfer(dev,
 			 client,
 			 &buf[o * dev->playback.params.channels],
 			 len,
 			 &dev->playback.cycle,
 			 dev->playback.status);
+      dev->playback.cycle.remaining -= len;
       ret = dev->playback.ops->mmap_commit(dev->playback.handle,
 					   o,
 					   len);
@@ -1016,6 +1020,8 @@ static bool process_rewound_playback(struct dspd_pcm_device *dev,
       offset += len;
     }
   (*pointer) += offset;
+  dev->playback.cycle.remaining = rem;
+  dev->playback.cycle.len = cl;
   return result;
 }
 
@@ -1655,6 +1661,7 @@ static bool device_playback_cycle(struct dspd_pcm_device *dev, uintptr_t frames)
 	    } else
 	    {
 	      offset += ret;
+	      dev->playback.cycle.remaining -= ret;
 	      if ( ! dev->playback.started )
 		{
 		  if ( (err = dev->playback.ops->start(dev->playback.handle)) < 0 )
@@ -1842,10 +1849,9 @@ static void schedule_playback_wake(void *userdata)
 
 	      if ( len > dev->playback.status->fill && dev->playback.status->fill > 0 )
 		len = dev->playback.status->fill;
-	
+	      dev->playback.cycle.remaining = total;
 	      while ( written < total )
 		{
-		     
 		  if ( ! device_playback_cycle(dev, len) )
 		    break;
 		  if ( ! dev->playback.status )
@@ -1856,7 +1862,6 @@ static void schedule_playback_wake(void *userdata)
 		    len = dev->playback.status->space;
 		  if ( len > dev->playback.requested_latency )
 		    len = dev->playback.requested_latency;
-		     
 
 		  if ( len > 0 && written > dev->playback.requested_latency )
 		    {
@@ -1871,9 +1876,11 @@ static void schedule_playback_wake(void *userdata)
 		
 	    } else
 	    {
+	      dev->playback.cycle.remaining = dev->playback.status->space;
 	      for ( i = 0; i < count; i++ )
 		{
 		  written += len;
+		  
 		  if ( ! device_playback_cycle(dev, len) )
 		    break;
 		  if ( dev->playback.status )
