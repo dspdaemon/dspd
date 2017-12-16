@@ -1265,6 +1265,7 @@ static bool process_rewound_capture(struct dspd_pcm_device *dev,
 			client,
 			&buf[o * dev->capture.params.channels],
 			len,
+			&dev->capture.cycle,
 			dev->capture.status);
       ret = dev->capture.ops->mmap_commit(dev->capture.handle,
 					  o,
@@ -1363,6 +1364,7 @@ static void process_client_capture(struct dspd_pcm_device *dev,
 			    client,
 			    &ptr[offset*dev->capture.params.channels],
 			    max_xfer,
+			    &dev->capture.cycle,
 			    dev->capture.status);
 
 	  if ( adj )
@@ -1380,6 +1382,7 @@ static void process_client_capture(struct dspd_pcm_device *dev,
 		    client,
 		    &ptr[offset*dev->capture.params.channels],
 		    max_xfer,
+		    &dev->capture.cycle,
 		    dev->capture.status);
   return;
 
@@ -2019,7 +2022,7 @@ static void schedule_capture_wake(void *data)
 	  return;
 	}
 
-
+      dev->capture.cycle.remaining = dev->capture.status->fill - dev->capture.cycle.len;
       process_clients_once(dev, POLLIN);
 
       ret = dev->capture.ops->mmap_commit(dev->capture.handle,

@@ -1285,7 +1285,9 @@ static int32_t dspd_rclient_wait_fd(struct dspd_rclient *client, dspd_time_t abs
   ret = dspd_timer_getpollfd(&client->timer, &pfd[1]);
   if ( ret == 0 )
     {
-      ret = poll(pfd, 2, -1);
+      dspd_timer_set(&client->timer, abstime, 0);
+
+      ret = poll(&pfd[0], 2, -1);
       if ( ret < 0 )
 	{
 	  ret = -errno;
@@ -1458,13 +1460,10 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 	      hw += p;
 	      diff = hw - client->capture.status.hw_ptr;
 
-	      fr = dspd_intrp_frames(&client->capture_intrp, diff);
-	      if ( fr < diff )
-		diff = fr;
-
 	      n = client->capture.params.bufsize / client->capture.params.fragsize;
 	      a = diff;
 	      a *= client->capture.sample_time;
+	      
 	      if ( client->capture.status.tstamp )
 		a += client->capture.status.tstamp;
 	      else
@@ -1835,11 +1834,15 @@ static int32_t rclient_stop(struct dspd_rclient *client,
 	{
 	  client->playback.trigger_tstamp = 0;
 	  dspd_intrp_reset(&client->playback_intrp);
+	  dspd_fifo_reset(&client->playback.fifo);
+	  dspd_mbx_reset(&client->playback.mbx);
 	}
       if ( bits & DSPD_PCM_SBIT_CAPTURE )
 	{
 	  client->capture.trigger_tstamp = 0;
 	  dspd_intrp_reset(&client->capture_intrp);
+	  dspd_fifo_reset(&client->capture.fifo);
+	  dspd_mbx_reset(&client->capture.mbx);
 	}
       if ( client->trigger == 0 )
 	dspd_timer_reset(&client->timer);
@@ -1858,7 +1861,7 @@ static int32_t rclient_settrigger(struct dspd_rclient *client,
   dspd_time_t tstamps[2];
   int32_t ret;
   size_t br;
-  int32_t nbits = *(int32_t*)inbuf;
+  int32_t sbits = *(int32_t*)inbuf;
   *bytes_returned = 0;
   ret = dspd_stream_ctl(client->bparams.conn,
 			client->bparams.client,
@@ -1875,13 +1878,24 @@ static int32_t rclient_settrigger(struct dspd_rclient *client,
 	  *bytes_returned = br;
 	  memcpy(outbuf, tstamps, sizeof(tstamps));
 	}
+      if ( (client->trigger & DSPD_PCM_SBIT_PLAYBACK) != 0 && (sbits & DSPD_PCM_SBIT_PLAYBACK) == 0 )
+	{
+	  dspd_fifo_reset(&client->playback.fifo);
+	  dspd_mbx_reset(&client->playback.mbx);
+	}
+      if ( (client->trigger & DSPD_PCM_SBIT_CAPTURE) != 0 && (sbits & DSPD_PCM_SBIT_CAPTURE) == 0 )
+	{
+	  dspd_fifo_reset(&client->capture.fifo);
+	  dspd_mbx_reset(&client->capture.mbx);
+	}
+
       client->playback.trigger_tstamp = tstamps[DSPD_PCM_STREAM_PLAYBACK];
       if ( client->playback.trigger_tstamp )
 	dspd_intrp_set(&client->playback_intrp, client->playback.trigger_tstamp, 0);
       client->capture.trigger_tstamp = tstamps[DSPD_PCM_STREAM_CAPTURE];
       if ( client->capture.trigger_tstamp )
 	dspd_intrp_set(&client->capture_intrp, client->capture.trigger_tstamp, 0);
-      rclient_set_trigger(client, nbits);
+      rclient_set_trigger(client, sbits);
       client->playback.ready = !! ( client->trigger & DSPD_PCM_SBIT_PLAYBACK );
       client->capture.ready = !! ( client->trigger & DSPD_PCM_SBIT_CAPTURE );
       dspd_update_timer(client, DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE);

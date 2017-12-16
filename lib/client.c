@@ -122,6 +122,7 @@ static void capture_xfer(void                            *dev,
 			 void                            *client,
 			 const float                     *buf,
 			 uintptr_t                        frames,
+			 const struct dspd_io_cycle      *cycle,
 			 const struct dspd_pcm_status    *status);
 
 
@@ -884,7 +885,7 @@ static int32_t playback_src_read(struct dspd_client *cli,
     frames_requested = maxf;
   *len = 0;
   offset = 0;
-  while ( offset < frames_requested )
+  while ( offset < frames_requested && *rem > 0 )
     {
       sbuf = &cli->playback_src.buf[offset*cli->playback.params.channels];
       l = frames_requested - offset;
@@ -947,7 +948,7 @@ static void playback_xfer(void                            *dev,
   float volume = dspd_load_float32(&cli->playback.volume);
   uint32_t client_hwptr;
   uint64_t optr = status->appl_ptr;
-  uint32_t len;
+  uint32_t len, p;
   uint64_t start_count = cycle->start_count;
   uint32_t client_aptr;
   uint32_t rem;
@@ -962,7 +963,7 @@ static void playback_xfer(void                            *dev,
   cli->playback.dev_appl_ptr = status->appl_ptr;
   map = &cli->playback_cmap.map;
  
-  while ( offset < frames )
+  while ( offset < frames && rem > 0 )
     {
       commit_size = 0;
       if ( cli->playback_src.rate != cli->playback.params.rate )
@@ -1077,8 +1078,12 @@ static void playback_xfer(void                            *dev,
       //The client application pointer moved a certain amount.
       len = (client_aptr - client_hwptr) - rem;
 
-      cs->appl_ptr = client_aptr;
-      cs->hw_ptr = client_hwptr + len;
+      p = client_hwptr + len;
+      cli->playback.curr_hw += p - cli->playback.last_hw;
+      cli->playback.last_hw = p;
+
+      cs->appl_ptr = cli->playback.curr_hw + (uint64_t)len;
+      cs->hw_ptr = cli->playback.curr_hw;
       cs->tstamp = status->tstamp;
       cs->fill = cs->appl_ptr - cs->hw_ptr;
       cs->space = cli->playback.params.bufsize - cs->fill;
@@ -1381,7 +1386,7 @@ static int32_t get_capture_status(void     *dev,
   return ret;
 }
 
-static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t frames)
+static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t frames, uint32_t *space)
 {
   int32_t ret;
   float32 *ptr;
@@ -1395,7 +1400,7 @@ static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t f
   dspd_src_get_params(cli->capture_src.src, &q, &ri, &ro);
 
 
-  while ( offset < frames )
+  while ( offset < frames && *space > 0 )
     {
       ret = dspd_fifo_wiov(&cli->capture.fifo,
 			   (void**)&ptr,
@@ -1404,6 +1409,8 @@ static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t f
 	break;
       fi = frames - offset;
       c = count;
+      if ( c > *space )
+	c = *space;
       ret = dspd_src_process(cli->capture_src.src, 
 			     0,
 			     &buf[offset*cli->capture.params.channels],
@@ -1420,6 +1427,7 @@ static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t f
 	}
       dspd_fifo_wcommit(&cli->capture.fifo, c);
       offset += fi;
+      (*space) -= c;
     }
   return offset;
 }
@@ -1428,6 +1436,7 @@ static void capture_xfer(void                            *dev,
 			 void                            *client,
 			 const float                     *buf,
 			 uintptr_t                        frames,
+			 const struct dspd_io_cycle      *cycle,
 			 const struct dspd_pcm_status    *status)
 {
   struct dspd_client *cli = client;
@@ -1435,19 +1444,27 @@ static void capture_xfer(void                            *dev,
   int32_t ret;
   float *ptr, *outfr;
   const float *in;
-  uint32_t count;
+  uint32_t count = 0;
   struct dspd_pcm_status *cs;
   const float *infr;
   size_t i, c, j;
   struct dspd_chmap *map = &cli->capture_cmap.map;
   float volume = dspd_load_float32(&cli->capture.volume);
-  uint32_t client_hwptr;
+  uint32_t client_hwptr, client_aptr;
   bool do_src = cli->capture.params.rate != cli->capture_src.rate;
-  uint32_t n;
+  uint32_t n, fill, space, total;
 
- 
-  if ( dspd_fifo_space(&cli->capture.fifo, &n) != 0 )
+  client_hwptr = dspd_fifo_iptr(&cli->capture.fifo);
+  client_aptr = dspd_fifo_optr(&cli->capture.fifo);
+  fill = client_hwptr - client_aptr;
+  if ( fill >= cli->capture.params.bufsize )
     return;
+
+  n = cli->capture.params.bufsize - fill;
+  space = n;
+  total = n;
+  //if ( dspd_fifo_space(&cli->capture.fifo, &n) != 0 )
+  //return;
 
   n = dspd_src_get_frame_count(cli->capture.params.rate, cli->capture_src.rate, n);
   
@@ -1458,7 +1475,7 @@ static void capture_xfer(void                            *dev,
 
  
  
-  while ( offset < frames )
+  while ( offset < frames && space > 0 )
     {
       
       if ( do_src )
@@ -1471,6 +1488,8 @@ static void capture_xfer(void                            *dev,
 	  ret = dspd_fifo_wiov(&cli->capture.fifo,
 			       (void**)&ptr,
 			       &count);
+	  if ( count > space )
+	    count = space;
 	}
       if ( ret == 0 && count > 0 )
 	{
@@ -1512,11 +1531,12 @@ static void capture_xfer(void                            *dev,
 	  cli->capture.dev_appl_ptr += count;
 	  if ( do_src )
 	    {
-	      if ( capture_src_xfer(cli, ptr, count) != count )
+	      if ( capture_src_xfer(cli, ptr, count, &space) != count )
 		break;
 	    } else
 	    {
 	      dspd_fifo_wcommit(&cli->capture.fifo, count);
+	      space -= count;
 	    }
 	} else
 	{
@@ -1530,17 +1550,39 @@ static void capture_xfer(void                            *dev,
   if ( status->tstamp == cli->capture.last_hw_tstamp )
     return;
 
-  client_hwptr = dspd_fifo_iptr(&cli->capture.fifo);
 
   cs = dspd_mbx_acquire_write(&cli->capture.mbx);
   if ( cs )
     {
-      cs->appl_ptr = dspd_fifo_optr(&cli->capture.fifo);
-      cs->hw_ptr = client_hwptr;
+      n = total - space;
+      client_hwptr += n;
+      fill += n;
+
+      n = client_hwptr - cli->capture.last_hw;
+      cli->capture.curr_hw += n;
+      cli->capture.last_hw = client_hwptr;
+
+      cs->hw_ptr = cli->capture.curr_hw;
+      cs->appl_ptr = cli->capture.curr_hw - fill;
+      
       cs->tstamp = status->tstamp;
+      
       cs->fill = cs->hw_ptr - cs->appl_ptr;
-      cs->space = cli->capture.params.bufsize = cs->fill;
-      cs->delay = status->delay;
+      cs->space = cli->capture.params.bufsize - cs->fill;
+
+      if ( do_src )
+	{
+	  cs->delay = dspd_src_get_frame_count(cli->capture_src.rate,
+					       cli->capture.params.rate,
+					       status->delay);
+	  cs->cycle_length = dspd_src_get_frame_count(cli->capture_src.rate, 
+						      cli->capture.params.rate, 
+						      cycle->remaining);
+	} else
+	{
+	  cs->delay = status->delay;
+	  cs->cycle_length = cycle->remaining;
+	}
       cs->error = status->error;
       dspd_mbx_release_write(&cli->capture.mbx, cs);
       cli->capture.last_hw_tstamp = status->tstamp;
@@ -2431,8 +2473,11 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams)
       dspd_slist_entry_srvlock(cli->list, cli->index);
       if ( streams & DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  dspd_fifo_reset(&cli->playback.fifo);
-	  dspd_mbx_reset(&cli->playback.mbx);
+	  //dspd_fifo_reset(&cli->playback.fifo);
+	  //dspd_mbx_reset(&cli->playback.mbx);
+	  cli->playback.last_hw = 0;
+	  cli->playback.curr_hw = 0;
+
 	  cli->playback.dev_appl_ptr = 0;
 	  cli->playback.cli_appl_ptr = 0;
 	  cli->playback.start_count = 0;
@@ -2440,11 +2485,15 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams)
 	}
       if ( streams & DSPD_PCM_SBIT_CAPTURE )
 	{
-	  dspd_fifo_reset(&cli->capture.fifo);
-	  dspd_mbx_reset(&cli->capture.mbx);
-	  //cli->capture.dev_appl_ptr = 0;
-	  //cli->capture.cli_appl_ptr = 0;
-	  //cli->capture.start_count = 0;
+	  //dspd_fifo_reset(&cli->capture.fifo);
+	  //dspd_mbx_reset(&cli->capture.mbx);
+
+	  cli->capture.last_hw = 0;
+	  cli->capture.curr_hw = 0;
+
+	  cli->capture.dev_appl_ptr = 0;
+	  cli->capture.cli_appl_ptr = 0;
+	  cli->capture.start_count = 0;
 	  cli->capture.started = false;
 	}
       dspd_slist_entry_srvunlock(cli->list, cli->index);
@@ -2504,8 +2553,11 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
 	      dspd_slist_entry_srvlock(cli->list, cli->index); 
 	      locked = true;
 	      
-	      dspd_fifo_reset(&cli->playback.fifo);
-	      dspd_mbx_reset(&cli->playback.mbx);
+	      cli->playback.last_hw = 0;
+	      cli->playback.curr_hw = 0;
+
+	      //dspd_fifo_reset(&cli->playback.fifo);
+	      //dspd_mbx_reset(&cli->playback.mbx);
 	      /*cli->playback.dev_appl_ptr = 0;
 	      cli->playback.cli_appl_ptr = 0;
 	      cli->playback.start_count = 0;*/
@@ -2521,8 +2573,10 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
 		  dspd_slist_entry_srvlock(cli->list, cli->index); 
 		  locked = true;
 		}
-	      dspd_fifo_reset(&cli->capture.fifo);
-	      dspd_mbx_reset(&cli->capture.mbx);
+	      cli->capture.last_hw = 0;
+	      cli->capture.curr_hw = 0;
+	      //dspd_fifo_reset(&cli->capture.fifo);
+	      //dspd_mbx_reset(&cli->capture.mbx);
 	      /*cli->capture.dev_appl_ptr = 0;
 	      cli->capture.cli_appl_ptr = 0;
 	      cli->capture.start_count = 0;*/

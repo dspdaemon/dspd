@@ -279,6 +279,7 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
   int32_t avail;
   int err;
   bool waited = false;
+
   const struct dspd_rclient_swparams *swparams;
   if ( dspd_rclient_get_streams(dspd->client) != DSPD_PCM_SBIT_CAPTURE )
     return -EBADFD;
@@ -318,8 +319,11 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
 	} else
 	{
 	  if ( waited )
-	    if ( dspd_check_dead(dspd) )
-	      break;
+	    {
+	      if ( dspd_check_dead(dspd) )
+		break;
+	      dspd_rclient_poll_clear(dspd->client, DSPD_PCM_SBIT_CAPTURE);
+	    } 
 	  if ( io->nonblock == 0 && pos < size )
 	    {
 	      ret = dspd_rclient_wait(dspd->client, dspd->stream);
@@ -336,7 +340,6 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
     ret = -EAGAIN;
   else if ( pos > 0 )
     ret = pos;
-  
   if ( ret > 0 )
     {
       dspd->appl_ptr += ret;
@@ -356,6 +359,11 @@ static snd_pcm_sframes_t dspd_read_pcm(snd_pcm_ioplug_t *io,
     } else if ( ret != -EAGAIN )
     {
       dspd_rclient_poll_notify(dspd->client, DSPD_PCM_SBIT_CAPTURE);
+    } else
+    {
+      dspd_rclient_poll_clear(dspd->client, DSPD_PCM_SBIT_CAPTURE);
+      dspd_rclient_status(dspd->client, dspd->stream, NULL);
+      dspd_update_timer(dspd->client, dspd->stream);
     }
   return ret;
 }
