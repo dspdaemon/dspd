@@ -1681,6 +1681,37 @@ static int32_t client_swparams(struct dspd_rctx *context,
   return ret;
 }
 
+static int32_t client_pause(struct dspd_rctx *context,
+			    uint32_t      req,
+			    const void   *inbuf,
+			    size_t        inbufsize,
+			    void         *outbuf,
+			    size_t        outbufsize)
+{
+  struct ss_cctx *cli;
+  int32_t pstream = -1, cstream = -1;
+  int32_t ret;
+  size_t br = 0;
+  dspd_time_t tstamps[2] = { 0, 0 }, ts;
+  
+  ret = get_streams(context, &cli, &pstream, &cstream, 0);
+  if ( ret == 0 )
+    {
+      if ( pstream >= 0 )
+	ret = dspd_stream_ctl(&dspd_dctx, pstream, req, inbuf, inbufsize, tstamps, sizeof(tstamps), &br);
+      if ( ret == 0 && cstream >= 0 && pstream != cstream )
+	{
+	  ts = tstamps[DSPD_PCM_STREAM_PLAYBACK];
+	  ret = dspd_stream_ctl(&dspd_dctx, cstream, req, inbuf, inbufsize, tstamps, sizeof(tstamps), &br);
+	  tstamps[DSPD_PCM_STREAM_PLAYBACK] = ts;
+	}
+    }
+  if ( ret == 0 && br > 0 && outbufsize >= br )
+    ret = dspd_req_reply_buf(context, 0, tstamps, br);
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
+}
 
 static const struct dspd_req_handler client_req_handlers[] = {
   [CLIDX(DSPD_SCTL_CLIENT_START)] = {
@@ -1829,6 +1860,14 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .xflags = DSPD_REQ_FLAG_CMSG_FD,
     .rflags = 0,
     .inbufsize = 0,
+    .outbufsize = 0,
+
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_PAUSE)] = {
+    .handler = client_pause,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
     .outbufsize = 0,
 
   },

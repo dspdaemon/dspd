@@ -73,7 +73,7 @@ struct dspd_client {
 };
 
 
-static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams);
+static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool reset);
 
 
 
@@ -1646,7 +1646,7 @@ static int32_t client_stop(struct dspd_rctx *context,
   uint32_t stream = *(int32_t*)inbuf;
   int32_t err;
   struct dspd_client *cli = dspd_req_userdata(context); 
-  err = client_stop_now(cli, stream);
+  err = client_stop_now(cli, stream, true);
   return dspd_req_reply_err(context, 0, err);
 }
 
@@ -2436,12 +2436,13 @@ static int32_t client_syncgroup(struct dspd_rctx *context,
   return ret;
 }
 
-static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams)
+static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool reset)
 {
   int32_t ret, old;
   struct dspd_client_trigger_tstamp *ts;
   if ( ! cli->server_ops )
     return -EBADFD;
+
   dspd_mutex_lock(&cli->sync_start_lock);
   if ( cli->playback.ready == false )
     streams &= ~DSPD_PCM_SBIT_PLAYBACK;
@@ -2473,27 +2474,26 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams)
       dspd_slist_entry_srvlock(cli->list, cli->index);
       if ( streams & DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  //dspd_fifo_reset(&cli->playback.fifo);
-	  //dspd_mbx_reset(&cli->playback.mbx);
-	  cli->playback.last_hw = 0;
-	  cli->playback.curr_hw = 0;
-
-	  cli->playback.dev_appl_ptr = 0;
-	  cli->playback.cli_appl_ptr = 0;
-	  cli->playback.start_count = 0;
+	  if ( reset )
+	    {
+	      cli->playback.last_hw = 0;
+	      cli->playback.curr_hw = 0;
+	      cli->playback.dev_appl_ptr = 0;
+	      cli->playback.cli_appl_ptr = 0;
+	      cli->playback.start_count = 0;
+	    }
 	  cli->playback.started = false;
 	}
       if ( streams & DSPD_PCM_SBIT_CAPTURE )
 	{
-	  //dspd_fifo_reset(&cli->capture.fifo);
-	  //dspd_mbx_reset(&cli->capture.mbx);
-
-	  cli->capture.last_hw = 0;
-	  cli->capture.curr_hw = 0;
-
-	  cli->capture.dev_appl_ptr = 0;
-	  cli->capture.cli_appl_ptr = 0;
-	  cli->capture.start_count = 0;
+	  if ( reset )
+	    {
+	      cli->capture.last_hw = 0;
+	      cli->capture.curr_hw = 0;
+	      cli->capture.dev_appl_ptr = 0;
+	      cli->capture.cli_appl_ptr = 0;
+	      cli->capture.start_count = 0;
+	    }
 	  cli->capture.started = false;
 	}
       dspd_slist_entry_srvunlock(cli->list, cli->index);
@@ -2555,12 +2555,12 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
 	      
 	      cli->playback.last_hw = 0;
 	      cli->playback.curr_hw = 0;
-
-	      //dspd_fifo_reset(&cli->playback.fifo);
-	      //dspd_mbx_reset(&cli->playback.mbx);
-	      /*cli->playback.dev_appl_ptr = 0;
+	      
+	      cli->playback.dev_appl_ptr = 0;
 	      cli->playback.cli_appl_ptr = 0;
-	      cli->playback.start_count = 0;*/
+
+	      cli->playback.start_count = 0;
+
 	      cli->playback.started = false;
 	    } else
 	    {
@@ -2575,11 +2575,11 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
 		}
 	      cli->capture.last_hw = 0;
 	      cli->capture.curr_hw = 0;
-	      //dspd_fifo_reset(&cli->capture.fifo);
-	      //dspd_mbx_reset(&cli->capture.mbx);
-	      /*cli->capture.dev_appl_ptr = 0;
+	  
+	      cli->capture.dev_appl_ptr = 0;
 	      cli->capture.cli_appl_ptr = 0;
-	      cli->capture.start_count = 0;*/
+	      cli->capture.start_count = 0;
+
 	      cli->capture.started = false;
 	    }
 	  if ( locked )
@@ -2640,7 +2640,7 @@ static int32_t client_synccmd(struct dspd_rctx *context,
 	      ret = client_start_at_time(cli, scmd->tstamp, scmd->streams, NULL, false);
 	    } else if ( scmd->cmd == SGCMD_STOP )
 	    {
-	      ret = client_stop_now(cli->server, scmd->streams);
+	      ret = client_stop_now(cli->server, scmd->streams, true);
 	    }
 	}
     }
@@ -2718,6 +2718,33 @@ static int32_t client_swparams(struct dspd_rctx *context,
     {
       ret = dspd_req_reply_err(context, 0, 0);
     }
+  return ret;
+}
+
+static int32_t client_pause(struct dspd_rctx *context,
+			    uint32_t      req,
+			    const void   *inbuf,
+			    size_t        inbufsize,
+			    void         *outbuf,
+			    size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  uint32_t pause = *(const uint32_t*)inbuf;
+  int32_t err, ret;
+  int32_t s = 0;
+  dspd_time_t tstamps[2] = { 0, 0 };
+  if ( cli->playback.enabled )
+    s |= DSPD_PCM_SBIT_PLAYBACK;
+  if ( cli->capture.enabled )
+    s |= DSPD_PCM_SBIT_CAPTURE;
+  if ( pause )
+    err = client_stop_now(cli, s, false);
+  else
+    err = client_start_at_time(cli, dspd_get_time(), s, tstamps, false);
+  if ( err == 0 && outbufsize >= sizeof(tstamps) && pause == 0 )
+    ret = dspd_req_reply_buf(context, 0, tstamps, sizeof(tstamps));
+  else
+    ret = dspd_req_reply_err(context, 0, err);
   return ret;
 }
 
@@ -2868,7 +2895,13 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .rflags = 0,
     .inbufsize = 0,
     .outbufsize = 0,
-
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_PAUSE)] = {
+    .handler = client_pause,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
   },
 };
 
