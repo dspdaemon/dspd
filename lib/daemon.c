@@ -2059,25 +2059,28 @@ int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags)
   int32_t ret;
   if ( stream > DSPD_MAX_OBJECTS )
     return -ENOENT;
-  dspd_slist_entry_wrlock(dspd_dctx.objects, stream);
-  dspd_slist_entry_get_pointers(dspd_dctx.objects,
-				stream,
-				&data,
-				&server_ops,
-				&client_ops);
-  if ( dspd_slist_refcnt(dspd_dctx.objects, stream) == 0 )
+  ret = dspd_slist_entry_wrlock(dspd_dctx.objects, stream);
+  if ( ret == 0 )
     {
-      ret = -ENOENT;
-    } else if ( ((flags & DSPD_DCTL_ENUM_TYPE_CLIENT) != 0 && client_ops == NULL) ||
-		((flags & DSPD_DCTL_ENUM_TYPE_SERVER) != 0 && server_ops == NULL) )
-    {
-      ret = -EINVAL;
-    } else
-    {
-      ret = 0;
-      dspd_slist_ref(dspd_dctx.objects, stream);
+      dspd_slist_entry_get_pointers(dspd_dctx.objects,
+				    stream,
+				    &data,
+				    &server_ops,
+				    &client_ops);
+      if ( dspd_slist_refcnt(dspd_dctx.objects, stream) == 0 )
+	{
+	  ret = -ENOENT;
+	} else if ( ((flags & DSPD_DCTL_ENUM_TYPE_CLIENT) != 0 && client_ops == NULL) ||
+		    ((flags & DSPD_DCTL_ENUM_TYPE_SERVER) != 0 && server_ops == NULL) )
+	{
+	  ret = -EINVAL;
+	} else
+	{
+	  ret = 0;
+	  dspd_slist_ref(dspd_dctx.objects, stream);
+	}
+      dspd_slist_entry_rw_unlock(dspd_dctx.objects, stream);
     }
-  dspd_slist_entry_rw_unlock(dspd_dctx.objects, stream);
   return ret;
 }
 

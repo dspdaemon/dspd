@@ -30,8 +30,8 @@ uint32_t dspd_slist_entry_get_key(struct dspd_slist *list, uint32_t entry);
 void dspd_slist_entry_set_key(struct dspd_slist *list, uint32_t entry, uint32_t key);
 void dspd_slist_entry_srvunlock(struct dspd_slist *list, uint32_t entry);
 
-void dspd_slist_entry_wrlock(struct dspd_slist *list, uint32_t entry);
-void dspd_slist_entry_rdlock(struct dspd_slist *list, uint32_t entry);
+int32_t dspd_slist_entry_wrlock(struct dspd_slist *list, uint32_t entry);
+int32_t dspd_slist_entry_rdlock(struct dspd_slist *list, uint32_t entry);
 void dspd_slist_entry_rw_unlock(struct dspd_slist *list, uint32_t entry);
 void dspd_slist_rdlock(struct dspd_slist *list);
 void dspd_slist_wrlock(struct dspd_slist *list);

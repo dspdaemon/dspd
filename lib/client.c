@@ -2234,7 +2234,10 @@ static int32_t client_reserve(struct dspd_rctx *context,
   if ( inbufsize == sizeof(server) )
     {
       server = *(uint32_t*)inbuf;
-      if ( cli->device >= 0 )
+      if ( server == cli->index )
+	{
+	  ret = -EINVAL;
+	} else if ( cli->device >= 0 )
 	{
 	  ret = EALREADY;
 	  goto out;
@@ -2283,7 +2286,6 @@ static int32_t client_reserve(struct dspd_rctx *context,
  out:
   dspd_slist_entry_srvunlock(cli->list, cli->index);
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
-  ret *= -1;
   return dspd_req_reply_err(context, 0, ret);
   
 }

@@ -452,22 +452,24 @@ void dspd_slist_entry_srvunlock(struct dspd_slist *list, uint32_t entry)
   kl_unlock(&e->lock);
 }
 
-void dspd_slist_entry_wrlock(struct dspd_slist *list, uint32_t entry)
+int32_t dspd_slist_entry_wrlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
-  pthread_rwlock_wrlock(&e->rwlock);
+  return pthread_rwlock_wrlock(&e->rwlock) * -1;
 }
 
-void dspd_slist_entry_rdlock(struct dspd_slist *list, uint32_t entry)
+int32_t dspd_slist_entry_rdlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
-  pthread_rwlock_rdlock(&e->rwlock);
+  return pthread_rwlock_rdlock(&e->rwlock) * -1;
 }
 
 void dspd_slist_entry_rw_unlock(struct dspd_slist *list, uint32_t entry)
 {
   struct dspd_slist_entry *e = &list->entries[entry];
-  pthread_rwlock_unlock(&e->rwlock);
+  int ret;
+  ret = pthread_rwlock_unlock(&e->rwlock);
+  assert(ret == 0);
 }
 
 

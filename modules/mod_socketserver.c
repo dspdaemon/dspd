@@ -251,6 +251,7 @@ static void socksrv_error(void *dev, int32_t index, void *client, int32_t err, v
       dspd_mutex_unlock(&cli->lock);
     }
 }
+static void close_client_stream(struct ss_cctx *cli, int32_t stream);
 static int32_t open_client_stream(struct ss_cctx *cli)
 {
   int32_t ret;
@@ -1435,7 +1436,7 @@ static int32_t client_reserve(struct dspd_rctx *context,
 	  if ( pstream >= 0 && cli->playback_device >= 0 )
 	    ret = dspd_stream_ctl(&dspd_dctx, pstream, req, &cli->playback_device, sizeof(cli->playback_device), NULL, 0, &br);
 	  if ( ret == 0 && cstream >= 0 && cli->capture_device >= 0 && cstream != pstream )
-	    ret = dspd_stream_ctl(&dspd_dctx, cstream, req, &cli->capture_stream, sizeof(cli->capture_stream), NULL, 0, &br);
+	    ret = dspd_stream_ctl(&dspd_dctx, cstream, req, &cli->capture_device, sizeof(cli->capture_device), NULL, 0, &br);
 	} else if ( server >= 0 )
 	{
 	  if ( cli->device >= 0 && cli->stream >= 0 && pstream == cstream )
@@ -2241,7 +2242,7 @@ static bool client_destructor(void *data,
 
   if ( cli->capture_stream >= 0 )
     close_client_stream(cli, cli->capture_stream);
-
+  
   dspd_mutex_destroy(&cli->lock);
   if ( cli->device >= 0 )
     dspd_daemon_unref(cli->device);
