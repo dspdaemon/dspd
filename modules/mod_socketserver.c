@@ -738,6 +738,7 @@ static int32_t client_start(struct dspd_rctx *context,
   dspd_time_t tstamps[2] = { 0, 0 }, tmp;
   size_t br = 0;
   struct dspd_sync_cmd cmd;
+  //Full duplex with 2 streams
   if ( cli->playback_stream >= 0 && cli->capture_stream >= 0 && cli->playback_stream != cli->capture_stream && stream == DSPD_PCM_SBIT_FULLDUPLEX )
     {
       //Start both at the same time without a real syncgroup.
@@ -772,6 +773,7 @@ static int32_t client_start(struct dspd_rctx *context,
 	}
     } else if ( cli->playback_stream >= 0 || cli->capture_stream >= 0 )
     {
+      //Full duplex or half duplex with a single stream
       if ( cli->playback_stream >= 0 && (stream & DSPD_PCM_SBIT_PLAYBACK) )
 	{
 	  ret = dspd_stream_ctl(&dspd_dctx,
@@ -790,7 +792,7 @@ static int32_t client_start(struct dspd_rctx *context,
 	{
 	  tmp = tstamps[DSPD_PCM_STREAM_PLAYBACK];
 	  ret = dspd_stream_ctl(&dspd_dctx,
-				cli->playback_stream,
+				cli->capture_stream,
 				req,
 				&stream,
 				sizeof(stream),
