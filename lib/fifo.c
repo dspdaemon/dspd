@@ -78,7 +78,7 @@ int dspd_fifo_len_ptrs(const struct dspd_fifo_header *fifo,
   l = *in - *out;
   if ( l > fifo->max_obj )
     {
-      ret = EIO;
+      ret = -EIO;
     } else
     {
       *len = l;
@@ -336,7 +336,7 @@ int dspd_fifo_new(struct dspd_fifo_header **fifo,
   a = malloc(sizeof(*hdr)+s);
   if ( ! a )
     {
-      err = errno;
+      err = -errno;
       goto out;
     }
   hdr = (struct dspd_fifo_header*)a;
@@ -356,10 +356,13 @@ int dspd_fifo_new(struct dspd_fifo_header **fifo,
  */
 void dspd_fifo_delete(struct dspd_fifo_header *fifo)
 {
-  if ( fifo->flags & DSPD_FIFO_FLAG_INIT )
+  if ( fifo )
     {
-      dspd_fifo_destroy(fifo);
-      free(fifo);
+      if ( fifo->flags & DSPD_FIFO_FLAG_INIT )
+	{
+	  dspd_fifo_destroy(fifo);
+	  free(fifo);
+	}
     }
 }
 

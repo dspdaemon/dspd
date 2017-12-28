@@ -24,6 +24,7 @@ struct dspd_req {
     uint32_t rlen;
     int32_t  err;
   } rdata;
+  uint64_t tag;    //User defined value to be sent with reply
   char pdata[0];   //Payload
 };
 
