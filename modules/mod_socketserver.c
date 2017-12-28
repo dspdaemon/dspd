@@ -50,6 +50,7 @@ struct ss_cctx {
 
   struct dspd_req *pkt_in;
   int32_t          pkt_cmd;
+  uint64_t         pkt_tag;
   size_t           pkt_size;
   int32_t          pkt_fd;
   int32_t          pkt_stream;
@@ -118,6 +119,7 @@ static int32_t client_reply_buf(struct dspd_rctx *arg,
   if ( buf != arg->outbuf && len > 0 )
     memcpy(arg->outbuf, buf, len);
   req->cmd = cli->pkt_cmd & 0xFFFF;
+  req->tag = cli->pkt_tag;
   req->flags = flags & 0xFFFF;
   req->flags |= cli->event_flags;
   req->len = sizeof(struct dspd_req);
@@ -166,7 +168,7 @@ static int32_t client_reply_fd(struct dspd_rctx *arg,
   
 
   req->cmd = cli->pkt_cmd & 0xFFFF;
-
+  req->tag = cli->pkt_tag;
 
   req->flags = flags & 0xFFFF;
   req->flags |= DSPD_REQ_FLAG_CMSG_FD;
@@ -207,6 +209,7 @@ static int32_t client_reply_err(struct dspd_rctx *arg,
   req->rdata.err = err;
   req->flags |= cli->event_flags;
   req->cmd = cli->pkt_cmd & 0xFFFF;
+  req->tag = cli->pkt_tag;
   req->bytes_returned = 0;
   cli->event_flags = 0;
   ret = sendreq(cli);
@@ -2140,6 +2143,7 @@ static int client_fd_event(void *data,
 	      if ( ret < 0 )
 		return -1;
 	      cli->pkt_cmd = cli->pkt_in->cmd;
+	      cli->pkt_tag = cli->pkt_in->tag;
 	      if ( ! cli->local )
 		cli->pkt_flags = DSPD_REQ_FLAG_REMOTE;
 	      else
