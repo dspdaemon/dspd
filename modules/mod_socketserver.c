@@ -67,7 +67,7 @@ struct ss_cctx {
 
   uint16_t event_flags;
   bool     local;
-  //bool     event_sent;
+ 
 };
 
 struct ss_sctx {
@@ -347,6 +347,8 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
   int64_t i64;
   int32_t i32;
   struct dspd_device_stat info;
+  void *ptr;
+  size_t s;
   switch(req)
     {
     case DSPD_SOCKSRV_REQ_NEWCLI:
@@ -690,6 +692,43 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  ret = EINVAL;
 	}
       ret = dspd_req_reply_err(rctx, 0, ret);
+      break;
+    case DSPD_SOCKSRV_REQ_ALLOCZ:
+      if ( cli->local )
+	{
+	  if ( inbufsize == sizeof(s) )
+	    {
+	      s = *(size_t*)inbuf;
+	      ptr = calloc(1, s);
+	      if ( ptr == NULL )
+		ret = dspd_req_reply_err(rctx, 0, ENOMEM);
+	      else
+		ret = dspd_req_reply_buf(rctx, 0, &ptr, sizeof(ptr));
+	    } else
+	    {
+	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	    }
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EPERM);
+	}
+      break;
+    case DSPD_SOCKSRV_REQ_FREE:
+      if ( cli->local )
+	{
+	  if ( inbufsize == sizeof(ptr) )
+	    {
+	      ptr = *(void**)inbuf;
+	      free(ptr);
+	      ret = dspd_req_reply_err(rctx, 0, 0);
+	    } else
+	    {
+	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	    }
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EPERM);
+	}
       break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);

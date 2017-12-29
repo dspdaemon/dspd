@@ -13,8 +13,7 @@
 
 
 struct dspd_req {
-  uint32_t len;    //Length of entire packet (actual protocol uses bit 31
-                   //to indicate that the packet contains a file descriptor)
+  uint32_t len;    //Length of entire packet
   uint32_t flags;  //Flags, such as error flag or events
   uint32_t cmd;    //Command.  The server turns this into a 32 bit integer
                    //that contains 2 flags
