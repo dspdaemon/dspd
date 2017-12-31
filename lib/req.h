@@ -165,14 +165,16 @@ struct dspd_pktstat {
   uint32_t offset;  //Offset (progress).  Done when len==offset&&len>0.
 };
 
+struct dspd_aio_ops;
 struct dspd_req_ctx {
   //Callbacks for io.  Need to return -errno, positive result, or EOF (0).
-  ssize_t (*read)(void *arg, void *buf, size_t len);
-  ssize_t (*write)(void *arg, const void *buf, size_t len);
-  int     (*set_nonblocking)(void *arg, bool nonblock);
-  int     (*poll)(void *arg, int events);
+  //ssize_t (*read)(void *arg, void *buf, size_t len);
+  //ssize_t (*write)(void *arg, const void *buf, size_t len);
+  //int     (*set_nonblocking)(void *arg, bool nonblock);
+  //int     (*poll)(void *arg, int events);
   //If getfd returns -1 then rx/tx of file descriptors is not supported.
-  int (*getfd)(void *arg);
+  //int (*getfd)(void *arg);
+  const struct dspd_aio_ops *ops;
   void   *arg;
   
   size_t  hdrlen; //Size of packet header.  At least 4 bytes.
@@ -186,9 +188,7 @@ struct dspd_req_ctx {
 void dspd_req_ctx_delete(struct dspd_req_ctx *ctx);
 struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
 				      size_t hdrlen,
-				      ssize_t (*readcb)(void *arg, void *buf, size_t len),
-				      ssize_t (*writecb)(void *arg, const void *buf, size_t len),
-				      int (*getfd)(void *arg),
+				      const struct dspd_aio_ops *ops,
 				      void *arg);
 //Receive the packet
 int32_t dspd_req_recv(struct dspd_req_ctx *ctx);

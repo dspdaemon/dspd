@@ -50,9 +50,7 @@ void dspd_req_ctx_delete(struct dspd_req_ctx *ctx)
 
 struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
 				      size_t hdrlen,
-				      ssize_t (*readcb)(void *arg, void *buf, size_t len),
-				      ssize_t (*writecb)(void *arg, const void *buf, size_t len),
-				      int (*getfd)(void *arg),
+				      const struct dspd_aio_ops *ops,
 				      void *arg)
 {
   struct dspd_req_ctx *ctx = calloc(1, sizeof(struct dspd_req_ctx));
@@ -63,9 +61,7 @@ struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
       ctx->txpkt = calloc(1, pktlen);
       if ( ! (ctx->rxpkt && ctx->txpkt) )
 	goto out;
-      ctx->read = readcb;
-      ctx->write = writecb;
-      ctx->getfd = getfd;
+      ctx->ops = ops;
       ctx->arg = arg;
       ctx->hdrlen = hdrlen;
       ctx->rxmax = pktlen;
@@ -149,7 +145,6 @@ static int32_t recv_fd(struct dspd_req_ctx *ctx)
 {
   char *buf = (char*)ctx->rxpkt;
   struct iovec iov;
-  int32_t s;
   ssize_t ret = -EINPROGRESS;
   size_t l;
   /*
@@ -160,10 +155,7 @@ static int32_t recv_fd(struct dspd_req_ctx *ctx)
       iov.iov_base = &buf[ctx->rxstat.offset];
       l = ctx->rxstat.len - ctx->rxstat.offset;
       iov.iov_len = l;
-      s = ctx->getfd(ctx->arg);
-      if ( s < 0 )
-	return s;
-      ret = dspd_cmsg_recvfd(s, &iov);
+      ret = ctx->ops->recvfd(ctx->arg, &iov);
       if ( ret <= 0 )
 	return ret;
       ctx->recvfd = ret;
@@ -175,9 +167,9 @@ static int32_t recv_fd(struct dspd_req_ctx *ctx)
    */
   if ( ctx->rxstat.offset < ctx->rxstat.len && ctx->rxstat.offset > sizeof(*ctx->rxpkt) )
     {
-      ret = ctx->read(ctx->arg,
-		      &buf[ctx->rxstat.offset],
-		      ctx->rxstat.len - ctx->rxstat.offset);
+      ret = ctx->ops->read(ctx->arg,
+			   &buf[ctx->rxstat.offset],
+			   ctx->rxstat.len - ctx->rxstat.offset);
       if ( ret > 0 )
 	{
 	  ctx->rxstat.offset += ret;
@@ -202,9 +194,9 @@ static int32_t recv_data(struct dspd_req_ctx *ctx)
   char *buf = (char*)ctx->rxpkt;
   if ( ctx->rxstat.offset == ctx->rxstat.len )
     return ctx->rxstat.len;
-  ret = ctx->read(ctx->arg,
-		  &buf[ctx->rxstat.offset],
-		  ctx->rxstat.len - ctx->rxstat.offset);
+  ret = ctx->ops->read(ctx->arg,
+		       &buf[ctx->rxstat.offset],
+		       ctx->rxstat.len - ctx->rxstat.offset);
   if ( ret > 0 )
     {
       ctx->rxstat.offset += ret;
@@ -222,9 +214,9 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
 
   if ( ctx->rxstat.offset < sizeof(*ctx->rxpkt ) )
     {
-      ret = ctx->read(ctx->arg,
-		      ((char*)ctx->rxpkt) + ctx->rxstat.offset,
-		      sizeof(*ctx->rxpkt) - ctx->rxstat.offset);
+      ret = ctx->ops->read(ctx->arg,
+			   ((char*)ctx->rxpkt) + ctx->rxstat.offset,
+			   sizeof(*ctx->rxpkt) - ctx->rxstat.offset);
       if ( ret <= 0 )
 	  return ret;
     
@@ -300,7 +292,7 @@ int dspd_cmsg_sendfd(int s, int fd, struct iovec *data)
 static int32_t send_fd(struct dspd_req_ctx *ctx)
 {
   ssize_t ret;
-  int32_t fd, s;
+  int32_t fd;
   char *buf;
   struct iovec iov;
   buf = (char*)ctx->txpkt;
@@ -309,9 +301,9 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
   */
   if ( ctx->txstat.offset < sizeof(*ctx->txpkt) )
     {
-      ret = ctx->write(ctx->arg,
-		       &buf[ctx->txstat.offset],
-		       sizeof(*ctx->txpkt) - ctx->txstat.offset);
+      ret = ctx->ops->write(ctx->arg,
+			    &buf[ctx->txstat.offset],
+			    sizeof(*ctx->txpkt) - ctx->txstat.offset);
       if ( ret <= 0 )
 	return ret;
       ctx->txstat.offset += ret;
@@ -323,14 +315,11 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
    */
   if ( ctx->txstat.offset == sizeof(*ctx->txpkt) )
     {
-      s = ctx->getfd(ctx->arg);
-      if ( s < 0 )
-	return s;
       //First 4 bytes of payload is FD
       memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
       iov.iov_base = &buf[ctx->txstat.offset];
       iov.iov_len = ctx->txstat.len - ctx->txstat.offset; //sizeof(fd);
-      ret = dspd_cmsg_sendfd(s, fd, &iov);
+      ret = ctx->ops->sendfd(ctx->arg, fd, &iov);
       if ( ret <= 0 )
 	return ret;
       ctx->txstat.offset += ret;
@@ -343,9 +332,9 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
       assert(ctx->txstat.offset <= ctx->txstat.len);
       if ( ctx->txstat.offset < ctx->txstat.len )
 	{
-	  ret = ctx->write(ctx->arg,
-			   &buf[ctx->txstat.offset],
-			   ctx->txstat.len - ctx->txstat.offset);
+	  ret = ctx->ops->write(ctx->arg,
+				&buf[ctx->txstat.offset],
+				ctx->txstat.len - ctx->txstat.offset);
 	  if ( ret <= 0 )
 	    return ret;
 	  ctx->txstat.offset += ret;
@@ -385,9 +374,9 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx)
     } else
     {
       buf = (char*)ctx->txpkt;
-      ret = ctx->write(ctx->arg,
-		       &buf[ctx->txstat.offset],
-		       ctx->txstat.len - ctx->txstat.offset);
+      ret = ctx->ops->write(ctx->arg,
+			    &buf[ctx->txstat.offset],
+			    ctx->txstat.len - ctx->txstat.offset);
       if ( ret <= 0 )
 	return ret;
       ctx->txstat.offset += ret;
@@ -598,6 +587,16 @@ int dspd_stream_ctl(void    *context, //DSPD object, such as dspd_dctx
 			  outbuf,
 			  outbufsize,
 			  bytes_returned);
+    } else if ( objtype == DSPD_OBJ_TYPE_AIO )
+    {
+      ret = dspd_aio_sync_ctl(context,
+			      stream, 
+			      req, 
+			      inbuf, 
+			      inbufsize, 
+			      outbuf,
+			      outbufsize,
+			      bytes_returned);
     } else
     {
       ret = -EINVAL;

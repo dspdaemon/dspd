@@ -30,4 +30,5 @@
 #include "socket.h"
 #include "ssclient.h"
 #include "rtalloc.h"
+#include "dspdaio.h"
 #endif

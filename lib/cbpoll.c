@@ -178,6 +178,7 @@ int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct
   return ret;
 }
 
+
 static void *cbpoll_thread(void *p)
 {
   struct cbpoll_ctx *ctx = p;
@@ -192,6 +193,7 @@ static void *cbpoll_thread(void *p)
     set_thread_name("dspdcbpoll");
   else
     set_thread_name(ctx->name);
+
   while ( AO_load(&ctx->abort) == 0 )
     {
       ctx->dispatch_count = -1;
@@ -232,7 +234,8 @@ static void *cbpoll_thread(void *p)
 					    fdata->data,
 					    ctx->wq.overflow.arg,
 					    ctx->wq.overflow.index,
-					    ctx->wq.overflow.fd);
+					    ctx->wq.overflow.fd,
+					    ctx->wq.overflow.msg);
 		  if ( ctx->wq.overflow.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
 		    cbpoll_unref(ctx, idx);
 		  ctx->wq.overflow.fd = -1;
@@ -323,7 +326,8 @@ static void *async_work_thread(void *p)
 			 fd->data,
 			 work->arg,
 			 work->index,
-			 work->fd);
+			 work->fd,
+			 work->msg);
 	  dspd_fifo_rcommit(ctx->wq.fifo, 1);
 	}
     }
@@ -368,7 +372,8 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk)
 			fd->data,
 			wrk->arg,
 			wrk->index,
-			wrk->fd);
+			wrk->fd,
+			wrk->msg);
 	  if ( wrk->msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
 	    cbpoll_unref(ctx, wrk->index);
 	}
@@ -412,8 +417,14 @@ int32_t cbpoll_set_events(struct cbpoll_ctx *ctx,
 	    f->events = events;
 	} else
 	{
-	  f->events = events;
-	  ret = 0;
+	  if ( f->ops->set_events )
+	    {
+	      ret = f->ops->set_events(f->data, ctx, index, f->fd, events);
+	    } else
+	    {
+	      f->events = events;
+	      ret = 0;
+	    }
 	}
     } else
     {
@@ -477,7 +488,8 @@ void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 						 void *data,
 						 int64_t arg,
 						 int32_t index,
-						 int32_t fd))
+						 int32_t fd,
+						 int32_t msg))
 {
   struct cbpoll_work work;
   work.index = index;
@@ -646,7 +658,7 @@ void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,
 uint32_t cbpoll_refcnt(struct cbpoll_ctx *ctx, int index)
 {
   uint32_t ret;
-  if ( index < 0 || index > ctx->max_fd )
+  if ( index < 0 || index >= ctx->max_fd )
     ret = 0;
   else
     ret = ctx->fdata[index].refcnt;
@@ -660,4 +672,12 @@ int32_t cbpoll_set_name(struct cbpoll_ctx *ctx, const char *threadname)
   if ( ! ctx->name )
     return -ENOMEM;
   return 0;
+}
+
+struct cbpoll_fd *cbpoll_get_fdata(struct cbpoll_ctx *ctx, int32_t index)
+{
+  struct cbpoll_fd *ret = NULL;
+  if ( index >= 0 && index < ctx->max_fd )
+    ret = &ctx->fdata[index];
+  return ret;
 }

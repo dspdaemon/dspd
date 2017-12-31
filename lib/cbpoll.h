@@ -25,7 +25,8 @@ struct cbpoll_work {
 		   void *data,
 		   int64_t arg,
 		   int32_t index,
-		   int32_t fd);
+		   int32_t fd,
+		   int32_t msg);
   char     extra_data[32];
 };
 
@@ -53,6 +54,11 @@ struct cbpoll_fd_ops {
 		     struct cbpoll_ctx *context,
 		     int index,
 		     int fd);
+  int  (*set_events)(void *data, 
+		     struct cbpoll_ctx *context,
+		     int index,
+		     int fd,
+		     int events);
 };
 struct cbpoll_fd {
   int       fd;
@@ -119,7 +125,8 @@ void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 						 void *data,
 						 int64_t arg,
 						 int32_t index,
-						 int32_t fd));
+						 int32_t fd,
+						 int32_t msg));
 void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 				   int32_t index,
 				   int64_t arg);
@@ -136,4 +143,6 @@ void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,
 			  void (*sleep)(void *arg, struct cbpoll_ctx *context),
 			  void (*wake)(void *arg, struct cbpoll_ctx *context));
 
+struct cbpoll_fd *cbpoll_get_fdata(struct cbpoll_ctx *ctx, int32_t index);
+void cbpoll_set_next_timeout(struct cbpoll_ctx *ctx, int32_t timeout);
 #endif

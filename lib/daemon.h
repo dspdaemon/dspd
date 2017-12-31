@@ -96,7 +96,7 @@ enum dspd_obj_type {
   DSPD_OBJ_TYPE_INVALID,
   DSPD_OBJ_TYPE_DAEMON_CTX,
   DSPD_OBJ_TYPE_IPC,
-
+  DSPD_OBJ_TYPE_AIO,
 };
 struct dspd_rcb;
 struct dspd_aio_ctx;

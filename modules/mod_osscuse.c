@@ -494,7 +494,8 @@ static void free_client_cb(struct cbpoll_ctx *ctx,
 			   void *data,
 			   int64_t arg,
 			   int32_t index,
-			   int32_t fd)
+			   int32_t fd,
+			   int32_t msg)
 {
   struct oss_cdev_client *cli = (struct oss_cdev_client*)(intptr_t)arg;
   size_t br;
@@ -650,7 +651,8 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 				 void *data,
 				 int64_t arg,
 				 int32_t index,
-				 int32_t fd)
+				 int32_t fd,
+				 int32_t msg)
 {
   struct oss_cdev_client *cli;
   struct oss_dsp_cdev *dev = data;

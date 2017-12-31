@@ -27,12 +27,18 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/eventfd.h>
 #define _DSPD_CTL_MACROS
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../lib/cbpoll.h"
 
 #define MSG_EVENT_FLAGS (CBPOLL_PIPE_MSG_USER+1)
+#define SOCKSRV_INSERT_FD (CBPOLL_PIPE_MSG_USER+1)
+#define SOCKSRV_INSERT_FIFO (CBPOLL_PIPE_MSG_USER+1)
+#define SOCKSRV_ADD_CLIENT (CBPOLL_PIPE_MSG_USER+2)
+#define SOCKSRV_FREE_SLOT  (CBPOLL_PIPE_MSG_USER+3)
+struct ss_sctx;
 struct ss_cctx {
   struct dspd_req_ctx *req_ctx;
 
@@ -68,12 +74,23 @@ struct ss_cctx {
   uint16_t event_flags;
   bool     local;
  
+  struct dspd_aio_fifo_ctx *fifo;
+  struct cbpoll_fd         *cbpfd;
+  struct ss_sctx           *server;
 };
 
 struct ss_sctx {
-  int fd;
-  struct ss_cctx    *accepted_context;
-  struct cbpoll_ctx  cbctx;
+  int                             fd;
+  int                             index;
+  struct ss_cctx                 *accepted_context;
+  struct cbpoll_ctx               cbctx;
+  struct ss_cctx                **virtual_fds;
+  size_t                          max_virtual_fds;
+  struct dspd_aio_fifo_eventfd    eventfd;
+  int32_t                         eventfd_index;
+  bool                            wake_self;
+  const struct dspd_aio_fifo_ops *vfd_ops;
+  
 };
 
 
@@ -2076,7 +2093,8 @@ static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
 				void *data,
 				int64_t arg,
 				int32_t index,
-				int32_t fd)
+				int32_t fd,
+				int32_t msg)
 {
   int32_t ret;
   struct ss_cctx *cli = data;
@@ -2304,16 +2322,39 @@ static bool client_destructor(void *data,
   free(cli);
   return true;
 }
+static int client_vfd_set_events(void *data, 
+				 struct cbpoll_ctx *context,
+				 int index,
+				 int fd,
+				 int events)
+{
+  struct ss_cctx *cli = data;
+  assert(cli->fifo != NULL); //This is for virtual fd only
+  if ( events != cli->cbpfd->events )
+    {
+      if ( dspd_aio_fifo_wait(cli->fifo, events, 0) )
+	{
+	  if ( cli->server->wake_self == false )
+	    {
+	      cli->server->vfd_ops->wake(NULL, &cli->server->eventfd);
+	      cli->server->wake_self = true;
+	    }
+	}
+    }
+  return 0;
+}
+
 
 static const struct cbpoll_fd_ops socksrv_client_ops = {
   .fd_event = client_fd_event,
   .pipe_event = client_pipe_event,
   .destructor = client_destructor,
+  .set_events = client_vfd_set_events,
 };
 
 
 
-static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx)
+static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx, struct dspd_aio_fifo_ctx *fifo)
 {
   struct ss_cctx *ctx;
   ctx = calloc(1, sizeof(*ctx));
@@ -2337,12 +2378,20 @@ static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx)
   ctx->index = -1;
   ctx->pkt_fd = -1;
   ctx->fd_out = -1;
-  ctx->req_ctx = dspd_req_ctx_new(SS_MAX_PAYLOAD+sizeof(struct dspd_req),
-				  sizeof(struct dspd_req),
-				  dspd_req_read_cb,
-				  dspd_req_write_cb,
-				  dspd_req_getfd_cb,
-				  (void*)(intptr_t)fd);
+  if ( fifo )
+    {
+      ctx->fifo = fifo;
+      ctx->req_ctx = dspd_req_ctx_new(SS_MAX_PAYLOAD+sizeof(struct dspd_req),
+				      sizeof(struct dspd_req),
+				      &dspd_aio_fifo_ctx_ops,
+				      (void*)(intptr_t)fd);
+    } else
+    {
+      ctx->req_ctx = dspd_req_ctx_new(SS_MAX_PAYLOAD+sizeof(struct dspd_req),
+				      sizeof(struct dspd_req),
+				      &dspd_aio_sock_ops,
+				      (void*)(intptr_t)fd);
+    }
   ctx->pkt_in = (struct dspd_req*)ctx->req_ctx->rxpkt;
   ctx->pkt_out = (struct dspd_req*)ctx->req_ctx->txpkt;
 
@@ -2363,22 +2412,33 @@ static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx)
   return ctx;
 }
 
-static void accept_fd(struct cbpoll_ctx *ctx,
-		      void *data,
+static void insert_fd(struct cbpoll_ctx *ctx,
+		      int32_t newfd,
 		      int64_t arg,
 		      int32_t index,
-		      int32_t fd)
+		      int32_t fd,
+		      bool    vfd)
 {
-  struct sockaddr_un addr;
-  socklen_t len = sizeof(addr);
-  int newfd = accept4(fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
   struct cbpoll_pipe_event evt;
   struct ss_cctx *cli;
-  if ( newfd >= 0 )
+  struct dspd_aio_fifo_ctx *fifo;
+  ssize_t slot = -1;
+  if ( vfd )
+    fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)arg;
+  else
+    fifo = NULL;
+  if ( newfd >= 0 || vfd == true )
     {
-      cli = new_socksrv_client(newfd, ctx);
+      if ( fifo )
+	slot = fifo->master->slot;
+      cli = new_socksrv_client(newfd, ctx, fifo);
       if ( ! cli )
-	close(newfd);
+	{
+	  if ( vfd )
+	    dspd_aio_fifo_close((struct dspd_aio_fifo_ctx*)(intptr_t)arg);
+	  else
+	    close(newfd);
+	}
     } else
     {
       cli = NULL;
@@ -2387,9 +2447,45 @@ static void accept_fd(struct cbpoll_ctx *ctx,
   evt.fd = fd;
   evt.index = index;
   evt.stream = -1;
-  evt.msg = 0;
-  evt.arg = (intptr_t)cli;
+  if ( cli != NULL || vfd == false )
+    {
+      evt.msg = SOCKSRV_ADD_CLIENT;
+      evt.arg = (intptr_t)cli;
+    } else
+    {
+      evt.msg = SOCKSRV_FREE_SLOT;
+      evt.arg = slot;
+    }
   cbpoll_send_event(ctx, &evt); //Should not fail
+}
+
+static void accept_fd(struct cbpoll_ctx *ctx,
+		      void *data,
+		      int64_t arg,
+		      int32_t index,
+		      int32_t fd,
+		      int32_t msg)
+{
+  struct sockaddr_un addr;
+  socklen_t len = sizeof(addr);
+  int newfd;
+  if ( arg < 0 )
+    newfd = accept4(fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+  else
+    newfd = arg;
+  insert_fd(ctx, newfd, arg, index, fd, false);
+}
+
+
+static void accept_vfd(struct cbpoll_ctx *ctx,
+		       void *data,
+		       int64_t arg,
+		       int32_t index,
+		       int32_t fd,
+		       int32_t msg)
+{
+  struct dspd_aio_fifo_ctx *fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)arg;
+  insert_fd(ctx, fifo->master->slot, arg, index, fd, true);
 }
 
 static int listen_fd_event(void *data, 
@@ -2404,38 +2500,141 @@ static int listen_fd_event(void *data,
       wrk.fd = fd;
       wrk.index = index;
       wrk.msg = 0;
-      wrk.arg = 0;
+      wrk.arg = -1;
       wrk.callback = accept_fd;
       memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
       cbpoll_queue_work(context, &wrk);
     }
   return 0;
 }
+
+static void add_event(struct ss_cctx *ctx, int32_t *count, struct epoll_event *events, int32_t revents)
+{
+  struct epoll_event *evt = &events[*count];
+  (*count)++;
+  evt->data.u64 = ctx->index;
+  evt->data.u64 <<= 32U;
+  evt->data.u64 |= ctx->fd;
+  evt->events = revents;
+}
+
+static int eventfd_event(void *data, 
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd,
+			 int revents)
+{
+  struct ss_sctx *server = data;
+  struct ss_cctx *client;
+  size_t i;
+  int32_t *count;
+  struct epoll_event *events;
+  int32_t ret;
+  cbpoll_get_dispatch_list(context, &count, &events);
+  if ( revents & POLLIN )
+    {
+      server->wake_self = false;
+      server->vfd_ops->wait(NULL, &server->eventfd, 0);
+    }    
+  
+  for ( i = 0; i < server->max_virtual_fds; i++ )
+    {
+      client = server->virtual_fds[i];
+      if ( client != NULL && client != (struct ss_cctx*)UINTPTR_MAX )
+	{
+	  ret = dspd_aio_fifo_test_events(client->fifo, client->cbpfd->events);
+	  if ( ret )
+	    add_event(client, count, events, ret);
+	}
+    }
+  return 0;
+}
+
+static ssize_t reserve_slot(struct ss_sctx *ctx)
+{
+  size_t i;
+  ssize_t ret = -1;
+  for ( i = 0; i < ctx->max_virtual_fds; i++ )
+    {
+      if ( ctx->virtual_fds[i] == NULL )
+	{
+	  ctx->virtual_fds[i] = (void*)UINTPTR_MAX;
+	  ret = i;
+	  break;
+	}
+    }
+  return ret;
+}
+
 static int listen_pipe_event(void *data, 
 			     struct cbpoll_ctx *context,
 			     int index,
 			     int fd,
 			     const struct cbpoll_pipe_event *event)
 {
-  struct ss_cctx *cli = (struct ss_cctx*)(intptr_t)event->arg;
+  struct ss_cctx *cli;
   int32_t i;
-  if ( cli )
+  struct cbpoll_work wrk;
+  struct ss_sctx *server = data;
+  struct dspd_aio_fifo_ctx *fifo;
+  if ( event->msg == SOCKSRV_FREE_SLOT )
     {
-      i = cbpoll_add_fd(context, cli->fd, EPOLLIN, &socksrv_client_ops, cli);
-      if ( i < 0 )
+      server->virtual_fds[event->arg] = NULL;
+    } else if ( event->msg == SOCKSRV_ADD_CLIENT )
+    {
+      cli = (struct ss_cctx*)(intptr_t)event->arg;
+      if ( cli )
 	{
-	  close(cli->fd);
-	  dspd_req_ctx_delete(cli->req_ctx);
-	  free(cli);
+	  cli->server = data;
+	  i = cbpoll_add_fd(context, cli->fd, EPOLLIN, &socksrv_client_ops, cli);
+	  if ( i < 0 )
+	    {
+	      close(cli->fd);
+	      dspd_req_ctx_delete(cli->req_ctx);
+	      free(cli);
+	    } else
+	    {
+	      cli->index = i;
+	      if ( cli->fifo )
+		{
+		  //Slot must be reserved.
+		  assert(cli->server->virtual_fds[cli->fifo->master->slot] == (struct ss_cctx*)UINTPTR_MAX);
+		  cli->server->virtual_fds[cli->fifo->master->slot] = cli;
+		}
+	    }
+	}
+    } else if ( event->msg == SOCKSRV_INSERT_FD )
+    {
+      wrk.fd = fd;
+      wrk.index = index;
+      wrk.msg = 0;
+      wrk.arg = event->arg;
+      wrk.callback = accept_fd;
+      memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
+      cbpoll_queue_work(context, &wrk);
+    } else if ( event->msg == SOCKSRV_INSERT_FIFO )
+    {
+      fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)event->arg;
+      fifo->master->slot = reserve_slot(server);
+      if ( fifo->master->slot >= 0 )
+	{
+	  wrk.fd = fd;
+	  wrk.index = index;
+	  wrk.msg = 0;
+	  wrk.arg = event->arg;
+	  wrk.callback = accept_vfd;
+	  memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
+	  cbpoll_queue_work(context, &wrk);
 	} else
 	{
-	  cli->index = i;
+	  dspd_aio_fifo_close(fifo);
 	}
     }
   cbpoll_set_events(context, index, EPOLLIN | EPOLLONESHOT);
   return 0;
 }
 
+static struct ss_sctx *server_context;
 static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 				   const struct dspd_aio_fifo_ops  *ops,
 				   int32_t                          sockets[2],
@@ -2443,31 +2642,37 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 				   bool                             remote)
 {
   int32_t ret = -EINVAL;
-  if ( aio != NULL )
+  struct cbpoll_pipe_event evt;
+  if ( aio != NULL && *aio == NULL )
     {
-      if ( *aio == NULL )
-	{
-	  //TODO: Create new context
-	}
-      if ( sockets != NULL && ops == NULL )
-	{
-	  //This is a file descriptor (usually unix domain sockets) based connection.
-	  if ( sockets[0] == -1 && sockets[1] == -1 )
-	    {
-	      //TODO: Create new socket
-	    } else if ( sockets[1] >= 0 )
-	    {
-	      //TODO: Connect server side to socket server thread
-	    } else if ( sockets[0] >= 0 && sockets[1] >= 0 )
-	    {
-	      //TODO: Configure socket pair
-	    }
-	} else if ( ops != NULL )
-	{
-	  //This connection is based on fifos in memory
-	  //TODO: Send to server thread.
-	}
+      //TODO: Create new context
     }
+  if ( sockets != NULL && ops == NULL )
+    {
+      //This is a file descriptor (usually unix domain sockets) based connection.
+      if ( sockets[0] == -1 && sockets[1] == -1 && aio != NULL )
+	{
+	  //TODO: Create new socket pair
+	} else if ( sockets[0] >= 0 && sockets[1] >= 0 && aio != NULL )
+	{
+	  //TODO: Configure socket pair
+	} else if ( aio == NULL && sockets[1] >= 0 )
+	{
+	  //Send one endpoint to the server.
+	  evt.fd = server_context->fd;
+	  evt.index = server_context->index;
+	  evt.stream = -1;
+	  evt.msg = SOCKSRV_INSERT_FD;
+	  evt.arg = sockets[1];
+	  evt.callback = NULL;
+	  ret = cbpoll_send_event(&server_context->cbctx, &evt);
+	}
+    } else if ( ops != NULL )
+    {
+      //This connection is based on fifos in memory
+      //TODO: Send to server thread.
+    }
+    
   return ret;
 }
 
@@ -2485,6 +2690,11 @@ static const struct cbpoll_fd_ops socksrv_listen_ops = {
   .pipe_event = listen_pipe_event,
   .destructor = listen_destructor,
 };
+static const struct cbpoll_fd_ops socksrv_eventfd_ops = {
+  .fd_event = eventfd_event,
+  .pipe_event = NULL,
+  .destructor = NULL,
+};
 
 
 static int socksrv_init(void *daemon, void **context)
@@ -2497,6 +2707,8 @@ static int socksrv_init(void *daemon, void **context)
   if ( ! sctx )
     return -errno;
   sctx->fd = -1;
+  sctx->eventfd.fd = -1;
+  dspd_ts_clear(&sctx->eventfd.tsval);
   ret = cbpoll_init(&sctx->cbctx, 0, DSPD_MAX_OBJECTS);
   if ( ret < 0 )
     {
@@ -2520,6 +2732,19 @@ static int socksrv_init(void *daemon, void **context)
   ret = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN | EPOLLONESHOT, &socksrv_listen_ops, sctx);
   if ( ret < 0 )
     goto out;
+  sctx->index = ret;
+
+  sctx->eventfd.fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if ( sctx->eventfd.fd < 0 )
+    {
+      ret = -errno;
+      goto out;
+    }
+  ret = cbpoll_add_fd(&sctx->cbctx, sctx->eventfd.fd, EPOLLIN, &socksrv_eventfd_ops, sctx);
+  if ( ret < 0 )
+    goto out;
+  sctx->eventfd_index = ret;
+
   fd = -1;
   ret = cbpoll_set_name(&sctx->cbctx, "dspd-socksrv");
   if ( ret < 0 )
@@ -2529,6 +2754,7 @@ static int socksrv_init(void *daemon, void **context)
     goto out;
   ret = 0;
 
+  server_context = sctx;
   if ( ! dctx->new_aio_ctx )
     dctx->new_aio_ctx = socksrv_new_aio_ctx;
   else
