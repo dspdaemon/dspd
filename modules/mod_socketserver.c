@@ -2436,6 +2436,41 @@ static int listen_pipe_event(void *data,
   return 0;
 }
 
+static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
+				   const struct dspd_aio_fifo_ops  *ops,
+				   int32_t                          sockets[2],
+				   ssize_t                          max_req,
+				   bool                             remote)
+{
+  int32_t ret = -EINVAL;
+  if ( aio != NULL )
+    {
+      if ( *aio == NULL )
+	{
+	  //TODO: Create new context
+	}
+      if ( sockets != NULL && ops == NULL )
+	{
+	  //This is a file descriptor (usually unix domain sockets) based connection.
+	  if ( sockets[0] == -1 && sockets[1] == -1 )
+	    {
+	      //TODO: Create new socket
+	    } else if ( sockets[1] >= 0 )
+	    {
+	      //TODO: Connect server side to socket server thread
+	    } else if ( sockets[0] >= 0 && sockets[1] >= 0 )
+	    {
+	      //TODO: Configure socket pair
+	    }
+	} else if ( ops != NULL )
+	{
+	  //This connection is based on fifos in memory
+	  //TODO: Send to server thread.
+	}
+    }
+  return ret;
+}
+
 static bool listen_destructor(void *data,
 			      struct cbpoll_ctx *context,
 			      int index,
@@ -2457,6 +2492,7 @@ static int socksrv_init(void *daemon, void **context)
   struct ss_sctx *sctx;
   int ret;
   int fd = -1;
+  struct dspd_daemon_ctx *dctx = daemon;
   sctx = calloc(1, sizeof(*sctx));
   if ( ! sctx )
     return -errno;
@@ -2492,6 +2528,11 @@ static int socksrv_init(void *daemon, void **context)
   if ( ret < 0 )
     goto out;
   ret = 0;
+
+  if ( ! dctx->new_aio_ctx )
+    dctx->new_aio_ctx = socksrv_new_aio_ctx;
+  else
+    dspd_log(0, "AIO context handler already hooked!");
 
  out:
   

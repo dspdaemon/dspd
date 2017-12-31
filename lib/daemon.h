@@ -99,7 +99,8 @@ enum dspd_obj_type {
 
 };
 struct dspd_rcb;
-
+struct dspd_aio_ctx;
+struct dspd_aio_fifo_ops;
 struct dspd_daemon_ctx {
   uint32_t magic;
   struct dspd_module_list *modules;
@@ -135,6 +136,17 @@ struct dspd_daemon_ctx {
   gid_t gid;
   char *user;
   mode_t ipc_mode;
+
+  int32_t (*new_aio_ctx)(struct dspd_aio_ctx       **aio,  //Pointer to NULL (make new context) or existing context
+			 //Ops for the new context if *aio!=NULL
+			 const struct dspd_aio_fifo_ops  *ops,
+			 //Optional sockets: {client,server}, {-1,server}
+			 int32_t                     sockets[2], 
+			 //Minimum value for max pending requests (0 for default)
+			 ssize_t                     max_req,
+			 //Remote context has extra error checking and restrictions
+			 bool                        remote);
+
 };
 
 
