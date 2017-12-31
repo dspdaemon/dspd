@@ -42,6 +42,7 @@ struct dspd_aio_ctx {
   int32_t                error;
   void                  *ops_arg;
   const struct dspd_aio_ops *ops;
+  int32_t                iofd;
 
   struct iovec           iov_out[2];
   size_t                 cnt_out;
@@ -93,7 +94,7 @@ void dspd_aio_delete(struct dspd_aio_ctx *ctx);
 
 
 struct dspd_aio_fifo_ops;
-int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops);
+int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops, void *arg);
 void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx, 
 			   void (*async_event)(struct dspd_aio_ctx    *context,
 					       void                   *arg,
@@ -137,6 +138,7 @@ struct dspd_aio_fifo_ctx {
   struct dspd_aio_fifo_ctx       *peer;
   volatile dspd_ts_t              lock;
   volatile AO_t                   poll_events;
+
 };
 
 struct dspd_aio_fifo_oob_msg {
@@ -154,7 +156,7 @@ struct dspd_aio_fifo_master {
   volatile struct dspd_aio_fifo_ctx *client, *server;
   struct dspd_aio_fifo_ctx           ctx[2];
   int32_t                            slot;
-
+  bool                               remote;
 };
 
 int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2], 

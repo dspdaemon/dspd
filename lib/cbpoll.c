@@ -215,6 +215,7 @@ static void *cbpoll_thread(void *p)
       ctx->dispatch_count = ret;
       for ( i = 0; i < ctx->dispatch_count; i++ )
 	{
+	  
 	  ev = &ctx->events[i];
 	  fd = ev->data.u64 & 0xFFFFFFFF;
 	  idx = ev->data.u64 >> 32;
@@ -460,7 +461,10 @@ int32_t cbpoll_add_fd(struct cbpoll_ctx *ctx,
 			      &evt);
 	    } else
 	    {
-	      ret = 0;
+	      if ( ops->set_events )
+		ret = ops->set_events(arg, ctx, i, fd, events);
+	      else
+		ret = 0;
 	    }
 	  if ( ret == 0 )
 	    {

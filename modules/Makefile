@@ -37,7 +37,8 @@ osscuse:
 udev:
 	$(CC) $(CFLAGS) $(MLIBS) -lasound -ludev -shared -o mod_udev.so mod_udev.c
 
-
+aiotest:
+	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_aiotest.so mod_aiotest.c
 
 
 install:

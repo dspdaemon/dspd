@@ -137,9 +137,11 @@ struct dspd_daemon_ctx {
   char *user;
   mode_t ipc_mode;
 
+  void *aio_handler_ctx;
   int32_t (*new_aio_ctx)(struct dspd_aio_ctx       **aio,  //Pointer to NULL (make new context) or existing context
 			 //Ops for the new context if *aio!=NULL
 			 const struct dspd_aio_fifo_ops  *ops,
+			 void                       *arg,
 			 //Optional sockets: {client,server}, {-1,server}
 			 int32_t                     sockets[2], 
 			 //Minimum value for max pending requests (0 for default)

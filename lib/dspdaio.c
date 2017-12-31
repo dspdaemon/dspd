@@ -588,6 +588,7 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   ctx->current_op = -1;
   ctx->pending_ops = calloc(max_req, sizeof(*ctx->pending_ops));
   ctx->max_ops = max_req;
+  ctx->iofd = -1;
   ctx->magic = DSPD_OBJ_TYPE_AIO;
   if ( ! ctx->pending_ops )
     ret = -ENOMEM;
@@ -659,7 +660,7 @@ int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req)
   return ret;
 }
 
-int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops)
+int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops, void *arg)
 {
   intptr_t sock[2] = { -1, -1 };
   int32_t ret;
@@ -677,6 +678,7 @@ int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *conte
 	    {
 	      ctx->ops_arg = (void*)sock[0];
 	      ctx->ops = &dspd_aio_sock_ops;
+	      ctx->iofd = sock[0];
 	    } else
 	    {
 	      close(sock[0]);
@@ -694,7 +696,7 @@ int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *conte
 	  if ( dctx->new_aio_ctx )
 	    {
 	      //Send this connection to the socket server
-	      ret = dctx->new_aio_ctx(&ctx, ops, NULL, ctx->max_ops, false);
+	      ret = dctx->new_aio_ctx(&ctx, ops, arg, NULL, ctx->max_ops, false);
 	    } else
 	    {
 	      ret = -ENOSYS;
@@ -819,8 +821,11 @@ int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2],
 		      master->server->master = master;
 		      master->client->master = master;
 
-		      master->client->peer = master->server->peer;
-		      master->server->peer = master->client->peer;
+		      master->client->peer = (struct dspd_aio_fifo_ctx*)master->server;
+		      master->server->peer = (struct dspd_aio_fifo_ctx*)master->client;
+		      
+		      master->client->nonblocking = true;
+		      master->server->nonblocking = true;
 
 		      ctx[0] = (struct dspd_aio_fifo_ctx*)master->client;
 		      ctx[1] = (struct dspd_aio_fifo_ctx*)master->server;
@@ -1191,12 +1196,19 @@ int32_t dspd_aio_fifo_poll(void *arg, int32_t events, int32_t *revents, int32_t 
   *revents = dspd_aio_fifo_wait(arg, events, timeout);
   return !!*revents;
 }
+int32_t dspd_aio_fifo_set_nonblocking(void *arg, bool nonblocking)
+{
+  struct dspd_aio_fifo_ctx *ctx = arg;
+  ctx->nonblocking = nonblocking;
+  return 0;
+}
 
 
 static int32_t dspd_aio_fifo_ptevent_wake(struct dspd_aio_fifo_ctx *ctx, void *arg)
 {
   struct dspd_aio_fifo_ptevent *evt = arg;
   (void)ctx;
+
   if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET )
     {
       pthread_mutex_lock(evt->lock);
@@ -1212,6 +1224,7 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
   dspd_time_t t;
   struct timespec ts;
   (void)ctx;
+
   if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
     {
       dspd_ts_clear(&evt->tsval);
@@ -1245,6 +1258,7 @@ static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *a
   uint64_t val = 1;
   int ret = 0;
   (void)ctx;
+
   if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET )
     {
       while ( write(evt->fd, &val, sizeof(val)) < 0 )
@@ -1253,6 +1267,7 @@ static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *a
 	  if ( ret != -EINTR && ret != -EWOULDBLOCK && ret != -EAGAIN )
 	    break;
 	}
+
     }
   return ret;
 }
@@ -1266,8 +1281,8 @@ static int32_t dspd_aio_fifo_eventfd_wait(struct dspd_aio_fifo_ctx *ctx, void *a
   (void)ctx;
   if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
     {
-      read(evt->fd, &val, sizeof(val));
-      dspd_ts_clear(&evt->tsval);
+      if ( read(evt->fd, &val, sizeof(val)) == sizeof(val) )
+	dspd_ts_clear(&evt->tsval);
     } else if ( timeout != 0 )
     {
       pfd.fd = evt->fd;
@@ -1288,6 +1303,8 @@ static int32_t dspd_aio_fifo_eventfd_wait(struct dspd_aio_fifo_ctx *ctx, void *a
     }
   return ret;
 }
+
+
 
 struct dspd_aio_fifo_ops dspd_aio_fifo_ptevent_ops = {
   .wake = dspd_aio_fifo_ptevent_wake,
@@ -1556,6 +1573,15 @@ ssize_t dspd_aio_sock_write(void *arg, const void *buf, size_t len)
   return write((intptr_t)arg, buf, len);
 }
 
+int32_t dspd_aio_sock_set_nonblocking(void *arg, bool nonblocking)
+{
+  int fd = (intptr_t)arg;
+  if ( nonblocking )
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+  else
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+  return 0;
+}
 
 struct dspd_aio_ops dspd_aio_sock_ops = {
   .writev = dspd_aio_sock_writev,
@@ -1564,6 +1590,7 @@ struct dspd_aio_ops dspd_aio_sock_ops = {
   .recvfd = dspd_aio_sock_recvfd,
   .sendfd = dspd_aio_sock_sendfd,
   .poll = dspd_aio_sock_poll,
+  .set_nonblocking = dspd_aio_sock_set_nonblocking,
   .close = dspd_aio_sock_close,
 };
 
@@ -1574,5 +1601,6 @@ struct dspd_aio_ops dspd_aio_fifo_ctx_ops = {
   .recvfd = dspd_aio_fifo_recvfd,
   .sendfd = dspd_aio_fifo_sendfd,
   .poll = dspd_aio_fifo_poll,
+  .set_nonblocking = dspd_aio_fifo_set_nonblocking,
   .close = dspd_aio_fifo_close,
 };
