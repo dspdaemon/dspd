@@ -28,10 +28,10 @@ struct dspd_req {
 };
 
 struct dspd_req_pointers {
-  void   *inbuf;
-  size_t  inbufsize;
-  void   *outbuf;
-  size_t  outbufsize;
+  const void   *inbuf;
+  size_t        inbufsize;
+  void         *outbuf;
+  size_t        outbufsize;
 };
 
 struct dspd_rcb {
@@ -184,6 +184,7 @@ struct dspd_req_ctx {
   struct dspd_req *rxpkt, *txpkt;
   //States of packets.
   struct dspd_pktstat      rxstat, txstat;
+  int32_t fd_out;
 };
 void dspd_req_ctx_delete(struct dspd_req_ctx *ctx);
 struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
@@ -193,7 +194,7 @@ struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
 //Receive the packet
 int32_t dspd_req_recv(struct dspd_req_ctx *ctx);
 //Send the packet
-int32_t dspd_req_send(struct dspd_req_ctx *ctx);
+int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd);
 //Reap the received packet.
 int32_t dspd_req_reap(struct dspd_req_ctx *ctx, void **buf, size_t *len, int32_t *fd);
 //Get write buffer.

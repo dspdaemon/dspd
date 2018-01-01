@@ -289,10 +289,9 @@ int dspd_cmsg_sendfd(int s, int fd, struct iovec *data)
 }
 
 
-static int32_t send_fd(struct dspd_req_ctx *ctx)
+static int32_t send_fd(struct dspd_req_ctx *ctx, int32_t fd)
 {
   ssize_t ret;
-  int32_t fd;
   char *buf;
   struct iovec iov;
   buf = (char*)ctx->txpkt;
@@ -315,8 +314,9 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
    */
   if ( ctx->txstat.offset == sizeof(*ctx->txpkt) )
     {
-      //First 4 bytes of payload is FD
-      memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
+      //First 4 bytes of payload is FD in most cases
+      if ( fd < 0 )
+	memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
       iov.iov_base = &buf[ctx->txstat.offset];
       iov.iov_len = ctx->txstat.len - ctx->txstat.offset; //sizeof(fd);
       ret = ctx->ops->sendfd(ctx->arg, fd, &iov);
@@ -353,7 +353,7 @@ static int32_t send_fd(struct dspd_req_ctx *ctx)
   return ret;
 }
 
-int32_t dspd_req_send(struct dspd_req_ctx *ctx)
+int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
 {
   ssize_t ret;
   char *buf;
@@ -366,11 +366,15 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx)
 	   (ctx->txstat.isfd != 0 && ctx->txstat.len == ctx->hdrlen) ||
 	   ctx->txstat.len < ctx->hdrlen )
 	return -EINVAL;
+      if ( ctx->txstat.isfd )
+	ctx->fd_out = fd;
+      else
+	ctx->fd_out = -1;
       ctx->txstat.started = 1;
     }
   if ( ctx->txstat.isfd )
     {
-      ret = send_fd(ctx);
+      ret = send_fd(ctx, ctx->fd_out);
     } else
     {
       buf = (char*)ctx->txpkt;

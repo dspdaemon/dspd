@@ -82,7 +82,17 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
   return ret;
 }
 
-
+static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_op *op)
+{
+  op->error = EINPROGRESS;
+  op->xfer = 0;
+  op->reserved = 0;
+  ctx->pending_ops[index] = op;
+  ctx->output_pending = true;
+  assert(ctx->pending_ops_count >= 0);
+  ctx->pending_ops_count++;
+  assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
+}
 
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 {
@@ -90,6 +100,7 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
   size_t i;
   size_t p;
   int32_t ret = -EAGAIN;
+  void *ptr;
   if ( ctx->error )
     return ctx->error;
   for ( i = 1; i <= ctx->max_ops; i++ )
@@ -98,16 +109,45 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
       p = n % ctx->max_ops;
       if ( ctx->pending_ops[p] == NULL )
 	{
-	  op->error = EINPROGRESS;
-	  op->xfer = 0;
-	  op->reserved = 0;
-	  ctx->pending_ops[p] = op;
-	  ctx->output_pending = true;
+	  if ( ctx->pending_ops_count == 0 && ctx->max_ops > ctx->user_max_ops )
+	    {
+	      ptr = dspd_reallocz(ctx->pending_ops, 
+				  sizeof(ctx->pending_ops[0]) * ctx->user_max_ops,
+				  sizeof(ctx->pending_ops[0]) * ctx->max_ops,
+				  false);
+	      if ( ptr )
+		{
+		  ctx->max_ops = ctx->user_max_ops;
+		  ctx->pending_ops = ptr;
+		}
+	    }
+	  insert_op(ctx, p, op);
 	  ret = 0;
-	  assert(ctx->pending_ops_count >= 0);
-	  ctx->pending_ops_count++;
-	  assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
 	  break;
+	}
+    }
+  if ( ret == -EAGAIN )
+    {
+      if ( ctx->max_ops < UINT16_MAX )
+	{
+	  //Increase the buffer size.  This only happens if there weren't enough slots available
+	  //and there is not too many already allocated.  I think 65535 should be way more than
+	  //enough.
+	  n = ctx->max_ops * 2;
+	  if ( n > UINT16_MAX )
+	    n = UINT16_MAX;
+	  ptr = dspd_reallocz(ctx->pending_ops,
+			      sizeof(ctx->pending_ops[0]) * n,
+			      sizeof(ctx->pending_ops[0]) * ctx->max_ops,
+			      false);
+	  if ( ptr )
+	    {
+	      p = ctx->max_ops;
+	      ctx->pending_ops = ptr;
+	      ctx->max_ops = n;
+	      insert_op(ctx, p, op);
+	      ret = 0;
+	    }
 	}
     }
   return ret;
@@ -197,11 +237,23 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->len_out = ctx->iov_out[0].iov_len;
 	      if ( op->inbufsize )
 		{
-		  ctx->req_out.len += op->inbufsize;
-		  ctx->iov_out[1].iov_base = (void*)op->inbuf;
-		  ctx->iov_out[1].iov_len = op->inbufsize;
-		  ctx->cnt_out++;
+		  if ( ctx->local )
+		    {
+		      ctx->req_out.flags |= DSPD_REQ_FLAG_POINTER;
+		      ctx->ptrs_out.inbuf = op->inbuf;
+		      ctx->ptrs_out.inbufsize = op->inbufsize;
+		      ctx->ptrs_out.outbuf = op->outbuf;
+		      ctx->ptrs_out.outbufsize = op->outbufsize;
+		      ctx->iov_out[1].iov_base = &ctx->ptrs_out;
+		      ctx->iov_out[1].iov_len = sizeof(ctx->ptrs_out);
+		    } else
+		    {
+		      ctx->iov_out[1].iov_base = (void*)op->inbuf;
+		      ctx->iov_out[1].iov_len = op->inbufsize;
+		    }
+		  ctx->req_out.len += ctx->iov_out[1].iov_len;
 		  ctx->len_out += ctx->iov_out[1].iov_len;
+		  ctx->cnt_out++;
 		}
 	      break;
 	    }
@@ -479,7 +531,10 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 		{
 		  op->error = 0;
 		}
-	      op->xfer = len;
+	      if ( ctx->local == true && len == 0 && ctx->req_in.bytes_returned >= 0 )
+		op->xfer = ctx->req_in.bytes_returned; //Server thread wrote directly to client buffer
+	      else
+		op->xfer = len;
 	      io_complete(ctx, op);
 	    }
 	  ctx->off_in = 0;
@@ -588,6 +643,7 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   ctx->current_op = -1;
   ctx->pending_ops = calloc(max_req, sizeof(*ctx->pending_ops));
   ctx->max_ops = max_req;
+  ctx->user_max_ops = max_req;
   ctx->iofd = -1;
   ctx->magic = DSPD_OBJ_TYPE_AIO;
   if ( ! ctx->pending_ops )

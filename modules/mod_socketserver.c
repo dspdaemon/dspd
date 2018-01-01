@@ -108,7 +108,7 @@ static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
     fprintf(stderr, "SEND ASYNC EVENT\n");
   return dspd_req_send(cli->req_ctx);
   }*/
-#define sendreq(cli) dspd_req_send(cli->req_ctx)
+#define sendreq(cli, fd) dspd_req_send(cli->req_ctx, fd)
 
 static inline bool stream_valid(struct ss_cctx *ctx, int32_t stream)
 {
@@ -147,14 +147,14 @@ static int32_t client_reply_buf(struct dspd_rctx *arg,
     } else
     {
       req->len += len;
-      req->bytes_returned = 0;
+      req->bytes_returned = -1;
     } 
 
 
   cli->event_flags = 0;
   req->stream = cli->pkt_stream;
   req->rdata.rlen = 0;
-  ret = sendreq(cli);
+  ret = sendreq(cli, -1);
   if ( ret == req->len )
     ret = 0;
   return ret;
@@ -179,7 +179,7 @@ static int32_t client_reply_fd(struct dspd_rctx *arg,
     } else
     {
       req->len += len;
-      req->bytes_returned = 0;
+      req->bytes_returned = -1;
     } 
   
   
@@ -195,7 +195,7 @@ static int32_t client_reply_fd(struct dspd_rctx *arg,
   req->stream = cli->pkt_stream;
   req->rdata.rlen = 0;
 
-  ret = sendreq(cli);
+  ret = sendreq(cli, fd);
   if ( ret == req->len )
     {
       ret = 0;
@@ -227,9 +227,9 @@ static int32_t client_reply_err(struct dspd_rctx *arg,
   req->flags |= cli->event_flags;
   req->cmd = cli->pkt_cmd & 0xFFFF;
   req->tag = cli->pkt_tag;
-  req->bytes_returned = 0;
+  req->bytes_returned = -1;
   cli->event_flags = 0;
-  ret = sendreq(cli);
+  ret = sendreq(cli, -1);
   if ( ret == req->len )
     ret = 0;
   return ret;
@@ -2165,7 +2165,7 @@ static int prepare_event_pkt(struct cbpoll_ctx *context, int index, struct ss_cc
   req->stream = -1;
   req->rdata.rlen = 0;
   req->bytes_returned = 0;
-  ret = sendreq(cli);
+  ret = sendreq(cli, -1);
   if ( ret == req->len )
     {
       if ( pollin )
@@ -2222,7 +2222,7 @@ static int client_fd_event(void *data,
 	}
     } else if ( revents & POLLOUT )
     {
-      ret = sendreq(cli);
+      ret = sendreq(cli, -1);
       if ( ret == -EINPROGRESS )
 	{
 	  return 0;
@@ -2672,7 +2672,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 {
   int32_t ret = -EINVAL;
   struct cbpoll_pipe_event evt;
-  struct dspd_aio_ctx *naio;
+  struct dspd_aio_ctx *naio = NULL;
   intptr_t s[2] = { -1, -1 };
   struct dspd_aio_fifo_ctx *fifos[2];
   struct ss_sctx *server_context = dspd_dctx.aio_handler_ctx;
@@ -2700,6 +2700,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	{
 	  naio->ops = &dspd_aio_sock_ops;
 	  naio->ops_arg = (void*)s[0];
+	  naio->iofd = s[0];
 	  ret = 0;
 	} else if ( s[1] >= 0 )
 	{
@@ -2773,6 +2774,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
     } else if ( aio && naio )
     {
       naio->iofd = s[0];
+      naio->local = !remote;
       *aio = naio;
     }
   return ret;

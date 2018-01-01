@@ -35,6 +35,7 @@ struct dspd_aio_ctx {
   uint32_t               magic;
   struct dspd_async_op **pending_ops;
   size_t                 max_ops;
+  size_t                 user_max_ops;
   ssize_t                pending_ops_count;
   size_t                 position;
   ssize_t                current_op;
@@ -43,21 +44,23 @@ struct dspd_aio_ctx {
   void                  *ops_arg;
   const struct dspd_aio_ops *ops;
   int32_t                iofd;
+  bool                   local;
 
-  struct iovec           iov_out[2];
-  size_t                 cnt_out;
-  size_t                 len_out;
-  size_t                 off_out;
-  struct dspd_req        req_out;
-  uint16_t               seq_out;
-  bool                   output_pending;
+  struct iovec              iov_out[2];
+  size_t                    cnt_out;
+  size_t                    len_out;
+  size_t                    off_out;
+  struct dspd_req           req_out;
+  uint16_t                  seq_out;
+  bool                      output_pending;
+  struct dspd_req_pointers  ptrs_out;
 
   int32_t                last_fd;
   struct dspd_req        req_in;
   size_t                 off_in;
   char                   buf_in[SS_MAX_PAYLOAD];
   ssize_t                op_in;
-
+ 
   
   void  *async_event_arg;
   void (*async_event)(struct dspd_aio_ctx    *context,
