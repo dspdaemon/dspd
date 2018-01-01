@@ -145,6 +145,7 @@ int reset_caps(void)
 int main(int argc, char **argv)
 {
   int32_t ipc_fd, uid, gid;
+  bool safe_mode = false;
   struct stat fi;
   if ( argc < 4 )
     return 1;
@@ -152,24 +153,29 @@ int main(int argc, char **argv)
        dspd_strtoi32(argv[2], &uid, 10) < 0 ||
        dspd_strtoi32(argv[3], &gid, 10) < 0 )
     return 1;
+  if ( argc > 4 )
+    {
+      if ( strcmp(argv[4], "-s") == 0 )
+	safe_mode = true;
+    }
   if ( stat("/dev/cuse", &fi) == 0 )
     {
       if ( ((fi.st_gid == gid) && (fi.st_mode & S_IRGRP) && (fi.st_mode & S_IWGRP)) ||
 	   ((fi.st_uid == uid) && (fi.st_mode & S_IRUSR) && (fi.st_mode & S_IWUSR)))
 	{
-	  setgid(gid);
-	  setuid(uid);
+	  if ( (setgid(gid) < 0 || setuid(uid) < 0) && safe_mode == true )
+	    return 1;
 	} else if ( (fi.st_mode & S_IRGRP) && (fi.st_mode & S_IWGRP) )
 	{
-	  setgid(fi.st_gid);
-	  setuid(uid);
+	  if ( (setgid(fi.st_gid)< 0 || setuid(uid) < 0) && safe_mode == true )
+	    return 1;
 	} else
 	{
 #ifdef HAVE_LIBCAP
 	  if ( set_caps() )
 	    {
-	      setgid(gid);
-	      setuid(uid);
+	      if ( (setgid(gid) < 0 || setuid(uid) < 0 ) && safe_mode == true )
+		return 1;
 	      reset_caps();
 	    }
 #endif	  

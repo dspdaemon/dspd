@@ -100,13 +100,17 @@ int main(int argc, char *argv[])
 	      return 1;
 	    }
 	  if ( ! parse_dspd_args(tmp, &params) )
-	    return print_usage(argv[0]);
+	    {
+	      free(tmp);
+	      return print_usage(argv[0]);
+	    }
 	  free(tmp);
 	  break;
 	case 'd': //Debug
 	  debug = true;
 	  break;
 	case '?':
+	  free((void*)params.net_addrs);
 	  return print_usage(argv[0]);
 	  break;
 	}

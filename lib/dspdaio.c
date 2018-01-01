@@ -973,10 +973,10 @@ int32_t dspd_aio_fifo_sendfd(void *arg, int32_t fd, struct iovec *data)
 
 ssize_t dspd_aio_fifo_readv(void *arg, struct iovec *iov, size_t iovcnt)
 {
-  size_t i;
+  size_t i = 0;
   size_t bytes = 0;
   int32_t ret = 0;
-  struct iovec *v;
+  struct iovec *v = iov;
   bool wake = false;
   struct dspd_aio_fifo_ctx *ctx = arg;
   for ( i = 0; i < iovcnt; i++ )
@@ -1048,10 +1048,10 @@ ssize_t dspd_aio_fifo_readv(void *arg, struct iovec *iov, size_t iovcnt)
 //same arguments until the io is complete.
 ssize_t dspd_aio_fifo_writev(void *arg, struct iovec *iov, size_t iovcnt)
 {
-  size_t i;
+  size_t i = 0;
   size_t bytes = 0;
   int32_t ret = 0;
-  struct iovec *v;
+  struct iovec *v = iov;
   struct dspd_aio_fifo_ctx *ctx = arg;
   for ( i = 0; i < iovcnt; i++ )
     {
@@ -1504,8 +1504,8 @@ int32_t dspd_aio_sock_recvfd(void *arg, struct iovec *iov)
 ssize_t dspd_aio_sock_writev(void *arg, struct iovec *iov, size_t iovcnt)
 {
   ssize_t ret;
-  size_t i, n;
-  struct iovec *v;
+  size_t i = 0, n;
+  struct iovec *v = iov;
   for ( i = 0; i < iovcnt; i++ )
     {
       v = &iov[i];

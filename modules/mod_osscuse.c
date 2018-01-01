@@ -2531,7 +2531,7 @@ static void osscuse_start_helper(void)
   sprintf(uid, "%d", dspd_dctx.uid);
   sprintf(gid, "%d", dspd_dctx.gid);
   sprintf(fd, "%d", sockets[1]);
-  ret = vfork();
+  ret = fork();
   if ( ret > 0 )
     {
       server_context.cuse_helper_fd = sockets[0];

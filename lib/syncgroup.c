@@ -128,7 +128,7 @@ static void dspd_sg_delete(struct dspd_syncgroup *sg)
 static int32_t sg_new(struct dspd_syncgroup **sg)
 {
   struct dspd_syncgroup *sgp;
-  int32_t ret = ENOMEM;
+  int32_t ret = -ENOMEM;
   sgp = calloc(1, sizeof(*sgp));
   if ( sgp )
     {
@@ -155,7 +155,7 @@ int32_t dspd_sg_new(struct dspd_sglist *sgl, struct dspd_syncgroup **sg, uint32_
     {
       ret = sg_new(&sgp);
       if ( ret )
-	return -ret;
+	return ret;
     }
 
   dspd_rwlock_wrlock(&sgl->lock);
@@ -194,6 +194,9 @@ int32_t dspd_sg_new(struct dspd_sglist *sgl, struct dspd_syncgroup **sg, uint32_
 	  *sg = sgp;
 	  ret = 0;
 	}
+    } else
+    {
+      ret = -EMFILE;
     }
   dspd_rwlock_unlock(&sgl->lock);
   if ( ret && sgp )

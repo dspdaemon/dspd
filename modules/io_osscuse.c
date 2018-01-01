@@ -517,7 +517,7 @@ static void dsp_release(struct oss_cdev_client *cli)
 			     0,
 			     NULL);
       if ( err == 0 )
-	err = dspd_rclient_drain(cli->dsp.rclient);
+	dspd_rclient_drain(cli->dsp.rclient);
     }
   oss_reply_error(cli, 0);
 }

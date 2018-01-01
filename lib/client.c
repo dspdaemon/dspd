@@ -969,7 +969,6 @@ static void playback_xfer(void                            *dev,
       if ( cli->playback_src.rate != cli->playback.params.rate )
 	{
 	  count = frames - offset;
-	  c = count;
 	  ret = playback_src_read(cli,
 				  &ptr,
 				  &count,
@@ -2236,54 +2235,61 @@ static int32_t client_reserve(struct dspd_rctx *context,
       server = *(uint32_t*)inbuf;
       if ( server == cli->index )
 	{
-	  ret = -EINVAL;
+	  ret = -EINVAL; //Can't reserve self
 	} else if ( cli->device >= 0 )
 	{
-	  ret = EALREADY;
-	  goto out;
+	  ret = EALREADY; //Already connected
+	} else
+	{
+	  ret = 0; //Not reserved (this context is available for a reservation)
 	}
     } else
     {
       if ( cli->device < 0 )
 	{
 	  ret = EINVAL;
-	  goto out;
-	}
-
-      cli->device_reserved = 1;
-      /*if ( cli->playback.enabled )
-	playback_drop(cli);
-      if ( cli->capture.enabled )
-      capture_drop(cli);*/
-      ret = 0;
-      goto out;
-    }
-    
-  
-
-  ret = dspd_daemon_ref(server, DSPD_DCTL_ENUM_TYPE_SERVER);
-  if ( ret == 0 )
-    {
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    server,
-			    DSPD_SCTL_SERVER_RESERVE,
-			    &cli->index,
-			    sizeof(cli->index),
-			    NULL,
-			    0,
-			    &br);
-      if ( ret == 0 )
-	{
-	  cli->device = server;
-	  cli->device_reserved = 1;
-	  dspd_slist_ref(cli->list, cli->index);
 	} else
 	{
-	  dspd_daemon_unref(server);
+	  //This context is already connected or reserved.  Put it into the reserved state.
+	  cli->device_reserved = 1;
+	  ret = dspd_stream_ctl(&dspd_dctx,
+				cli->device,
+				DSPD_SCTL_SERVER_RESERVE,
+				&cli->index,
+				sizeof(cli->index),
+				NULL,
+				0,
+				&br);
+	  return dspd_req_reply_err(context, 0, ret);
+	}
+    }
+  
+  
+  if ( ret == 0 )
+    {
+      ret = dspd_daemon_ref(server, DSPD_DCTL_ENUM_TYPE_SERVER);
+      if ( ret == 0 )
+	{
+	  ret = dspd_stream_ctl(&dspd_dctx,
+				server,
+				DSPD_SCTL_SERVER_RESERVE,
+				&cli->index,
+				sizeof(cli->index),
+				NULL,
+				0,
+				&br);
+	  if ( ret == 0 )
+	    {
+	      cli->device = server;
+	      cli->device_reserved = 1;
+	      dspd_slist_ref(cli->list, cli->index);
+	    } else
+	    {
+	      dspd_daemon_unref(server);
+	    }
 	}
     }
 
- out:
   dspd_slist_entry_srvunlock(cli->list, cli->index);
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_err(context, 0, ret);
@@ -2707,7 +2713,7 @@ static int32_t client_swparams(struct dspd_rctx *context,
     {
       if ( inbufsize > sizeof(swparams) )
 	inbufsize = sizeof(swparams);
-      memcpy(&swparams, inbuf, sizeof(swparams));
+      memcpy(&swparams, inbuf, inbufsize);
       dspd_store_uint32(&cli->avail_min, swparams.avail_min);
     }
   if ( outbuf && outbufsize )

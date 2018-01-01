@@ -1653,13 +1653,16 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
     {
       sctx->server_addr = strdup(params->server_addr);
       if ( ! sctx->server_addr )
-	goto error;
+	{
+	  ret = -ENOMEM;
+	  goto out;
+	}
     }
   sctx->ctx = params->context;
     
   ret = dspd_timer_init(&sctx->tmr.timer);
   if ( ret < 0 )
-    goto error;
+    goto out;
 
   if ( params->net_addrs )
     {
@@ -1668,11 +1671,11 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
     }
   ret = cbpoll_init(&sctx->cbctx, 0, MAX_CLIENTS+2+fd_count);
   if ( ret < 0 )
-    goto error;
+    goto out;
 
   ret = cbpoll_add_fd(&sctx->cbctx, sctx->tmr.timer.fd, EPOLLIN, &sndio_timer_ops, sctx);
   if ( ret < 0 )
-    goto error;
+    goto out;
 
   cbpoll_set_callbacks(&sctx->cbctx, sctx, loop_sleep, NULL);
   if ( ! params->disable_unix_socket )
@@ -1692,7 +1695,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	  if ( errno != EEXIST )
 	    {
 	      ret = -errno;
-	      goto error;
+	      goto out;
 	    }
 	}
      
@@ -1700,12 +1703,12 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       if ( stat(sockpath, &fi) < 0 )
 	{
 	  ret = -errno;
-	  goto error;
+	  goto out;
 	}
       if ( fi.st_uid != uid || (fi.st_mode & mask) != 0 )
 	{
 	  ret = -EPERM;
-	  goto error;
+	  goto out;
 	}
       len = strlen(sockpath);
       sprintf(&sockpath[len], "/aucat%d", params->unit_number);
@@ -1717,7 +1720,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       if ( sctx->fd < 0 )
 	{
 	  ret = -errno;
-	  goto error;
+	  goto out;
 	}
       if ( params->context )
 	{
@@ -1736,7 +1739,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       if ( sctx->cbidx < 0 )
 	{
 	  ret = -errno;
-	  goto error;
+	  goto out;
 	}
     }
   
@@ -1746,7 +1749,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       if ( ! tmp )
 	{
 	  ret = -ENOMEM;
-	  goto error;
+	  goto out;
 	}
       if ( fd_count > 0 )
 	{
@@ -1758,7 +1761,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	      if ( strlen(tok) >= (sizeof(sockpath)-6) )
 		{
 		  ret = -EINVAL;
-		  goto error;
+		  goto out;
 		}
 	      if ( strstr(tok, "]:") == NULL || (strstr(tok, "]") == NULL && strstr(tok, ":") == NULL) )
 		sprintf(sockpath, "%s:%d", tok, port);
@@ -1771,7 +1774,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 		{
 		  ret = cbpoll_add_fd(&sctx->cbctx, fd, EPOLLIN, &sndio_listen_ops, sctx);
 		  if ( ret < 0 )
-		    goto error;
+		    goto out;
 		  sctx->tcp_fds[sctx->tcp_nfds] = fd;
 		  sctx->tcp_nfds++;
 		}
@@ -1781,7 +1784,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   ret = 0;
   *ctx = sctx;
   
- error:
+ out:
   free(tmp);
   if ( ret < 0 )
     dspd_sndio_delete(sctx);

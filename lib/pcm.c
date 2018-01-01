@@ -2466,12 +2466,15 @@ int32_t dspd_pcm_format_from_name(const char *name)
     {
       p = name;
     }
-  for ( i = 0; i < ARRAY_SIZE(fmt_desc); i++ )
+  if ( p )
     {
-      if ( strcasecmp(fmt_desc[i], p) == 0 )
+      for ( i = 0; i < ARRAY_SIZE(fmt_desc); i++ )
 	{
-	  ret = i;
-	  break;
+	  if ( strcasecmp(fmt_desc[i], p) == 0 )
+	    {
+	      ret = i;
+	      break;
+	    }
 	}
     }
   return ret;

@@ -559,12 +559,28 @@ int32_t dspd_conn_recv_fd(struct dspd_conn *conn)
   return ret;
 }
 
+void dspd_conn_delete(struct dspd_conn *conn)
+{
+  uint32_t t = *(int32_t*)conn;
+  if ( t == DSPD_OBJ_TYPE_IPC )
+    {
+      if ( conn->fd_in >= 0 )
+	close(conn->fd_in);
+      dspd_mutex_destroy(&conn->lock);
+      if ( conn->sock_fd >= 0 )
+	close(conn->sock_fd);
+      free(conn);
+    }
+}
+
+
 int dspd_conn_new(const char *addr, struct dspd_conn **ptr)
 {
   struct dspd_conn *conn = calloc(1, sizeof(struct dspd_conn));
   int ret;
   if ( ! conn )
     return -ENOMEM;
+  conn->magic = DSPD_OBJ_TYPE_IPC;
   if ( addr == NULL )
     addr = "/var/run/dspd/dspd.sock";
   conn->fd_in = -1;
@@ -581,26 +597,14 @@ int dspd_conn_new(const char *addr, struct dspd_conn **ptr)
       dspd_conn_delete(conn);
       return ret;
     }
-  conn->magic = DSPD_OBJ_TYPE_IPC;
+  
   conn->pfd.fd = conn->sock_fd;
   conn->timeout = -1;
   *ptr = conn;
   return 0;
 }
 
-void dspd_conn_delete(struct dspd_conn *conn)
-{
-  uint32_t t = *(int32_t*)conn;
-  if ( t == DSPD_OBJ_TYPE_IPC )
-    {
-      if ( conn->fd_in >= 0 )
-	close(conn->fd_in);
-      dspd_mutex_destroy(&conn->lock);
-      if ( conn->sock_fd >= 0 )
-	close(conn->sock_fd);
-      free(conn);
-    }
-}
+
 
 
 uint32_t dspd_conn_revents(struct dspd_conn *conn)
@@ -677,9 +681,9 @@ int32_t dspd_select_device(struct dspd_conn *ssc,
 	    }
 	} else
 	{
-	  if ( s & DSPD_PCM_SBIT_PLAYBACK )
+	  if ( streams & DSPD_PCM_SBIT_PLAYBACK )
 	    pdef = def;
-	  if ( s & DSPD_PCM_SBIT_CAPTURE )
+	  if ( streams & DSPD_PCM_SBIT_CAPTURE )
 	    cdef = def;
 	}
       if ( err == 0 && pdef >= 0 )

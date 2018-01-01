@@ -792,6 +792,7 @@ int dspd_daemon_init(int argc, char **argv)
 
   if ( dspd_dict_test_value(dspd_dctx.args_list, "-h", NULL) )
     {
+      free(tmp);
       print_usage();
       return -1;
     }

@@ -297,17 +297,16 @@ void dspd_rclient_destroy(struct dspd_rclient *client)
       uint32_t t = *(int32_t*)client->bparams.conn;
       if ( t == DSPD_OBJ_TYPE_DAEMON_CTX )
 	{
-	  int ret;
-	  ret = dspd_stream_ctl(client->bparams.conn,
-			  -1,
-			  DSPD_SOCKSRV_REQ_UNREFSRV,
-			  &client->bparams.device,
-			  sizeof(client->bparams.device),
-			  NULL,
-			  0,
-			  &br);
-	
-	  ret = dspd_stream_ctl(client->bparams.conn,
+	  (void)dspd_stream_ctl(client->bparams.conn,
+				-1,
+				DSPD_SOCKSRV_REQ_UNREFSRV,
+				&client->bparams.device,
+				sizeof(client->bparams.device),
+				NULL,
+				0,
+				&br);
+	  
+	  (void)dspd_stream_ctl(client->bparams.conn,
 				-1,
 				DSPD_SOCKSRV_REQ_DELCLI,
 				&client->bparams.client,
@@ -350,7 +349,7 @@ int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli,
   if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
     dspd_rclient_detach(cli, DSPD_PCM_SBIT_CAPTURE);
   
-  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+  if ( s & DSPD_PCM_SBIT_PLAYBACK )
     {
       p = *hwp->playback_params;
       p.stream = DSPD_PCM_SBIT_PLAYBACK;
@@ -363,7 +362,7 @@ int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli,
 				 hwp->stream,
 				 hwp->device);
     }
-  if ( err == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
+  if ( err == 0 && (s & DSPD_PCM_SBIT_CAPTURE) )
     {
       p = *hwp->capture_params;
       p.stream = DSPD_PCM_SBIT_CAPTURE;
@@ -1460,7 +1459,7 @@ int32_t dspd_rclient_get_next_wakeup_avail(struct dspd_rclient *client,
 	      hw += p;
 	      diff = hw - client->capture.status.hw_ptr;
 
-	      n = client->capture.params.bufsize / client->capture.params.fragsize;
+	      
 	      a = diff;
 	      a *= client->capture.sample_time;
 	      

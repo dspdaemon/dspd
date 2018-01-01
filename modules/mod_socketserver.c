@@ -752,6 +752,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	ret = dspd_req_reply_err(rctx, 0, EINVAL);
       else
 	ret = dspd_req_reply_buf(rctx, 0, inbuf, inbufsize);
+      break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);
       break;
@@ -1535,7 +1536,7 @@ static int32_t client_settrigger(struct dspd_rctx *context,
   int32_t ret = EINVAL;
   size_t br = 0;
   int32_t streams, s;
-  dspd_time_t result[2], pts = 0, cts = 0;
+  dspd_time_t result[2] = { 0, 0 }, pts = 0, cts = 0;
   streams = *(int32_t*)inbuf;
   if ( streams == DSPD_PCM_SBIT_FULLDUPLEX )
     return client_start(context, req, inbuf, inbufsize, outbuf, outbufsize);
@@ -1968,7 +1969,8 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   struct dspd_req *req = cli->pkt_in;
   int ret = 0;
   size_t len;
-  void *iptr, *optr;
+  const void *iptr;
+  void *optr;
   struct dspd_req_pointers *ptrs;
   cli->rctx.user_data = NULL;
   cli->rctx.bytes_returned = 0;
@@ -2734,7 +2736,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 		}
 	    }
 	}
-    } else if ( ops != NULL )
+    } else if ( ops != NULL && naio != NULL )
     {
       ret = dspd_aio_fifo_new(fifos, max_req, ops, arg, &dspd_aio_fifo_eventfd_ops, &server_context->eventfd);
       if ( ret == 0 )
@@ -2768,7 +2770,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	    }
 	}
     }
-  if ( ret < 0 && *aio != naio && naio != NULL )
+  if ( ret < 0 && aio != NULL && *aio != naio && naio != NULL )
     {
       dspd_aio_delete(naio);
     } else if ( aio && naio )
