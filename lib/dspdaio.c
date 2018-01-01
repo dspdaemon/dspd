@@ -729,7 +729,7 @@ int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *conte
       sock[0] = dspd_unix_sock_connect(addr, SOCK_CLOEXEC | SOCK_NONBLOCK);
       if ( sock[0] >= 0 )
 	{
-	  ret = dspd_aio_sock_new(sock, ctx->max_ops, 0);
+	  ret = dspd_aio_sock_new(sock, ctx->max_ops, 0, false);
 	  if ( ret >= 0 )
 	    {
 	      ctx->ops_arg = (void*)sock[0];
@@ -811,6 +811,7 @@ static bool dspd_aio_fifo_full(struct dspd_aio_fifo_ctx *ctx, size_t len)
 
 int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2], 
 			  ssize_t max_req,
+			  bool    local,
 			  const struct dspd_aio_fifo_ops *client_ops, 
 			  void *client_arg,
 			  const struct dspd_aio_fifo_ops *server_ops,
@@ -840,8 +841,11 @@ int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2],
       n = len / pagesize;
       if ( len % pagesize )
 	n++;
-      n++;
+      if ( ! local )
+	n++;
       len = n * pagesize;
+      if ( len > 65536 )
+	len = 65536;
       ret = dspd_fifo_new(&master->rx, len, 1, NULL);
       if ( ret == 0 )
 	{
@@ -1372,7 +1376,7 @@ struct dspd_aio_fifo_ops dspd_aio_fifo_eventfd_ops = {
 };
 
 
-int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags)
+int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local)
 {
   int s[2];
   int32_t ret;
@@ -1395,7 +1399,8 @@ int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags)
   n = len / pagesize;
   if ( len % pagesize )
     n++;
-  n++;
+  if ( ! local )
+    n++;
   len = n * pagesize;
   (void)setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char *)&len, sizeof(len));
   (void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&len, sizeof(len));

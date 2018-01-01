@@ -73,7 +73,7 @@ struct dspd_aio_ctx {
 
 };
 
-int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags);
+int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);
 extern struct dspd_aio_ops dspd_aio_sock_ops;
 
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
@@ -164,6 +164,7 @@ struct dspd_aio_fifo_master {
 
 int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2], 
 			  ssize_t max_req,
+			  bool    local,
 			  const struct dspd_aio_fifo_ops *client_ops, 
 			  void *client_arg,
 			  const struct dspd_aio_fifo_ops *server_ops,

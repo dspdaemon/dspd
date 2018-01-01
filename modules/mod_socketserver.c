@@ -2696,7 +2696,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
       s[1] = sockets[1];
       //This is a file descriptor (usually unix domain sockets) based connection.
       if ( s[1] == -1 && naio != NULL )
-	ret = dspd_aio_sock_new(s, max_req, SOCK_CLOEXEC|SOCK_NONBLOCK);
+	ret = dspd_aio_sock_new(s, max_req, SOCK_CLOEXEC|SOCK_NONBLOCK, !remote);
 	 
       if ( s[0] >= 0 && s[1] >= 0 && naio != NULL )
 	{
@@ -2738,7 +2738,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	}
     } else if ( ops != NULL && naio != NULL )
     {
-      ret = dspd_aio_fifo_new(fifos, max_req, ops, arg, &dspd_aio_fifo_eventfd_ops, &server_context->eventfd);
+      ret = dspd_aio_fifo_new(fifos, max_req, !remote, ops, arg, &dspd_aio_fifo_eventfd_ops, &server_context->eventfd);
       if ( ret == 0 )
 	{
 	  assert(fifos[0]->ops != NULL);
