@@ -70,8 +70,8 @@ int main(int argc, char *argv[])
   struct dspd_sndio_params params;
   bool debug = false;
   int32_t val;
-  char *tmp;
-  int32_t ret;
+  char *tmp = NULL;
+  int32_t ret = 0;
   struct sndio_ctx *server;
   memset(&params, 0, sizeof(params));
   
@@ -84,40 +84,49 @@ int main(int argc, char *argv[])
 	  if ( dspd_strtoi32(optarg, &val, 0) < 0 )
 	    {
 	      fprintf(stderr, "Option 'U' requires an integer argument\n");
-	      return print_usage(argv[0]);
+	      ret = 1;
+	      goto out;
 	    }
 	  params.unit_number = val;
 	  break;
 	case 'L': //Net addrs
+	  if ( params.net_addrs )
+	    {
+	      fprintf(stderr, "Option 'L' should only be used once\n");
+	      ret = 1;
+	      goto out;
+	    }
 	  params.net_addrs = strdup(optarg);
 	  break;
 	case 'D': //DSPD opts (server addr, disable unix, sys_server)
 	  
+	  free(tmp);
 	  tmp = strdup(optarg);
 	  if ( ! tmp )
 	    {
 	      fprintf(stderr, "Could not allocate memory.\n");
-	      return 1;
+	      ret = 1;
+	      goto out;
 	    }
 	  if ( ! parse_dspd_args(tmp, &params) )
 	    {
-	      free(tmp);
-	      return print_usage(argv[0]);
+	      ret = print_usage(argv[0]);
+	      goto out;
 	    }
-	  free(tmp);
 	  break;
 	case 'd': //Debug
 	  debug = true;
 	  break;
 	case '?':
-	  free((void*)params.net_addrs);
-	  return print_usage(argv[0]);
+	  ret = print_usage(argv[0]);
+	  goto out;
 	  break;
 	}
     }
   
 
   ret = dspd_sndio_new(&server, &params);
+  
   if ( ret == 0 )
     {
       if ( ! debug )
@@ -126,15 +135,16 @@ int main(int argc, char *argv[])
 	  if ( ret < 0 )
 	    {
 	      perror("daemon");
-	      return 1;
+	      goto out;
 	    }
 	}
       ret = dspd_sndio_run(server);
     }
   if ( ret != 0 )
-    {
-      fprintf(stderr, "Could not start server: error %d\n", ret);
-      return 1;
-    }
-  return 0;
+    fprintf(stderr, "Could not start server: error %d\n", ret);
+ out:
+  free((void*)params.net_addrs);
+  free((void*)params.server_addr);
+  free(tmp);
+  return !!ret;
 }

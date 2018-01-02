@@ -1666,7 +1666,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 
   if ( params->net_addrs )
     {
-      for ( tok = strtok_r(tmp, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr) )
+      for ( tok = strchr(params->net_addrs, ','); tok; tok = strchr(&tok[1], ',') )
 	fd_count++;
     }
   ret = cbpoll_init(&sctx->cbctx, 0, MAX_CLIENTS+2+fd_count);
@@ -1753,7 +1753,6 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	}
       if ( fd_count > 0 )
 	{
-	  strcpy(tmp, params->net_addrs);
 	  sctx->tcp_fds = calloc(fd_count, sizeof(*sctx->tcp_fds));
 	  port = AUCAT_PORT + params->unit_number;
 	  for ( tok = strtok_r(tmp, ",", &saveptr); tok; tok = strtok_r(NULL, ",", &saveptr) )
