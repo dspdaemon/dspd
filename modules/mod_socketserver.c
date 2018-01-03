@@ -84,8 +84,9 @@ struct ss_sctx {
   int                             index;
   struct ss_cctx                 *accepted_context;
   struct cbpoll_ctx               cbctx;
-  struct ss_cctx                 *virtual_fds[DSPD_MAX_OBJECTS];
+  struct ss_cctx                 *virtual_fds[DSPD_MAX_OBJECTS*2];
   size_t                          max_virtual_fds;
+  size_t                          vfd_index;
   struct dspd_aio_fifo_eventfd    eventfd;
   int32_t                         eventfd_index;
   bool                            wake_self;
@@ -2557,6 +2558,7 @@ static int eventfd_event(void *data,
   int32_t *count;
   struct epoll_event *events;
   int32_t ret;
+  ssize_t vfd_index = -1;
   cbpoll_get_dispatch_list(context, &count, &events);
   if ( revents & POLLIN )
     {
@@ -2564,7 +2566,7 @@ static int eventfd_event(void *data,
       server->vfd_ops->wait(NULL, &server->eventfd, 0);
     }    
   
-  for ( i = 0; i < server->max_virtual_fds; i++ )
+  for ( i = 0; i < server->vfd_index; i++ )
     {
       client = server->virtual_fds[i];
       if ( client != NULL && client != (struct ss_cctx*)UINTPTR_MAX )
@@ -2572,8 +2574,10 @@ static int eventfd_event(void *data,
 	  ret = dspd_aio_fifo_test_events(client->fifo, client->cbpfd->events);
 	  if ( ret )
 	    add_event(client, count, events, ret);
+	  vfd_index = i;
 	}
     }
+  server->vfd_index = vfd_index + 1;
   return 0;
 }
 
@@ -2630,6 +2634,8 @@ static int listen_pipe_event(void *data,
 		  //Slot must be reserved.
 		  assert(cli->server->virtual_fds[cli->fifo->master->slot] == (struct ss_cctx*)UINTPTR_MAX);
 		  cli->server->virtual_fds[cli->fifo->master->slot] = cli;
+		  if ( (size_t)cli->fifo->master->slot >= server->vfd_index )
+		    server->vfd_index = cli->fifo->master->slot + 1;
 		}
 	    }
 	}
@@ -2725,6 +2731,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	    {
 	      sockets[0] = s[0];
 	      sockets[1] = s[1];
+	      naio->io_type = DSPD_AIO_TYPE_SOCKET;
 	    } else
 	    {
 	      if ( s[0] == -1 && s[1] == -1 )
@@ -2767,6 +2774,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	    {
 	      naio->ops = &dspd_aio_fifo_ctx_ops;
 	      naio->ops_arg = fifos[0];
+	      naio->io_type = DSPD_AIO_TYPE_FIFO;
 	    }
 	}
     }

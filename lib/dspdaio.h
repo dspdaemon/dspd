@@ -33,6 +33,9 @@ struct dspd_aio_ops {
 
 struct dspd_aio_ctx {
   uint32_t               magic;
+#define DSPD_AIO_TYPE_SOCKET 1
+#define DSPD_AIO_TYPE_FIFO   2
+  int32_t                io_type;
   struct dspd_async_op **pending_ops;
   size_t                 max_ops;
   size_t                 user_max_ops;
@@ -45,7 +48,14 @@ struct dspd_aio_ctx {
   const struct dspd_aio_ops *ops;
   int32_t                iofd;
   bool                   local;
+  int32_t                slot;
+  void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg);
+  void  *io_ready_arg;
 
+
+  void (*io_dead)(struct dspd_aio_ctx *ctx, void *arg, bool closing);
+  void  *io_dead_arg;
+  
   struct iovec              iov_out[2];
   size_t                    cnt_out;
   size_t                    len_out;
@@ -76,6 +86,12 @@ struct dspd_aio_ctx {
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);
 extern struct dspd_aio_ops dspd_aio_sock_ops;
 
+void dspd_aio_set_dead_cb(struct dspd_aio_ctx *ctx, 
+			  void (*io_dead)(struct dspd_aio_ctx *ctx, void *arg, bool closing),
+			  void  *arg);
+void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx, 
+			   void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg),
+			   void  *arg);
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
 int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
 int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t timeout);
@@ -94,7 +110,7 @@ int32_t dspd_aio_reap_fd(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req);
 void dspd_aio_destroy(struct dspd_aio_ctx *ctx);
 void dspd_aio_delete(struct dspd_aio_ctx *ctx);
-
+int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio);
 
 struct dspd_aio_fifo_ops;
 int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops, void *arg);

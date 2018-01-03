@@ -24,12 +24,29 @@
 #include <string.h>
 #include <fcntl.h>
 #include <sys/prctl.h>
+#include <sys/eventfd.h>
 #include "sslib.h"
 #include "cbpoll.h"
 
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index);
-
-
+static int eventfd_event(void *data, 
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd,
+			 int revents);
+static int timer_fd_event(void *data, 
+			  struct cbpoll_ctx *context,
+			  int index,
+			  int fd,
+			  int revents);
+bool timer_fd_destructor(void *data,
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd);
+static bool eventfd_destructor(void *data,
+			       struct cbpoll_ctx *context,
+			       int index,
+			       int fd);
 static int32_t find_fdata(struct cbpoll_ctx *ctx, int fd)
 {
   size_t i;
@@ -132,6 +149,9 @@ void cbpoll_unref(struct cbpoll_ctx *ctx, int index)
       fd->fd = -1;
       fd->events = 0;
       fd->ops = NULL;
+      if ( ctx->pending_timers != NULL )
+	cbpoll_cancel_timer(ctx, index);
+	
     }
 }
 void cbpoll_ref(struct cbpoll_ctx *ctx, int index)
@@ -199,6 +219,13 @@ static void *cbpoll_thread(void *p)
       ctx->dispatch_count = -1;
       if ( ctx->sleep )
 	ctx->sleep(ctx->arg, ctx);
+
+      if ( ctx->timeout_changed == true )
+	{
+	  dspd_timer_set(&ctx->timer, ctx->next_timeout, 0);
+	  ctx->timeout_changed = false;
+	}
+
       ret = epoll_wait(ctx->epfd, ctx->events, ctx->max_fd, -1);
       if ( ret < 0 )
 	{
@@ -520,18 +547,34 @@ void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
   cbpoll_send_event(ctx, &evt);
 }
 
+static const struct cbpoll_fd_ops timerfd_ops = {
+  .fd_event = timer_fd_event,
+  .destructor = timer_fd_destructor
+};
 
+static const struct cbpoll_fd_ops eventfd_ops = {
+  .fd_event = eventfd_event,
+  .destructor = eventfd_destructor,
+};
 
 int32_t cbpoll_init(struct cbpoll_ctx *ctx, 
 		    int32_t  flags,
 		    uint32_t max_fds)
 {
   int32_t ret;
+  struct pollfd pfd;
   memset(ctx, 0, sizeof(*ctx));
   ctx->epfd = -1;
   ctx->event_pipe[0] = -1;
   ctx->event_pipe[1] = -1;
+  ctx->timer.fd = -1;
+  ctx->eventfd.fd = -1;
   max_fds++; //add 1 for pipe
+  if ( flags & CBPOLL_FLAG_TIMER )
+    max_fds++;
+  if ( flags & CBPOLL_FLAG_AIO_FIFO )
+    max_fds++;
+
   ctx->epfd = epoll_create1(EPOLL_CLOEXEC);
   if ( ctx->epfd < 0 )
     {
@@ -576,7 +619,33 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
   if ( ret < 0 )
     goto out;
   
-  
+  if ( flags & CBPOLL_FLAG_TIMER )
+    {
+      ret = dspd_timer_init(&ctx->timer);
+      if ( ret < 0 )
+	goto out;
+      ret = dspd_timer_getpollfd(&ctx->timer, &pfd);
+      if ( ret < 0 )
+	goto out;
+      ret = cbpoll_add_fd(ctx, pfd.fd, pfd.events, &timerfd_ops, NULL);
+      if ( ret < 0 )
+	goto out;
+
+      ctx->pending_timers = calloc(ctx->max_fd, sizeof(*ctx->pending_timers));
+      if ( ! ctx->pending_timers )
+	goto out;
+
+    }
+  if ( flags & CBPOLL_FLAG_AIO_FIFO )
+    {
+      ctx->eventfd.fd = eventfd(0, EFD_NONBLOCK|EFD_CLOEXEC);
+      if ( ctx->eventfd.fd < 0 )
+	goto out;
+      dspd_ts_clear(&ctx->eventfd.tsval);
+      ctx->aio_list = calloc(ctx->max_fd, sizeof(*ctx->aio_list));
+      if ( ! ctx->aio_list )
+	goto out;
+    }
 
   return 0;
 
@@ -590,6 +659,11 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
     dspd_fifo_delete(ctx->wq.fifo);
   free(ctx->fdata);
   free(ctx->events);
+  if ( ctx->timer.fd >= 0 )
+    dspd_timer_destroy(&ctx->timer);
+  free(ctx->pending_timers);
+  close(ctx->eventfd.fd);
+  free(ctx->aio_list);
   
   return ret;
 }
@@ -684,4 +758,226 @@ struct cbpoll_fd *cbpoll_get_fdata(struct cbpoll_ctx *ctx, int32_t index)
   if ( index >= 0 && index < ctx->max_fd )
     ret = &ctx->fdata[index];
   return ret;
+}
+
+void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout)
+{
+  assert(index < ctx->max_fd && ctx->pending_timers != NULL);
+  assert(ctx->fdata[index].ops->timer_event);
+  if ( ctx->pending_timers[index] != timeout )
+    {
+      if ( ctx->next_timeout > timeout || ctx->next_timeout == 0 )
+	{
+	  ctx->next_timeout = timeout;
+	  ctx->timeout_changed = true;
+	}
+      if ( ctx->timer_idx <= index )
+	ctx->timer_idx = index + 1;
+      ctx->pending_timers[index] = timeout;
+    }
+}
+
+void cbpoll_cancel_timer(struct cbpoll_ctx *ctx, size_t index)
+{
+  assert(index < ctx->max_fd && ctx->pending_timers != NULL);
+  //The timer may still fire one time.  After that it will be canceled for real.
+  ctx->pending_timers[index] = 0;
+}
+
+bool timer_fd_destructor(void *data,
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd)
+{
+  free(context->pending_timers);
+  context->pending_timers = NULL;
+  return true;
+}
+
+static int timer_fd_event(void *data, 
+			  struct cbpoll_ctx *context,
+			  int index,
+			  int fd,
+			  int revents)
+{
+  size_t i;
+  struct cbpoll_fd *f;
+  dspd_time_t t, next, newtimeout = UINT64_MAX;
+  ssize_t timer_index;
+  if ( revents & POLLIN )
+    {
+      timer_index = -1;
+      next = context->next_timeout;
+      for ( i = 0; i < context->timer_idx; i++ )
+	{
+	  t = context->pending_timers[i];
+	  if ( t )
+	    {
+	      if ( t <= next )
+		{
+		  //This timer expired.
+		  f = &context->fdata[i];
+		  //All timers are oneshot
+		  context->pending_timers[i] = 0;
+		  f->ops->timer_event(f->data,
+				      context,
+				      i,
+				      f->fd,
+				      t);
+		}
+	      t = context->pending_timers[i];
+	      if ( t >= 0 )	      
+		{
+		  //This timer is set.
+		  timer_index = i;
+		  if ( t < newtimeout )
+		    newtimeout = t;
+		}
+	    }	    
+	}
+      if ( newtimeout != context->next_timeout )
+	{
+	  //Timeout changed
+	  context->timer_idx = timer_index + 1;
+	  if ( timer_index < 0 )
+	    context->next_timeout = 0; //No more timeouts
+	  else
+	    context->next_timeout = newtimeout; //New timeout value
+	  //Timeout needs changed later.  Not now because the value could change
+	  //between now and the next epoll_wait().
+	  context->timeout_changed = true;
+	}
+    }
+  return 0;
+}
+
+
+
+
+
+static int aiofd_event(void *data, 
+		       struct cbpoll_ctx *context,
+		       int index,
+		       int fd,
+		       int revents)
+{
+  int32_t ret;
+  struct dspd_aio_ctx *aio = data;
+  ret = dspd_aio_process(aio, revents, 0);
+  if ( ret == 0 || ret == -EINPROGRESS )
+    ret = cbpoll_set_events(context, index, dspd_aio_block_directions(aio));
+  return ret;
+}
+static const struct cbpoll_fd_ops aiofd_ops = {
+  .fd_event = aiofd_event,
+};
+
+static void aio_fd_ready(struct dspd_aio_ctx *ctx, void *arg)
+{
+  cbpoll_set_events(arg, ctx->slot, dspd_aio_block_directions(ctx));
+}
+
+static void aio_fifo_ready(struct dspd_aio_ctx *ctx, void *arg)
+{
+  struct cbpoll_ctx *cbpoll = arg;
+  uint64_t val = 1;
+  ssize_t err;
+  if ( cbpoll->wake_self == false )
+    {
+      if ( dspd_aio_fifo_test_events(ctx->ops_arg, dspd_aio_block_directions(ctx)) )
+	{
+	  if ( dspd_test_and_set(&cbpoll->eventfd.tsval) != DSPD_TS_SET )
+	    {
+	      while ( write(cbpoll->eventfd.fd, &val, sizeof(val)) < 0 )
+		{
+		  err = errno;
+		  if ( err != EINTR && err != EWOULDBLOCK && err != EAGAIN )
+		    break;
+		}
+	    }
+	  cbpoll->wake_self = true;
+	}
+    }
+}
+
+int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
+{
+  int32_t fd, ret = -EINVAL;
+  size_t i;
+  fd = dspd_aio_get_iofd(aio);
+  if ( fd >= 0 )
+    {
+      ret = cbpoll_add_fd(context, fd, dspd_aio_block_directions(aio), &aiofd_ops, aio); 
+      if ( ret == 0 )
+	{
+	  dspd_aio_set_ready_cb(aio, aio_fd_ready, context);
+	  aio->slot = ret;
+	}
+    } else
+    {
+      if ( context->aio_list )
+	{
+	  for ( i = 0; i < context->max_fd; i++ )
+	    {
+	      if ( context->aio_list[i] == NULL )
+		{
+		  context->aio_list[i] = aio;
+		  if ( context->aio_idx <= i )
+		    context->aio_idx = i + 1;
+		  aio->slot = i;
+		  dspd_aio_set_ready_cb(aio, aio_fifo_ready, context);
+		  ret = i;
+		}
+	    }
+	}
+    }
+  return ret;
+}
+
+void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
+{
+  context->aio_list[aio->slot] = NULL;
+}
+
+static bool eventfd_destructor(void *data,
+			       struct cbpoll_ctx *context,
+			       int index,
+			       int fd)
+{
+  free(context->aio_list);
+  context->aio_list = NULL;
+  return true;
+}
+
+static int eventfd_event(void *data, 
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd,
+			 int revents)
+{
+  uint64_t val;
+  size_t i;
+  ssize_t aio_idx = -1;
+  struct dspd_aio_ctx *aio;
+  int32_t ret;
+  if ( revents & POLLIN )
+    {
+      context->wake_self = false;
+      if ( read(fd, &val, sizeof(val)) == sizeof(val) )
+	dspd_ts_clear(&context->eventfd.tsval);
+    }
+  for ( i = 0; i < context->aio_idx; i++ )
+    {
+      aio = context->aio_list[i];
+      if ( aio )
+	{
+	  ret = dspd_aio_process(aio, 0, 0);
+	  if ( ret < 0 )
+	    context->aio_list[i] = NULL;
+	  if ( context->aio_list[i] )
+	    aio_idx = i;
+	}
+    }
+  context->aio_idx = aio_idx + 1;
+  return 0;
 }

@@ -150,6 +150,8 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 	    }
 	}
     }
+  if ( ret == 0 )
+    ctx->io_ready(ctx, ctx->io_ready_arg);
   return ret;
 }
 
@@ -176,6 +178,8 @@ int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 	  break;
 	}
     }
+  if ( ret == 0 )
+    ctx->io_ready(ctx, ctx->io_ready_arg);
   return ret;
 }
 
@@ -603,7 +607,31 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
     ret = dspd_aio_send(ctx);
   if ( ret == -EAGAIN )
     ret = -EINPROGRESS;
+  if ( ret == 0 )
+    {
+      ctx->io_ready(ctx, ctx->io_ready_arg);
+    } else if ( ret != -EINPROGRESS && ctx->io_dead )
+    {
+      ctx->io_dead(ctx, ctx->io_dead_arg, false);
+      ctx->io_dead = NULL;
+    }
   return ret;
+}
+
+void dspd_aio_set_dead_cb(struct dspd_aio_ctx *ctx, 
+			  void (*io_dead)(struct dspd_aio_ctx *ctx, void *arg, bool closing),
+			  void  *arg)
+{
+  ctx->io_dead = io_dead;
+  ctx->io_dead_arg = arg;
+}
+
+void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx, 
+			   void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg),
+			   void  *arg)
+{
+  ctx->io_ready = io_ready;
+  ctx->io_ready_arg = arg;
 }
 
 int32_t dspd_aio_reap_fd(struct dspd_aio_ctx *ctx)
@@ -640,6 +668,7 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   memset(ctx, 0, sizeof(*ctx));
   ctx->last_fd = -1;
   ctx->op_in = -1;
+  ctx->slot = -1;
   ctx->current_op = -1;
   ctx->pending_ops = calloc(max_req, sizeof(*ctx->pending_ops));
   ctx->max_ops = max_req;
@@ -690,6 +719,8 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 	}
       if ( ctx->ops->close )
 	ctx->ops->close(ctx->ops_arg);
+      if ( ctx->io_dead )
+	ctx->io_dead(ctx, ctx->io_dead_arg, true);
     }
   free(ctx->pending_ops);
   memset(ctx, 0, sizeof(*ctx));
@@ -735,6 +766,7 @@ int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *conte
 	      ctx->ops_arg = (void*)sock[0];
 	      ctx->ops = &dspd_aio_sock_ops;
 	      ctx->iofd = sock[0];
+	      ctx->io_type = DSPD_AIO_TYPE_SOCKET;
 	    } else
 	    {
 	      close(sock[0]);
@@ -1644,6 +1676,11 @@ int32_t dspd_aio_sock_set_nonblocking(void *arg, bool nonblocking)
   return 0;
 }
 
+int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio)
+{
+  return aio->iofd;
+}
+
 struct dspd_aio_ops dspd_aio_sock_ops = {
   .writev = dspd_aio_sock_writev,
   .write = dspd_aio_sock_write,
@@ -1665,3 +1702,4 @@ struct dspd_aio_ops dspd_aio_fifo_ctx_ops = {
   .set_nonblocking = dspd_aio_fifo_set_nonblocking,
   .close = dspd_aio_fifo_close,
 };
+
