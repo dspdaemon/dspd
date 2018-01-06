@@ -275,8 +275,36 @@ struct dspd_sync_cmd {
   uint64_t tstamp;
 };
 
+
+
 size_t dspd_mixf_getname(size_t index, char *name, size_t len);
 
 void dspd_mixf_dump(uint64_t mask);
+
+
+
+/*
+  These events are sent asynchronously when the client is subscribed.
+  They mean that something most likely changed.  It is possible that
+  something changed and changed back by the time the client polled the
+  object and it is possible that race conditions (the type that resolve
+  after a short time) cause spurious events to be sent.  The server
+  should never send so many events that it causes a performance problem.
+*/
+#define DSPD_EVENT_HOTPLUG   1
+#define DSPD_EVENT_CONTROL   2
+#define DSPD_EVENT_RESETFLAGS 3
+#define DSPD_EVENT_SETFLAGS 4
+
+#define DSPD_EVENT_FLAG_HOTPLUG 1
+#define DSPD_EVENT_FLAG_CONTROL 2
+
+struct dspd_async_event {
+  uint32_t event;
+  uint32_t flags;
+  uint32_t arg1;
+  uint32_t arg2;
+};
+
 
 #endif

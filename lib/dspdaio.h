@@ -73,13 +73,14 @@ struct dspd_aio_ctx {
  
   
   void  *async_event_arg;
-  void (*async_event)(struct dspd_aio_ctx    *context,
-		      void                   *arg,
-		      uint32_t                req,
-		      int32_t                 stream,
-		      int32_t                 flags,
-		      const void             *buf,
-		      size_t                  len);
+  void (*async_event)(struct dspd_aio_ctx     *context,
+		      void                    *arg,
+		      uint32_t                 req,
+		      int32_t                  stream,
+		      int32_t                  flags,
+		      const struct dspd_async_event *evt,
+		      const void              *buf,
+		      size_t                   len);
 
 };
 
@@ -120,6 +121,7 @@ void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx,
 					       uint32_t                req,
 					       int32_t                 stream,
 					       int32_t                 flags,
+					       const struct dspd_async_event *evt,
 					       const void             *buf,
 					       size_t                  len),
 			   void  *async_event_arg);

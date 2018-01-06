@@ -10,6 +10,11 @@
 //Device is dead
 #define DSPD_REQ_FLAG_POLLHUP 16
 #define DSPD_REQ_FLAG_EVENT   32
+//Event queue overflowed.  The client should
+//poll all elements and devices for changes since
+//some events were dropped.
+#define DSPD_REQ_FLAG_OVERFLOW 64
+
 
 
 struct dspd_req {

@@ -23,7 +23,8 @@ alsacfgfile:
 	$(CC) $(CFLAGS) $(MLIBS) -lasound -shared -o mod_alsacfgfile.so mod_alsacfgfile.c
 
 socketserver:
-	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_socketserver.so mod_socketserver.c
+	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_socketserver.so mod_socketserver.c ss_eventq.c
+
 
 speex:
 	$(CC) $(CFLAGS) $(MLIBS) -lspeexdsp -shared -o mod_speexsrc.so mod_speexsrc.c

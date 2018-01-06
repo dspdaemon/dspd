@@ -32,12 +32,14 @@
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../lib/cbpoll.h"
+#include "ss_eventq.h"
 
 #define MSG_EVENT_FLAGS (CBPOLL_PIPE_MSG_USER+1)
 #define SOCKSRV_INSERT_FD (CBPOLL_PIPE_MSG_USER+2)
 #define SOCKSRV_INSERT_FIFO (CBPOLL_PIPE_MSG_USER+3)
 #define SOCKSRV_ADD_CLIENT (CBPOLL_PIPE_MSG_USER+4)
 #define SOCKSRV_FREE_SLOT  (CBPOLL_PIPE_MSG_USER+5)
+#define SOCKSRV_EQ_MAX_EVENTS 65536
 struct ss_sctx;
 struct ss_cctx {
   struct dspd_req_ctx *req_ctx;
@@ -77,6 +79,10 @@ struct ss_cctx {
   struct dspd_aio_fifo_ctx *fifo;
   struct cbpoll_fd         *cbpfd;
   struct ss_sctx           *server;
+
+  uint32_t                  eventq_flags;
+  struct socksrv_ctl_eq     eventq;
+
 };
 
 struct ss_sctx {
@@ -91,9 +97,12 @@ struct ss_sctx {
   int32_t                         eventfd_index;
   bool                            wake_self;
   const struct dspd_aio_fifo_ops *vfd_ops;
-  
-};
 
+  volatile uint8_t                ctl_mask[DSPD_MASK_SIZE];
+  int32_t                         ctl_fd;
+  uint8_t                         listening_clients[DSPD_MASK_SIZE*3];
+  size_t                          listening_clients_index;
+};
 
 
 static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
@@ -103,12 +112,6 @@ static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
 				      void         *outbuf,
 				      size_t        outbufsize);
 
-/*int32_t sendreq(struct ss_cctx *cli)
-{
-  if ( cli->pkt_out->cmd == DSPD_DCTL_ASYNC_EVENT )
-    fprintf(stderr, "SEND ASYNC EVENT\n");
-  return dspd_req_send(cli->req_ctx);
-  }*/
 #define sendreq(cli, fd) dspd_req_send(cli->req_ctx, fd)
 
 static inline bool stream_valid(struct ss_cctx *ctx, int32_t stream)
@@ -123,7 +126,53 @@ static inline bool device_valid(struct ss_cctx *ctx, int32_t device)
 	  ctx->playback_device == device ||
 	  ctx->capture_device == device);
 }
+static int prepare_events(struct cbpoll_ctx *context, int index, struct ss_cctx *cli);
 
+static void dispatch_event(struct ss_sctx *ctx, const struct socksrv_ctl_event *evt)
+{
+  size_t i;
+  ssize_t idx = -1;
+  struct cbpoll_fd *fd;
+  int32_t flags;
+  struct ss_cctx *cli;
+  bool listening = false;
+  if ( evt->elem >= 0 )
+    flags = DSPD_EVENT_FLAG_CONTROL;
+  else
+    flags = DSPD_EVENT_FLAG_HOTPLUG;
+  for ( i = 0; i < ctx->listening_clients_index; i++ )
+    {
+      if ( dspd_test_bit(ctx->listening_clients, i) )
+	{
+	  idx = i;
+	  fd = cbpoll_get_fdata(&ctx->cbctx, i);
+	  if ( fd )
+	    {
+	      cli = fd->data;
+	      assert(cli != NULL);
+	      if ( cli->eventq_flags & flags )
+		{
+		  listening = true;
+		  if ( ! socksrv_eq_push(&cli->eventq, evt) )
+		    {
+		      //This probably won't happen.
+		      cli->event_flags |= DSPD_REQ_FLAG_OVERFLOW;
+		      socksrv_eq_reset(&cli->eventq);
+		    }
+		  prepare_events(&ctx->cbctx, i, cli);
+		}
+	    }
+	}
+    }
+  //If the index gets lowered then it happens here after one extra round of checking.
+  //If the index increased then that happens when a client registers for events.
+  ctx->listening_clients_index = idx + 1;
+  
+  //If nobody was listening then disable events.  Events are first enabled when a client
+  //starts listening.
+  if ( listening == false && (flags & DSPD_EVENT_FLAG_CONTROL) )
+    dspd_clr_bit((uint8_t*)ctx->ctl_mask, evt->card);
+}
 
 
 static int32_t client_reply_buf(struct dspd_rctx *arg, 
@@ -350,6 +399,100 @@ static int32_t open_device(struct ss_cctx *cli, int32_t sbits, int32_t dev, stru
   return ret;
 }
 
+static int32_t socksrv_req_event(struct dspd_rctx *context,
+				 uint32_t      req,
+				 const void   *inbuf,
+				 size_t        inbufsize,
+				 void         *outbuf,
+				 size_t        outbufsize)
+{
+  const struct dspd_async_event *evt = inbuf;
+  struct ss_cctx *cli = dspd_req_userdata(context);
+  int32_t ret;
+  size_t count;
+  int32_t n, m;
+  int32_t dev;
+  size_t br;
+  switch(evt->event)
+    {
+    case DSPD_EVENT_RESETFLAGS:
+      socksrv_eq_reset(&cli->eventq);
+    case DSPD_EVENT_SETFLAGS:
+      if ( outbufsize < sizeof(n) )
+	{
+	  ret = dspd_req_reply_err(context, 0, EINVAL);
+	  break;
+	}
+      cli->eventq_flags = evt->flags;
+      if ( cli->eventq_flags )
+	{
+	  //Set the listening bit.  It only gets cleared when no listeners are found
+	  //while dispatching.
+	  dspd_set_bit(cli->server->listening_clients, cli->index);
+	  if ( cli->server->listening_clients_index <= cli->index )
+	    cli->server->listening_clients_index = cli->index + 1;
+	  count = 0;
+	  if ( cli->eventq_flags & DSPD_EVENT_FLAG_HOTPLUG )
+	    count += DSPD_MAX_OBJECTS * 2UL;
+	  if ( cli->eventq_flags & DSPD_EVENT_FLAG_CONTROL )
+	    {
+	      if ( evt->arg1 == 0 )
+		{
+		  if ( cli->playback_device >= 0 )
+		    dev = cli->playback_device;
+		  else if ( cli->capture_device >= 0 )
+		    dev = cli->capture_device;
+		  else if ( cli->device >= 0 )
+		    dev = cli->device;
+		  else
+		    dev = -1;
+		  if ( dev >= 0 )
+		    {
+		      if ( dspd_stream_ctl(&dspd_dctx,
+					   dev,
+					   DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
+					   NULL,
+					   0,
+					   &n,
+					   sizeof(n),
+					   &br) == 0 )
+			{
+			  if ( br != sizeof(n) )
+			    n = 256;
+			  else
+			    dspd_set_bit((uint8_t*)cli->server->ctl_mask, dev);
+			}
+		    } else
+		    {
+		      n = 256;
+		    }
+		  count += n * 2;
+		} else
+		{
+		  count += evt->arg1;
+		}
+	      count += 3;
+	    }
+	  m = MIN(count * 4, SOCKSRV_EQ_MAX_EVENTS);
+	  if ( count > m )
+	    count = m;
+	  n = socksrv_eq_realloc(&cli->eventq, count, m, count);
+	  if ( n < 0 )
+	    ret = dspd_req_reply_err(context, 0, n);
+	  else
+	    ret = dspd_req_reply_buf(context, 0, &n, sizeof(n));
+	} else
+	{
+	  dspd_clr_bit(cli->server->listening_clients, cli->index);
+	  ret = dspd_req_reply_err(context, 0, 0);
+	}
+      break;
+    default:
+      ret = dspd_req_reply_err(context, 0, EINVAL);
+      break;
+    }
+  return ret;
+}
 static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				uint32_t             req,
 				const void          *inbuf,
@@ -358,7 +501,8 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				size_t        outbufsize)
 {
   struct ss_cctx *cli = dspd_req_userdata(rctx);
-  int ret, err;
+  int ret = 0;
+  int err = 0;
   size_t br;
   uint32_t dev;
   uint64_t val;
@@ -753,6 +897,12 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	ret = dspd_req_reply_err(rctx, 0, EINVAL);
       else
 	ret = dspd_req_reply_buf(rctx, 0, inbuf, inbufsize);
+      break;
+    case DSPD_SOCKSRV_REQ_EVENT:
+      if ( inbufsize >= sizeof(struct dspd_async_event) )
+	ret = socksrv_req_event(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
+      else
+	ret = dspd_req_reply_err(rctx, 0, EINVAL);
       break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);
@@ -2160,9 +2310,22 @@ static int prepare_event_pkt(struct cbpoll_ctx *context, int index, struct ss_cc
 {
   struct dspd_req *req = (struct dspd_req*)cli->pkt_out;
   int ret;
+  struct socksrv_ctl_event *ev;
+  struct dspd_async_event *ae;
   req->len = sizeof(*req);
   req->cmd = DSPD_DCTL_ASYNC_EVENT;
   req->flags = cli->event_flags;
+  ev = (struct socksrv_ctl_event*)&req->pdata[sizeof(struct dspd_async_event)];
+  if ( socksrv_eq_pop(&cli->eventq, ev) )
+    {
+      ae = (struct dspd_async_event*)req->pdata;
+      req->len += sizeof(struct dspd_async_event) + sizeof(*ev);
+      if ( ev->elem < 0 )
+	ae->event = DSPD_EVENT_HOTPLUG;
+      else
+	ae->event = DSPD_EVENT_CONTROL;
+      ae->flags = 0;
+    }
   cli->event_flags = 0;
   //cli->event_sent = true;
   req->stream = -1;
@@ -2332,7 +2495,8 @@ static bool client_destructor(void *data,
       cli->server->virtual_fds[cli->fifo->master->slot] = NULL;
       dspd_aio_fifo_close(cli->fifo);
     }
-
+  socksrv_eq_realloc(&cli->eventq, 0, 0, 0);
+  dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
   free(cli);
   return true;
 }
@@ -2731,13 +2895,17 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 	    {
 	      sockets[0] = s[0];
 	      sockets[1] = s[1];
-	      naio->io_type = DSPD_AIO_TYPE_SOCKET;
+	      if ( naio )
+		naio->io_type = DSPD_AIO_TYPE_SOCKET;
 	    } else
 	    {
 	      if ( s[0] == -1 && s[1] == -1 )
 		{
-		  naio->ops = NULL;
-		  naio->ops_arg = NULL;
+		  if ( naio )
+		    {
+		      naio->ops = NULL;
+		      naio->ops_arg = NULL;
+		    }
 		  close(sockets[0]);
 		  close(sockets[1]);
 		}
@@ -2810,6 +2978,128 @@ static const struct cbpoll_fd_ops socksrv_eventfd_ops = {
   .destructor = NULL,
 };
 
+void socksrv_mixer_callback(int32_t card,
+			    int32_t elem,
+			    uint32_t mask,
+			    void *arg)
+{
+  struct ss_sctx *server = arg;
+  struct socksrv_ctl_event evt;
+  struct pollfd pfd;
+  ssize_t ret;
+  if ( server->ctl_fd >= 0 && dspd_test_bit((uint8_t*)server->ctl_mask, card) )
+    {
+      memset(&evt, 0, sizeof(evt));
+      evt.card = card;
+      evt.elem = elem;
+      evt.mask = mask;
+      while ( (ret = write(server->ctl_fd, &evt, sizeof(evt))) < 0 )
+	{
+	  ret = errno;
+	  if ( ret == EINTR )
+	    continue;
+	  if ( ret == EAGAIN || ret == EWOULDBLOCK )
+	    {
+	      pfd.fd = server->ctl_fd;
+	      pfd.events = POLLOUT;
+	      pfd.revents = 0;
+	      ret = poll(&pfd, 1, 1000);
+	      if ( ret < 0 )
+		{
+		  if ( errno == EINTR )
+		    continue;
+		  break;
+		}
+	      if ( ret == 0 || (pfd.revents & POLLOUT) == 0 )
+		break;
+	    }
+	}
+    }
+}
+static int ctlpipe_event(void *data, 
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd,
+			 int revents)
+{
+  struct ss_sctx *server = data;
+  struct socksrv_ctl_event evt;
+  int ret = 0;
+  if ( revents & POLLIN )
+    {
+      ret = read(fd, &evt, sizeof(evt));
+      if ( ret == (int)sizeof(evt) )
+	{
+	  //Don't dispatch if nobody is listening.  This happens due to a race condition
+	  //that works itself out when the pipe has no more pending events for the card.
+	  if ( dspd_test_bit((uint8_t*)server->ctl_mask, evt.card) )
+	    dispatch_event(server, &evt);
+	  ret = 0;
+	} else if ( ret < 0 )
+	{
+	  ret = errno;
+	  if ( ret == EAGAIN || ret == EWOULDBLOCK || ret == EINTR )
+	    ret = 0;
+	  else
+	    ret = -1;
+	} else
+	{
+	  ret = -1; //EOF
+	}
+    } else if ( revents & (POLLHUP|POLLRDHUP|POLLNVAL|POLLERR) )
+    {
+      ret = -1;
+    }
+  return ret;
+}
+
+static const struct cbpoll_fd_ops socksrv_ctlpipe_ops = {
+  .fd_event = ctlpipe_event,
+  .pipe_event = NULL,
+  .destructor = NULL,
+};
+
+
+static void socksrv_init_device(void *arg, const struct dspd_dict *device)
+{
+  const struct dspd_kvpair *slot;
+  int32_t index, ret;
+  size_t br;
+  struct dspd_mixer_cbinfo socksrv_mixer_cb = {
+    .remove = false,
+    .callback = socksrv_mixer_callback,
+    .arg = arg,
+  };
+  struct ss_sctx *server = arg;
+  if ( server->ctl_fd >= 0 )
+    {
+      slot = dspd_dict_find_pair(device, DSPD_HOTPLUG_SLOT);
+      if ( slot != NULL && slot->value != NULL  )
+	{
+	  if ( dspd_strtoi32(slot->value, &index, 0) == 0 )
+	    {
+	      ret = dspd_stream_npctl({.context = &dspd_dctx,
+		    .stream = index,
+		    .request = DSPD_SCTL_SERVER_MIXER_SETCB,
+		    .inbuf = &socksrv_mixer_cb,
+		    .inbufsize = sizeof(socksrv_mixer_cb),
+		    .outbuf = NULL,
+		    .outbufsize = 0,
+		    .bytes_returned = &br});
+	      if ( ret < 0 )
+		dspd_log(0, "Could not install mixer callback for device %d: error %d", index, ret);
+	    }
+	}
+    }    
+}
+
+static struct dspd_hotplug_cb socksrv_hotplug = {
+  .score = NULL,
+  .add = NULL,
+  .remove = NULL,
+  .init_device = socksrv_init_device,
+};
+
 
 static int socksrv_init(void *daemon, void **context)
 {
@@ -2817,11 +3107,13 @@ static int socksrv_init(void *daemon, void **context)
   int ret;
   int fd = -1;
   struct dspd_daemon_ctx *dctx = daemon;
+  int pipes[2] = { -1, -1 };
   sctx = calloc(1, sizeof(*sctx));
   if ( ! sctx )
     return -errno;
   sctx->fd = -1;
   sctx->eventfd.fd = -1;
+  sctx->ctl_fd = -1;
   dspd_ts_clear(&sctx->eventfd.tsval);
   sctx->max_virtual_fds = ARRAY_SIZE(sctx->virtual_fds);
   sctx->vfd_ops = &dspd_aio_fifo_eventfd_ops;
@@ -2870,6 +3162,16 @@ static int socksrv_init(void *daemon, void **context)
     goto out;
   ret = 0;
 
+  if ( pipe2(pipes, O_NONBLOCK|O_CLOEXEC) < 0 )
+    goto out;
+  ret = cbpoll_add_fd(&sctx->cbctx, pipes[0], EPOLLIN, &socksrv_ctlpipe_ops, sctx);
+  if ( ret < 0 )
+    goto out;
+  sctx->ctl_fd = pipes[1];
+  
+  ret = dspd_daemon_hotplug_register(&socksrv_hotplug, sctx);
+  if ( ret < 0 )
+    goto out;
 
   if ( ! dctx->new_aio_ctx )
     {
@@ -2887,6 +3189,8 @@ static int socksrv_init(void *daemon, void **context)
       dspd_log(0, "Failed to initialize socket server");
       cbpoll_destroy(&sctx->cbctx);
       close(fd);
+      close(pipes[0]);
+      close(pipes[1]);
       free(sctx);
     }
   return ret;

@@ -27,7 +27,11 @@ void dspd_fullduplex_parameters(const struct dspd_cli_params *playback,
 #undef MAX
 #endif
 
-/*Nice definitions that don't do unexpected stuff.*/
+/*
+  Nice definitions that don't do unexpected stuff.  It is safe
+  to pass expressions as an argument since the expression is
+  evaluated inside the parenthesis before the comparison happens.
+*/
 #define MIN(_a,_b)  ((_a)<(_b)?(_a):(_b))
 #define MAX(_a,_b)  ((_a)>(_b)?(_a):(_b))
 

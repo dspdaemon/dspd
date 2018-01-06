@@ -1785,7 +1785,8 @@ static int32_t alsa_mixer_set_cb(struct dspd_rctx *rctx,
   struct alsahw_handle *hdl = dspd_req_userdata(rctx);
   const struct dspd_mixer_cbinfo *cb = inbuf;
   int ret;
-  //The mixer point is used as a reference (like intptr_t) so
+  
+  //The mixer pointer is used as a reference (like intptr_t) so
   //this is safe without the mutex.
   if ( cb->remove )
     ret = alsahw_unregister_mixer_callback(global_notifier,

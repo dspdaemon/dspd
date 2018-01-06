@@ -43,7 +43,16 @@ enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_ALLOCZ,
   DSPD_SOCKSRV_REQ_FREE,
   DSPD_SOCKSRV_REQ_ECHO,
+  DSPD_SOCKSRV_REQ_EVENT,
  };
+
+struct socksrv_ctl_event {
+  int32_t  card;
+#define SS_DEV_ADD    -1
+#define SS_DEV_REMOVE -2
+  int32_t  elem;
+  uint32_t mask;
+};
 
 int32_t dspd_conn_recv_fd(struct dspd_conn *conn);
 

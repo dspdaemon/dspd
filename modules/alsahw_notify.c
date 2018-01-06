@@ -123,32 +123,30 @@ int alsahw_register_mixer_callback(struct alsahw_notifier *n,
 {
   int ret = -ENOENT;
   struct alsahw_ctldata *ctl;
-  struct alsahw_cb *curr;
+  struct alsahw_cb *curr, **next;
   dspd_mutex_lock(&n->notify_lock);
   ctl = ctl_for_mixer(n, mixer);
   if ( ctl )
     {
-      
+      next = &ctl->callbacks;
       for ( curr = ctl->callbacks; curr; curr = curr->next )
 	{
 	  if ( curr->callback == cb && curr->arg == arg )
 	    {
 	      ret = -EEXIST;
 	      break;
-	    } else if ( curr->next == NULL )
-	    {
-	      curr->next = new_cb(n);
-	      if ( curr->next )
-		{
-		  curr->next->callback = cb;
-		  curr->next->arg = arg;
-		  ret = 0;
-		} else
-		{
-		  ret = -ENOMEM;
-		}
-	      break;
-	    }
+	    } 
+	  next = &curr->next;
+	}
+      *next = new_cb(n);
+      if ( *next )
+	{
+	  (*next)->callback = cb;
+	  (*next)->arg = arg;
+	  ret = 0;
+	} else
+	{
+	  ret = -ENOMEM;
 	}
     }
   dspd_mutex_unlock(&n->notify_lock);
