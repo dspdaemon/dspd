@@ -82,7 +82,7 @@ struct ss_cctx {
 
   uint32_t                  eventq_flags;
   struct socksrv_ctl_eq     eventq;
-
+  bool                      retry_event;
 };
 
 struct ss_sctx {
@@ -2332,14 +2332,27 @@ static int prepare_event_pkt(struct cbpoll_ctx *context, int index, struct ss_cc
   req->rdata.rlen = 0;
   req->bytes_returned = 0;
   ret = sendreq(cli, -1);
+  cli->retry_event = false;
   if ( ret == req->len )
     {
-      if ( pollin )
-	ret = cbpoll_set_events(context, index, POLLIN);
-      else
-	ret = 0;
+      //Finished sending the event synchronously
+      if ( socksrv_eq_len(&cli->eventq) > 0 )
+	{
+	  //More events are pending.  Try again later so we don't get stuck servicing only
+	  //one client for too long.
+	  cli->retry_event = true;
+	  ret = cbpoll_set_events(context, index, POLLOUT);
+	} else if ( pollin )
+	{
+	  //No more events.  Start listening for client requests again.
+	  ret = cbpoll_set_events(context, index, POLLIN);
+	} else
+	{
+	  ret = 0;
+	}
     } else if ( ret == -EINPROGRESS )
     {
+      //Could not finish sending event.  Try again later.
       ret = cbpoll_set_events(context, index, POLLOUT);
     }
   return ret;
@@ -2388,7 +2401,10 @@ static int client_fd_event(void *data,
 	}
     } else if ( revents & POLLOUT )
     {
-      ret = sendreq(cli, -1);
+      if ( cli->retry_event ) //Send next event.  Must empty the queue as quickly as possible.
+	return prepare_event_pkt(context, index, cli, true);
+      else //Send a request.  May be another async request, but most likely a reply.
+	ret = sendreq(cli, -1);
       if ( ret == -EINPROGRESS )
 	{
 	  return 0;
@@ -2397,12 +2413,14 @@ static int client_fd_event(void *data,
 	  return -1;
 	} else
 	{
+	  //Finished sending packet.
 	  if ( cli->pkt_out->flags & DSPD_REPLY_FLAG_CLOSEFD )
 	    {
 	      close(cli->fd_out);
 	      cli->fd_out = -1;
 	    }
-	  if ( cli->event_flags != 0 )
+	  //Check for pending events and send them if possible.
+	  if ( cli->event_flags != 0 || socksrv_eq_len(&cli->eventq) > 0 )
 	    return prepare_event_pkt(context, index, cli, true);
 	}
       return cbpoll_set_events(context, index, POLLIN);
