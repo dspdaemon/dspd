@@ -498,14 +498,17 @@ static int32_t dspd_daemon_obj_ctl(struct dspd_rctx *rctx,
 				     outbufsize);
     } else
     {
-      ret = dspd_daemon_dispatch_ctl(rctx,
-				     daemon_req_handlers,
-				     sizeof(daemon_req_handlers) / sizeof(daemon_req_handlers[0]),
-				     r,
-				     inbuf,
-				     inbufsize,
-				     outbuf,
-				     outbufsize);
+      if ( req >= DSPD_SCTL_SERVER_MIXER_FIRST && dspd_dctx.vctrl != NULL )
+	ret = dspd_vctrl_stream_ctl(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
+      else
+	ret = dspd_daemon_dispatch_ctl(rctx,
+				       daemon_req_handlers,
+				       sizeof(daemon_req_handlers) / sizeof(daemon_req_handlers[0]),
+				       r,
+				       inbuf,
+				       inbufsize,
+				       outbuf,
+				       outbufsize);
     }
   return ret;
 }
@@ -1143,6 +1146,10 @@ int dspd_daemon_init(int argc, char **argv)
     }
   dspd_log(0, "Modules directory is '%s'", dspd_dctx.modules_dir);
   
+  ret = dspd_vctrl_list_new(&dspd_dctx.vctrl);
+  if ( ret < 0 )
+    goto out;
+
 
   ret = 0;
   

@@ -1,6 +1,7 @@
 #ifndef _DSPD_DAEMON_H_
 #define _DSPD_DAEMON_H_
 #include "wq.h"
+#include "vctrl.h"
 
 //pci,usb,etc.
 #define DSPD_HOTPLUG_BUSNAME "bus"
@@ -101,6 +102,7 @@ enum dspd_obj_type {
 struct dspd_rcb;
 struct dspd_aio_ctx;
 struct dspd_aio_fifo_ops;
+struct dspd_vctrl_list;
 struct dspd_daemon_ctx {
   uint32_t magic;
   struct dspd_module_list *modules;
@@ -148,7 +150,8 @@ struct dspd_daemon_ctx {
 			 ssize_t                     max_req,
 			 //Remote context has extra error checking and restrictions
 			 bool                        remote);
-
+  
+  struct dspd_vctrl_list *vctrl;
 };
 
 

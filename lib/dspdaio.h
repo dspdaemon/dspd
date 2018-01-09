@@ -1,5 +1,6 @@
 #ifndef _DSPDAIO_H_
 #define _DSPDAIO_H_
+struct ucred;
 struct dspd_async_op {
   uint32_t     stream;
   uint32_t     req;
@@ -24,6 +25,8 @@ struct dspd_aio_ops {
   int32_t (*sendfd)(void *arg, int32_t fd, struct iovec *data);
   int32_t (*poll)(void *arg, int32_t events, int32_t *revents, int32_t timeout);
   int32_t (*set_nonblocking)(void *arg, bool nonblocking);
+  ssize_t (*send_cred)(void *arg, const struct ucred *uc, const void *data, size_t length);
+  ssize_t (*recv_cred)(void *arg, struct ucred *uc, void *data, size_t length);
   void    (*close)(void *arg);
 };
 
@@ -93,7 +96,7 @@ void dspd_aio_set_dead_cb(struct dspd_aio_ctx *ctx,
 void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx, 
 			   void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg),
 			   void  *arg);
-int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
+int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint32_t flags);
 int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
 int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t timeout);
 int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,

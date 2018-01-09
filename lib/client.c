@@ -18,7 +18,8 @@
  *
  */
 
-
+#define _DSPD_HAVE_UCRED
+#include "socket.h"
 #include <math.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -70,6 +71,12 @@ struct dspd_client {
   int mq_fd;
   volatile uint32_t avail_min;
   bool alloc;
+
+  char name[32];
+  bool vctrl_registered;
+  int32_t uid;
+  int32_t gid;
+  int32_t pid;
 };
 
 
@@ -189,6 +196,9 @@ static void client_destructor(void *obj)
 {
   struct dspd_client *cli = obj;
 
+  if ( cli->vctrl_registered )
+    dspd_daemon_vctrl_unregister(cli->index, cli->index);
+
   assert(cli->alloc);
   if ( cli->syncgroup )
     {
@@ -254,6 +264,7 @@ int32_t dspd_client_new(struct dspd_slist *list,
     }
   
   cli->index = index;
+  snprintf(cli->name, sizeof(cli->name), "client #%d", cli->index);
   cli->list = list;
   cli->device = -1;
   cli->mq_fd = -1;
@@ -1190,6 +1201,10 @@ static void playback_xfer(void                            *dev,
 static void playback_set_volume(void *handle, double volume)
 {
   struct dspd_client *cli = handle;
+  if ( volume > 1.0 )
+    volume = 1.0;
+  else if ( volume < 0.0 )
+    volume = 0.0;
   dspd_store_float32(&cli->playback.volume, volume);
   return;
 }
@@ -1233,6 +1248,13 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
       if ( ret == 0 && params != NULL )
 	cli->latency = params->latency;
       dspd_slist_entry_srvunlock(cli->list, (uintptr_t)cli->index);
+      if ( ! cli->vctrl_registered )
+	{
+	  dspd_slist_entry_wrlock(cli->list, cli->index);
+	  dspd_daemon_vctrl_register(cli->index, -1, DSPD_VCTRL_CLIENT, playback_get_volume(cli), cli->name);
+	  cli->vctrl_registered = true;
+	  dspd_slist_entry_rw_unlock(cli->list, cli->index);
+	}
     }
   return ret;
 }
@@ -1240,6 +1262,10 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
 static void capture_set_volume(void *handle, double volume)
 {
   struct dspd_client *cli = handle;
+  if ( volume > 1.0 )
+    volume = 1.0;
+  else if ( volume < 0.0 )
+    volume = 0.0;
   dspd_store_float32(&cli->capture.volume, volume);
 }
 
@@ -1761,7 +1787,10 @@ static int32_t client_setvolume(struct dspd_rctx *context,
   const struct dspd_stream_volume *sv = inbuf;
   struct dspd_client *cli = dspd_req_userdata(context);
   if ( sv->stream & DSPD_PCM_SBIT_PLAYBACK )
-    playback_set_volume(cli, sv->volume);
+    {
+      playback_set_volume(cli, sv->volume);
+      dspd_daemon_vctrl_set_value(cli->index, DSPD_PCM_SBIT_PLAYBACK, sv->volume, NULL);
+    }
   if ( sv->stream & DSPD_PCM_SBIT_CAPTURE )
     capture_set_volume(cli, sv->volume);
   return dspd_req_reply_err(context, 0, 0);
@@ -2756,6 +2785,37 @@ static int32_t client_pause(struct dspd_rctx *context,
   return ret;
 }
 
+static int32_t client_setinfo(struct dspd_rctx *context,
+			      uint32_t      req,
+			      const void   *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  int32_t ret = 0;
+  const struct dspd_cli_info *info = inbuf;
+  int32_t flags;
+  dspd_slist_entry_wrlock(cli->list, cli->index);
+  flags = dspd_req_flags(context);
+  if ( (flags & (DSPD_REQ_FLAG_CMSG_CRED|DSPD_REQ_FLAG_REMOTE)) &&
+       memchr(info->name, 0, sizeof(info->name)) != NULL )
+    {
+      if ( info->cred.cred.pid >= 0 )
+	cli->pid = info->cred.cred.pid;
+      if ( info->cred.cred.uid >= 0 )
+	cli->uid = info->cred.cred.uid;
+      if ( info->cred.cred.gid >= 0 )
+	cli->gid = info->cred.cred.gid;
+      if ( cli->name[0] )
+	strlcpy(cli->name, info->name, sizeof(cli->name));
+      if ( cli->vctrl_registered )
+	dspd_daemon_vctrl_set_value(cli->index, DSPD_PCM_SBIT_PLAYBACK, -1, cli->name);
+    }
+  dspd_slist_entry_rw_unlock(cli->list, cli->index);
+  return dspd_req_reply_err(context, 0, ret);
+}
+
 static const struct dspd_req_handler client_req_handlers[] = {
   [CLIDX(DSPD_SCTL_CLIENT_START)] = {
     .handler = client_start,
@@ -2909,6 +2969,13 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .xflags = DSPD_REQ_FLAG_CMSG_FD,
     .rflags = 0,
     .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_SETINFO)] = {
+    .handler = client_setinfo,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(struct dspd_cli_info),
     .outbufsize = 0,
   },
 };

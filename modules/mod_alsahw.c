@@ -1158,7 +1158,19 @@ static int32_t alsa_mixer_elem_count(struct dspd_rctx *rctx,
 {
   struct alsahw_handle *hdl = dspd_req_userdata(rctx);
   uint32_t count = hdl->elements_count;
-  return dspd_req_reply_buf(rctx, 0, &count, sizeof(count));
+  uint64_t c;
+  int32_t ret;
+  if ( outbufsize >= sizeof(c) )
+    {
+      c = count * 2;
+      c <<= 32U;
+      c |= (uint64_t)count;
+      ret = dspd_req_reply_buf(rctx, 0, &c, sizeof(c));
+    } else
+    {
+      ret = dspd_req_reply_buf(rctx, 0, &count, sizeof(count));
+    }
+  return ret;
 }
 static int32_t alsa_mixer_elem_info(struct dspd_rctx *rctx,
 				    uint32_t          req,
@@ -1379,6 +1391,7 @@ static int32_t alsa_mixer_elem_getval(struct dspd_rctx *rctx,
       elem = &hdl->elements[cmd->index];
       if ( (elem->flags & cmd->type) != cmd->type )
 	goto error;
+      memset(val, 0, sizeof(*val));
       e = snd_mixer_find_selem(hdl->mixer, elem->sid);
       if ( ! e )
 	goto error;
@@ -1505,6 +1518,8 @@ static int32_t alsa_mixer_elem_getval(struct dspd_rctx *rctx,
       val->hwinfo = 0;
       val->tstamp = elem->tstamp;
       val->update_count = elem->update_count;
+      val->index = cmd->index;
+      val->type = cmd->type;
     } else
     {
       goto error;
@@ -2644,10 +2659,14 @@ static int init_ctl(struct alsahw_handle *hdl, int streams)
 
   return ret;
 }
+
+
+
+
 static int alsahw_add(void *arg, const struct dspd_dict *device)
 {
   struct dspd_drv_params params;
-  int ret;
+  int ret, err;
   const struct dspd_pcmdrv_ops *ops = NULL, *playback_ops = NULL, *capture_ops = NULL;
   void *handle = NULL;
   char *desc = NULL, *name = NULL, *kdrv = NULL, *stream = NULL;
@@ -2694,6 +2713,12 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
       
       if ( ret < 0 )
 	goto out;
+      if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
+	err = dspd_daemon_vctrl_register(ret, -1, DSPD_VCTRL_DEVICE, 1.0, desc);
+      else
+	err = dspd_daemon_vctrl_register(-1, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
+      if ( err < 0 )
+	dspd_log(0, "Could not register virtual control: error %d", err);
     } else
     {
       params.stream = DSPD_PCM_STREAM_PLAYBACK;
@@ -2720,6 +2745,9 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 				   capture_ops);
       if ( ret < 0 )
 	goto out;
+      err = dspd_daemon_vctrl_register(ret, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
+      if ( err < 0 )
+	dspd_log(0, "Could not register virtual control: error %d", err);
     }
 
 
@@ -2740,8 +2768,20 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 
 static int alsahw_remove(void *arg, const struct dspd_dict *device)
 {
-  //FIXME: It might be better to have the device thread cleanup and
-  //use this to signal the device thread.
+  const char *slot = dspd_dict_value_for_key(device, DSPD_HOTPLUG_SLOT);
+  const char *stream = dspd_dict_value_for_key(device, DSPD_HOTPLUG_STREAM);
+  int32_t idx, sbits, playback = -1, capture = -1;
+  if ( slot && stream)
+    {
+      if ( dspd_strtoi32(slot, &idx, 0) == 0 && dspd_strtoi32(slot, &sbits, 0) == 0 )
+	{
+	  if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
+	    playback = idx;
+	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
+	    capture = idx;
+	  dspd_daemon_vctrl_unregister(playback, capture);
+	}
+    }
   return 0;
 }
 

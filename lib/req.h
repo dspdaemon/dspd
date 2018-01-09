@@ -96,6 +96,7 @@ int32_t dspd_req_index(struct dspd_rctx *rctx);
 #define DSPD_REQ_FLAG_UNIX_IOCTL (1<<28)
 //Input and output are pointers.
 #define DSPD_REQ_FLAG_POINTER (1<<27)
+#define DSPD_REQ_FLAG_CMSG_CRED (1<<26)
 
 
 typedef int32_t (*dspd_req_callback_t)(struct dspd_rctx *context,

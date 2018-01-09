@@ -83,6 +83,7 @@ struct ss_cctx {
   uint32_t                  eventq_flags;
   struct socksrv_ctl_eq     eventq;
   bool                      retry_event;
+  int32_t                   ctl_stream;
 };
 
 struct ss_sctx {
@@ -140,6 +141,8 @@ static void dispatch_event(struct ss_sctx *ctx, const struct socksrv_ctl_event *
     flags = DSPD_EVENT_FLAG_CONTROL;
   else
     flags = DSPD_EVENT_FLAG_HOTPLUG;
+  if ( evt->card == 0 )
+    flags |= DSPD_EVENT_FLAG_VCTRL;
   for ( i = 0; i < ctx->listening_clients_index; i++ )
     {
       if ( dspd_test_bit(ctx->listening_clients, i) )
@@ -150,7 +153,8 @@ static void dispatch_event(struct ss_sctx *ctx, const struct socksrv_ctl_event *
 	    {
 	      cli = fd->data;
 	      assert(cli != NULL);
-	      if ( cli->eventq_flags & flags )
+	      if ( (cli->eventq_flags & flags) && 
+		   ((cli->ctl_stream == evt->card) || flags == DSPD_EVENT_FLAG_HOTPLUG) )
 		{
 		  listening = true;
 		  if ( ! socksrv_eq_push(&cli->eventq, evt) )
@@ -408,17 +412,19 @@ static int32_t socksrv_req_event(struct dspd_rctx *context,
 {
   const struct dspd_async_event *evt = inbuf;
   struct ss_cctx *cli = dspd_req_userdata(context);
-  int32_t ret;
+  int32_t ret = EINTR;
   size_t count;
-  int32_t n, m;
-  int32_t dev;
+  int32_t m;
+  uint64_t n;
+  int32_t qlen;
+  int32_t dev = -1;
   size_t br;
   switch(evt->event)
     {
     case DSPD_EVENT_RESETFLAGS:
       socksrv_eq_reset(&cli->eventq);
     case DSPD_EVENT_SETFLAGS:
-      if ( outbufsize < sizeof(n) )
+      if ( outbufsize < sizeof(qlen) )
 	{
 	  ret = dspd_req_reply_err(context, 0, EINVAL);
 	  break;
@@ -438,14 +444,14 @@ static int32_t socksrv_req_event(struct dspd_rctx *context,
 	    {
 	      if ( evt->arg1 == 0 )
 		{
-		  if ( cli->playback_device >= 0 )
+		  if ( cli->eventq_flags & DSPD_EVENT_FLAG_VCTRL )
+		    dev = 0;
+		  else if ( cli->playback_device >= 0 )
 		    dev = cli->playback_device;
 		  else if ( cli->capture_device >= 0 )
 		    dev = cli->capture_device;
 		  else if ( cli->device >= 0 )
 		    dev = cli->device;
-		  else
-		    dev = -1;
 		  if ( dev >= 0 )
 		    {
 		      if ( dspd_stream_ctl(&dspd_dctx,
@@ -458,15 +464,15 @@ static int32_t socksrv_req_event(struct dspd_rctx *context,
 					   &br) == 0 )
 			{
 			  if ( br != sizeof(n) )
-			    n = 256;
+			    n = (uint64_t)DSPD_MAX_OBJECTS | ((uint64_t)DSPD_MAX_OBJECTS << 32U);
 			  else
 			    dspd_set_bit((uint8_t*)cli->server->ctl_mask, dev);
 			}
 		    } else
 		    {
-		      n = 256;
+		      n = (uint64_t)DSPD_MAX_OBJECTS | ((uint64_t)DSPD_MAX_OBJECTS << 32U);
 		    }
-		  count += n * 2;
+		  count += ((n >> 32U) & 0xFFFFFFFFU) * 2;
 		} else
 		{
 		  count += evt->arg1;
@@ -476,14 +482,16 @@ static int32_t socksrv_req_event(struct dspd_rctx *context,
 	  m = MIN(count * 4, SOCKSRV_EQ_MAX_EVENTS);
 	  if ( count > m )
 	    count = m;
-	  n = socksrv_eq_realloc(&cli->eventq, count, m, count);
-	  if ( n < 0 )
-	    ret = dspd_req_reply_err(context, 0, n);
+	  cli->ctl_stream = dev;
+	  qlen = socksrv_eq_realloc(&cli->eventq, count, m, count);
+	  if ( qlen < 0 )
+	    ret = dspd_req_reply_err(context, 0, qlen);
 	  else
-	    ret = dspd_req_reply_buf(context, 0, &n, sizeof(n));
+	    ret = dspd_req_reply_buf(context, 0, &qlen, sizeof(qlen));
 	} else
 	{
 	  dspd_clr_bit(cli->server->listening_clients, cli->index);
+	  cli->ctl_stream = -1;
 	  ret = dspd_req_reply_err(context, 0, 0);
 	}
       break;
@@ -2562,7 +2570,7 @@ static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx, stru
       free(ctx);
       return NULL;
     }
-
+  ctx->ctl_stream = -1;
   ctx->stream = -1;
   ctx->device = -1;
   ctx->playback_device = -1;
@@ -2996,10 +3004,10 @@ static const struct cbpoll_fd_ops socksrv_eventfd_ops = {
   .destructor = NULL,
 };
 
-void socksrv_mixer_callback(int32_t card,
-			    int32_t elem,
-			    uint32_t mask,
-			    void *arg)
+static void socksrv_mixer_callback(int32_t card,
+				   int32_t elem,
+				   uint32_t mask,
+				   void *arg)
 {
   struct ss_sctx *server = arg;
   struct socksrv_ctl_event evt;
@@ -3106,15 +3114,51 @@ static void socksrv_init_device(void *arg, const struct dspd_dict *device)
 		    .bytes_returned = &br});
 	      if ( ret < 0 )
 		dspd_log(0, "Could not install mixer callback for device %d: error %d", index, ret);
+	      socksrv_mixer_callback(index, SS_DEV_ADD, DSPD_CTL_EVENT_MASK_ADD, server);
 	    }
 	}
     }    
 }
+static int32_t socksrv_remove_device(void *arg, const struct dspd_dict *device)
+{
+  const struct dspd_kvpair *slot;
+  int32_t index, ret;
+  size_t br;
+  struct dspd_mixer_cbinfo socksrv_mixer_cb = {
+    .remove = true,
+    .callback = socksrv_mixer_callback,
+    .arg = arg,
+  };
+  struct ss_sctx *server = arg;
+  if ( server->ctl_fd >= 0 )
+    {
+      slot = dspd_dict_find_pair(device, DSPD_HOTPLUG_SLOT);
+      if ( slot != NULL && slot->value != NULL  )
+	{
+	  if ( dspd_strtoi32(slot->value, &index, 0) == 0 )
+	    {
+	      ret = dspd_stream_npctl({.context = &dspd_dctx,
+		    .stream = index,
+		    .request = DSPD_SCTL_SERVER_MIXER_SETCB,
+		    .inbuf = &socksrv_mixer_cb,
+		    .inbufsize = sizeof(socksrv_mixer_cb),
+		    .outbuf = NULL,
+		    .outbufsize = 0,
+		    .bytes_returned = &br});
+	      if ( ret < 0 )
+		dspd_log(0, "Could not remove mixer callback for device %d: error %d", index, ret);
+	      socksrv_mixer_callback(index, SS_DEV_REMOVE, DSPD_CTL_EVENT_MASK_REMOVE, server);
+	    }
+	}
+    }    
+  return -ENODEV; //Not my device (somebody else needs to remove it).
+}
+
 
 static struct dspd_hotplug_cb socksrv_hotplug = {
   .score = NULL,
   .add = NULL,
-  .remove = NULL,
+  .remove = socksrv_remove_device,
   .init_device = socksrv_init_device,
 };
 
@@ -3126,6 +3170,11 @@ static int socksrv_init(void *daemon, void **context)
   int fd = -1;
   struct dspd_daemon_ctx *dctx = daemon;
   int pipes[2] = { -1, -1 };
+  struct dspd_mixer_cbinfo mixer_cb = {
+    .remove = false,
+    .callback = socksrv_mixer_callback,
+    .arg = NULL,
+  };
   sctx = calloc(1, sizeof(*sctx));
   if ( ! sctx )
     return -errno;
@@ -3190,6 +3239,19 @@ static int socksrv_init(void *daemon, void **context)
   ret = dspd_daemon_hotplug_register(&socksrv_hotplug, sctx);
   if ( ret < 0 )
     goto out;
+
+  size_t br;
+  mixer_cb.arg = sctx;
+  ret = dspd_stream_npctl({.context = &dspd_dctx,
+	.stream = 0,
+	.request = DSPD_SCTL_SERVER_MIXER_SETCB,
+	.inbuf = &mixer_cb,
+	.inbufsize = sizeof(mixer_cb),
+	.outbuf = NULL,
+	.outbufsize = 0,
+	.bytes_returned = &br});
+  if ( ret < 0 )
+    dspd_log(0, "Could not install mixer callback for device %d: error %d", index, ret);
 
   if ( ! dctx->new_aio_ctx )
     {

@@ -19,6 +19,7 @@
  */
 
 #define _GNU_SOURCE
+#include "socket.h"
 #include <stdlib.h>
 #include <string.h>
 #include "sslib.h"
@@ -57,7 +58,7 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
   op.tag = UINT32_MAX;
   op.complete = sync_ctl_cb;
   op.data = (void*)&complete;
-  ret = dspd_aio_submit(ctx, &op);
+  ret = dspd_aio_submit(ctx, &op, 0);
   if ( ret == 0 )
     {
       while ( complete == false )
@@ -82,11 +83,12 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
   return ret;
 }
 
-static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_op *op)
+static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_op *op, uint32_t flags)
 {
   op->error = EINPROGRESS;
   op->xfer = 0;
-  op->reserved = 0;
+  op->reserved = flags;
+  op->reserved <<= 32U;
   ctx->pending_ops[index] = op;
   ctx->output_pending = true;
   assert(ctx->pending_ops_count >= 0);
@@ -94,7 +96,7 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
 }
 
-int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
+int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint32_t flags)
 {
   size_t n;
   size_t i;
@@ -123,7 +125,7 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 		  ctx->pending_ops = ptr;
 		}
 	    }
-	  insert_op(ctx, p, op);
+	  insert_op(ctx, p, op, flags);
 	  ret = 0;
 	  break;
 	}
@@ -147,7 +149,7 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 	      p = ctx->max_ops;
 	      ctx->pending_ops = ptr;
 	      ctx->max_ops = n;
-	      insert_op(ctx, p, op);
+	      insert_op(ctx, p, op, flags);
 	      ret = 0;
 	    }
 	}
@@ -205,6 +207,8 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 {
   size_t i, n, p;
   struct dspd_async_op *op;
+  uint64_t rmask;
+  uint32_t rflags;
   //Check for existing op
   if ( ctx->current_op >= 0 )
     {
@@ -235,8 +239,11 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->req_out.bytes_returned = 0;
 	      ctx->req_out.rdata.rlen = op->outbufsize;
 	      ctx->req_out.tag = create_tag(ctx, op->tag, p);
-	      op->reserved = ctx->seq_out;
-	      op->reserved |= (uint64_t)(p & 0xFFFFU) << 16U;
+	      rflags = (op->reserved >> 32U) & 0xFFFFFFFFU;
+	      ctx->req_out.flags |= rflags;
+	      rmask = ctx->seq_out;
+	      rmask |= (uint64_t)(p & 0xFFFFU) << 16U;
+	      op->reserved |= rmask;
 	      ctx->cnt_out = 1;
 	      ctx->iov_out[0].iov_base = &ctx->req_out;
 	      ctx->iov_out[0].iov_len = sizeof(ctx->req_out);
@@ -1249,7 +1256,31 @@ int32_t dspd_aio_fifo_signal(struct dspd_aio_fifo_ctx *ctx, int32_t events)
   return ret;
 }
 
+ssize_t dspd_aio_fifo_send_cred(void *arg, const struct ucred *uc, const void *data, size_t length)
+{
+  ssize_t ret;
+  if ( length >= sizeof(*uc) && uc == data )
+    {
+      ret = dspd_aio_fifo_write(arg, data, length);
+    } else
+    {
+      ret = -EINVAL;
+    }
+  return ret;
+}
 
+ssize_t dspd_aio_fifo_recv_cred(void *arg, struct ucred *uc, void *data, size_t length)
+{
+  ssize_t ret;
+  if ( length >= sizeof(*uc) && uc == data )
+    {
+      ret = dspd_aio_fifo_read(arg, data, length);
+    } else
+    {
+      ret = -EINVAL;
+    }
+  return ret;
+}
 
 int32_t dspd_aio_fifo_test_events(struct dspd_aio_fifo_ctx *ctx, int32_t events)
 {
@@ -1698,10 +1729,121 @@ int32_t dspd_aio_sock_set_nonblocking(void *arg, bool nonblocking)
   return 0;
 }
 
+ssize_t dspd_aio_sock_send_cred(void *arg, const struct ucred *uc, const void *data, size_t length)
+{
+  struct msghdr msgh;
+  struct iovec iov;
+  struct cmsghdr *cmhp;
+  struct ucred *ucp;
+  union {
+        struct cmsghdr cmh;
+        char   control[CMSG_SPACE(sizeof(struct ucred))];
+  } control_un;
+  memset(&msgh, 0, sizeof(msgh));
+  memset(&control_un, 0, sizeof(control_un));
+  msgh.msg_control = control_un.control;
+  msgh.msg_controllen = sizeof(control_un.control);
+  msgh.msg_iov = &iov;
+  msgh.msg_iovlen = 1;
+  iov.iov_base = (void*)data;
+  iov.iov_len = length;
+  msgh.msg_name = NULL;
+  msgh.msg_namelen = 0;
+  cmhp = CMSG_FIRSTHDR(&msgh);
+  cmhp->cmsg_len = CMSG_LEN(sizeof(struct ucred));
+  cmhp->cmsg_level = SOL_SOCKET;
+  cmhp->cmsg_type = SCM_CREDENTIALS;
+  ucp = (struct ucred *)CMSG_DATA(cmhp);
+  memcpy(ucp, uc, sizeof(*uc));
+  return sendmsg((intptr_t)arg, &msgh, 0);
+}
+
+ssize_t dspd_aio_sock_recv_cred(void *arg, struct ucred *uc, void *data, size_t length)
+{
+  struct msghdr msgh;
+  struct iovec iov;
+  struct ucred *ucredp;
+  struct cmsghdr *cmhp;
+  union {
+        struct cmsghdr cmh;
+        char   control[CMSG_SPACE(sizeof(struct ucred))];
+  } control_un;
+  intptr_t fd = (intptr_t)arg;
+  int optval = 1;
+  ssize_t ret;
+  memset(&msgh, 0, sizeof(msgh));
+  memset(&control_un, 0, sizeof(control_un));
+  optval = 1;
+  if ( setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &optval, sizeof(optval)) == -1)
+    return -errno;
+  control_un.cmh.cmsg_len = CMSG_LEN(sizeof(struct ucred));
+  control_un.cmh.cmsg_level = SOL_SOCKET;
+  control_un.cmh.cmsg_type = SCM_CREDENTIALS;
+  msgh.msg_control = control_un.control;
+  msgh.msg_controllen = sizeof(control_un.control);
+  msgh.msg_iov = &iov;
+  msgh.msg_iovlen = 1;
+  iov.iov_base = data;
+  iov.iov_len = length;
+  msgh.msg_name = NULL;
+  msgh.msg_namelen = 0;
+  ret = recvmsg(fd, &msgh, 0);
+  if ( ret > 0 )
+    {
+      //Don't let the other side send file descriptors.  Otherwise the FD table will fill up
+      //causing a denial of service.
+      for ( cmhp = CMSG_FIRSTHDR(&msgh); cmhp; cmhp = CMSG_NXTHDR(&msgh, cmhp) )
+	{
+	  if ( cmhp->cmsg_type == SCM_RIGHTS )
+	    {
+	      char *dptr = (char*)CMSG_DATA(cmhp);
+	      int f;
+	      if ( ! (dptr < (char*)4096UL || dptr > (char*)(UINTPTR_MAX-4096UL)) )
+		{
+		  //Get rid of unwanted file descriptors
+		  memmove(&f, dptr, sizeof(int));
+		  close(f);
+		  ret = -EPROTO; //Not supposed to send file descriptors
+		}
+	    }
+	}
+	      
+      if ( ret != -EPROTO )
+	{
+	  cmhp = CMSG_FIRSTHDR(&msgh);
+	  if ( cmhp->cmsg_level == SOL_SOCKET && cmhp->cmsg_type == SCM_CREDENTIALS )
+	    {
+	      ucredp = (struct ucred *)CMSG_DATA(cmhp);
+	      if ( ucredp )
+		{
+		  memcpy(uc, ucredp, sizeof(*uc));
+		} else
+		{
+		  ret = -EPROTO;
+		}
+	    } else
+	    {
+	      ret = -EPROTO;
+	    }
+	}
+    } else if ( ret == 0 )
+    {
+      ret = -ECONNABORTED;
+    } else
+    {
+      ret = -errno;
+    }
+  return ret;
+}
+
 int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio)
 {
   return aio->iofd;
 }
+
+
+
+
 
 struct dspd_aio_ops dspd_aio_sock_ops = {
   .writev = dspd_aio_sock_writev,
@@ -1711,6 +1853,8 @@ struct dspd_aio_ops dspd_aio_sock_ops = {
   .sendfd = dspd_aio_sock_sendfd,
   .poll = dspd_aio_sock_poll,
   .set_nonblocking = dspd_aio_sock_set_nonblocking,
+  .send_cred = dspd_aio_sock_send_cred,
+  .recv_cred = dspd_aio_sock_recv_cred,
   .close = dspd_aio_sock_close,
 };
 
@@ -1722,6 +1866,8 @@ struct dspd_aio_ops dspd_aio_fifo_ctx_ops = {
   .sendfd = dspd_aio_fifo_sendfd,
   .poll = dspd_aio_fifo_poll,
   .set_nonblocking = dspd_aio_fifo_set_nonblocking,
+  .send_cred = dspd_aio_fifo_send_cred,
+  .recv_cred = dspd_aio_fifo_recv_cred,
   .close = dspd_aio_fifo_close,
 };
 

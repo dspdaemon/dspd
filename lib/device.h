@@ -1,5 +1,11 @@
 #ifndef _DSPD_DEVICE_H_
 #define _DSPD_DEVICE_H_
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "socket.h"
+
 #include "thread.h"
 #include <poll.h>
 #include <setjmp.h>
@@ -380,6 +386,9 @@ struct dspd_cli_params {
 #define DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS 16
 
 };
+
+
+
 struct dspd_cli_stat {
   int32_t streams;
   int32_t flags;
@@ -388,6 +397,9 @@ struct dspd_cli_stat {
   uint64_t slot_id;
   struct dspd_cli_params playback;
   struct dspd_cli_params capture;
+  int32_t uid;
+  int32_t gid;
+  char    name[32];
 };
 struct dspd_device_stat {
   char name[64]; //Driver specific device name (hw:0, etc)

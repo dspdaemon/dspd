@@ -67,6 +67,7 @@ enum dspd_dctl_req {
   DSPD_SCTL_CLIENT_LOCK,
   DSPD_SCTL_CLIENT_SWPARAMS,
   DSPD_SCTL_CLIENT_PAUSE,
+  DSPD_SCTL_CLIENT_SETINFO,
   DSPD_SCTL_CLIENT_MAX = 6144,
   DSPD_SCTL_SERVER_MIN,
   DSPD_SCTL_SERVER_CONNECT, //Connect: server<=client
@@ -298,6 +299,7 @@ void dspd_mixf_dump(uint64_t mask);
 
 #define DSPD_EVENT_FLAG_HOTPLUG 1
 #define DSPD_EVENT_FLAG_CONTROL 2
+#define DSPD_EVENT_FLAG_VCTRL   4
 
 struct dspd_async_event {
   uint32_t event;
@@ -306,5 +308,15 @@ struct dspd_async_event {
   uint32_t arg2;
 };
 
+
+#ifdef _DSPD_HAVE_UCRED
+struct dspd_cli_info {
+  union {
+    struct ucred cred;
+    int32_t      pad[4];
+  } cred;
+  char    name[32];
+};
+#endif
 
 #endif
