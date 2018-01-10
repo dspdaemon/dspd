@@ -289,6 +289,70 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     op->complete(ctx, op);
 }
 
+static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
+{
+  ssize_t ret = 0;
+  size_t total = 0;
+  int32_t fd;
+  if ( ctx->cnt_out != 2 || 
+       (ctx->iov_out[1].iov_len < sizeof(fd) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_FD)) ||
+       (ctx->iov_out[1].iov_len < sizeof(struct ucred) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_CRED)) )
+    return -EINVAL;
+  if ( ctx->iov_out[0].iov_len == 0 && ctx->iov_out[1].iov_len == 0 )
+    return -ENODATA;
+  if ( ctx->iov_out[0].iov_len > 0 )
+    {
+      fd = *(int32_t*)ctx->iov_out[1].iov_base;
+      if ( fd < 0 )
+	return -EINVAL;
+      ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, ctx->cnt_out);
+      if ( ret > 0 )
+	{
+	  total += ret;
+	  ret = 0;
+	}
+    }
+  if ( ret == 0 && ctx->iov_out[0].iov_len == 0 )
+    {
+      //The header has been transmitted
+      if ( (ctx->off_out+total) == sizeof(ctx->req_out) )
+	{
+	  //None of the payload was transmitted
+	  if ( ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_FD )
+	    {
+	      fd = *(int32_t*)ctx->iov_out[1].iov_base;
+	      ret = ctx->ops->sendfd(ctx->ops_arg, fd, &ctx->iov_out[1]);
+	      if ( ret > 0 )
+		total += ret;
+	    } else if ( ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_CRED )
+	    {
+	      ret = ctx->ops->send_cred(ctx->ops_arg, ctx->iov_out[1].iov_base, ctx->iov_out[1].iov_base, ctx->iov_out[1].iov_len);
+	      if ( ret > 0 )
+		{
+		  ctx->iov_out[1].iov_len -= ret;
+		  ctx->iov_out[1].iov_base += ret;
+		  total += ret;
+		}
+	    } else
+	    {
+	      ret = -EINVAL; //Should not happen
+	    }
+	} else
+	{
+	  //Finish writing payload
+	  ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, ctx->cnt_out);
+	  if ( ret > 0 )
+	    {
+	      total += ret;
+	      ret = 0;
+	    }
+	}
+    }
+  if ( total > 0 )
+    ret = total;
+  return ret;
+}
+
 //Return value: -EAGAIN=no space, 0=no work.
 int32_t dspd_aio_send(struct dspd_aio_ctx *ctx)
 {
@@ -299,7 +363,10 @@ int32_t dspd_aio_send(struct dspd_aio_ctx *ctx)
       assert(ctx->current_op >= 0);
       op = ctx->pending_ops[ctx->current_op];
       assert(op != NULL);
-      ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, ctx->cnt_out);
+      if ( ctx->req_out.flags & (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED) )
+	ret = dspd_aio_send_cmsg(ctx);
+      else
+	ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, ctx->cnt_out);
       if ( ret == -ENODATA )
 	{
 	  op->error = ENODATA; //Submitted.  Request is still pending, but no more outgoing work to do.
@@ -468,10 +535,7 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
       if ( ret > 0 )
 	{
 	  ctx->off_in += ret;
-	  if ( ctx->off_in == ctx->req_in.len )
-	    ret = 0;
-	  else
-	    ret = -EINPROGRESS;
+	  ret = -EINPROGRESS;
 	} else if ( ret == 0 )
 	{
 	  ret = -EIO;
@@ -484,6 +548,13 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
       assert(ctx->off_in == ctx->req_in.len);
       ret = 0;
     }
+  if ( ctx->off_in == ctx->req_in.len )
+    {
+      if ( ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_FD )
+	memcpy(ptr, &ctx->last_fd, sizeof(ctx->last_fd));
+      ret = 0;
+    }
+
   return ret;
 }
 
@@ -662,7 +733,7 @@ void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx,
   ctx->io_ready_arg = arg;
 }
 
-int32_t dspd_aio_reap_fd(struct dspd_aio_ctx *ctx)
+int32_t dspd_aio_recv_fd(struct dspd_aio_ctx *ctx)
 {
   int32_t ret;
   if ( ctx->last_fd < 0 )

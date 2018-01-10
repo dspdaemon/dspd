@@ -268,6 +268,9 @@ int32_t dspd_client_new(struct dspd_slist *list,
   cli->list = list;
   cli->device = -1;
   cli->mq_fd = -1;
+  cli->uid = -1;
+  cli->gid = -1;
+  cli->pid = -1;
   cli->min_latency = dspd_get_tick();
   dspd_store_float32(&cli->playback.volume, 1.0);
   dspd_store_float32(&cli->capture.volume, 1.0);
@@ -2241,6 +2244,10 @@ static int32_t client_stat(struct dspd_rctx *context,
       params->streams |= DSPD_PCM_SBIT_CAPTURE;
       memcpy(&params->capture, &cli->capture.params, sizeof(cli->capture.params));
     }
+  strlcpy(params->name, cli->name, sizeof(params->name));
+  params->pid = cli->pid;
+  params->uid = cli->uid;
+  params->gid = cli->gid;
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_buf(context, 0, params, sizeof(*params));
 }

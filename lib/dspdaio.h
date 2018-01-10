@@ -110,7 +110,7 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 int32_t dspd_aio_send(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_block_directions(struct dspd_aio_ctx *ctx);
-int32_t dspd_aio_reap_fd(struct dspd_aio_ctx *ctx);
+int32_t dspd_aio_recv_fd(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req);
 void dspd_aio_destroy(struct dspd_aio_ctx *ctx);
 void dspd_aio_delete(struct dspd_aio_ctx *ctx);

@@ -141,7 +141,7 @@ int dspd_cmsg_recvfd(int s, struct iovec *iov)
 
 }
 
-static int32_t recv_fd(struct dspd_req_ctx *ctx)
+static int32_t recv_cmsg(struct dspd_req_ctx *ctx)
 {
   char *buf = (char*)ctx->rxpkt;
   struct iovec iov;
@@ -155,11 +155,21 @@ static int32_t recv_fd(struct dspd_req_ctx *ctx)
       iov.iov_base = &buf[ctx->rxstat.offset];
       l = ctx->rxstat.len - ctx->rxstat.offset;
       iov.iov_len = l;
-      ret = ctx->ops->recvfd(ctx->arg, &iov);
-      if ( ret <= 0 )
-	return ret;
-      ctx->recvfd = ret;
-      ctx->rxstat.offset += l - iov.iov_len;
+      if ( ctx->rxstat.isfd )
+	{
+	  ret = ctx->ops->recvfd(ctx->arg, &iov);
+	  if ( ret <= 0 )
+	    return ret;
+	  ctx->recvfd = ret;
+	  ctx->rxstat.offset += l - iov.iov_len;
+	} else
+	{
+	  //Must be cred
+	  ret = ctx->ops->recv_cred(ctx->arg, iov.iov_base, iov.iov_base, iov.iov_len);
+	  if ( ret <= 0 )
+	    return ret;
+	  ctx->rxstat.offset += ret;
+	}
     }
 
   /*
@@ -224,24 +234,25 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
       if ( ctx->rxstat.offset == sizeof(*ctx->rxpkt) )
 	{
 	  ctx->rxstat.isfd = !! (ctx->rxpkt->flags & PKT_CMSG_FD);
+	  ctx->rxstat.iscred = !! (ctx->rxpkt->flags & DSPD_REQ_FLAG_CMSG_CRED);
 	  ctx->rxstat.len = ctx->rxpkt->len & (~PKT_CMSG_FD);
 	  if ( ctx->rxstat.len > ctx->rxmax ||
 	       ctx->rxstat.len < ctx->hdrlen ||
-	       (ctx->rxstat.isfd != 0 && ctx->rxstat.len == ctx->hdrlen) )
+	       ((ctx->rxstat.isfd || ctx->rxstat.iscred) && ctx->rxstat.len == ctx->hdrlen) || //Too short
+	       (ctx->rxstat.iscred && ctx->rxstat.isfd) ) //Can't be both types
 	    {
 
 	      return -EPROTO;
 	    }
-
 	  ctx->rxstat.started = 1;
 	}
     }
 
   if ( ctx->rxstat.started )
     {
-      if ( ctx->rxstat.isfd )
+      if ( ctx->rxstat.isfd || ctx->rxstat.iscred )
 	{
-	  return recv_fd(ctx);
+	  return recv_cmsg(ctx);
 	} else
 	{
 	  return recv_data(ctx);
@@ -289,7 +300,7 @@ int dspd_cmsg_sendfd(int s, int fd, struct iovec *data)
 }
 
 
-static int32_t send_fd(struct dspd_req_ctx *ctx, int32_t fd)
+static int32_t send_cmsg(struct dspd_req_ctx *ctx, int32_t fd)
 {
   ssize_t ret;
   char *buf;
@@ -314,15 +325,24 @@ static int32_t send_fd(struct dspd_req_ctx *ctx, int32_t fd)
    */
   if ( ctx->txstat.offset == sizeof(*ctx->txpkt) )
     {
-      //First 4 bytes of payload is FD in most cases
-      if ( fd < 0 )
-	memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
       iov.iov_base = &buf[ctx->txstat.offset];
-      iov.iov_len = ctx->txstat.len - ctx->txstat.offset; //sizeof(fd);
-      ret = ctx->ops->sendfd(ctx->arg, fd, &iov);
+      iov.iov_len = ctx->txstat.len - ctx->txstat.offset;
+      
+      if ( ctx->txstat.isfd )
+	{
+	  //First 4 bytes of payload is FD in most cases
+	  if ( fd < 0 )
+	    memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
+	  ret = ctx->ops->sendfd(ctx->arg, fd, &iov);
+	} else
+	{
+	  //Must be cred
+	  ret = ctx->ops->send_cred(ctx->arg, iov.iov_base, iov.iov_base, iov.iov_len);
+	}
       if ( ret <= 0 )
 	return ret;
       ctx->txstat.offset += ret;
+	
     }
   /*
     Send the rest of the data, if any.
@@ -360,11 +380,13 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
   if ( ! ctx->txstat.started )
     {
       ctx->txstat.isfd = !! (ctx->txpkt->flags & PKT_CMSG_FD);
+      ctx->txstat.iscred = !! (ctx->txpkt->flags & DSPD_REQ_FLAG_CMSG_CRED);
       ctx->txstat.offset = 0;
       ctx->txstat.len = (ctx->txpkt->len & (~PKT_CMSG_FD));
       if ( ctx->txstat.len > ctx->txmax ||
-	   (ctx->txstat.isfd != 0 && ctx->txstat.len == ctx->hdrlen) ||
-	   ctx->txstat.len < ctx->hdrlen )
+	   ((ctx->txstat.isfd || ctx->txstat.iscred) && ctx->txstat.len == ctx->hdrlen) ||
+	   ctx->txstat.len < ctx->hdrlen ||
+	   (ctx->txstat.iscred && ctx->txstat.isfd) )
 	return -EINVAL;
       if ( ctx->txstat.isfd )
 	ctx->fd_out = fd;
@@ -374,7 +396,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
     }
   if ( ctx->txstat.isfd )
     {
-      ret = send_fd(ctx, ctx->fd_out);
+      ret = send_cmsg(ctx, ctx->fd_out);
     } else
     {
       buf = (char*)ctx->txpkt;

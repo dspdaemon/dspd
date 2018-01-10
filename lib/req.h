@@ -165,7 +165,8 @@ struct dspd_rpkt {
 };
 
 struct dspd_pktstat {
-  bool     isfd; //Does this contain a file descriptor
+  bool     isfd; //Contains a file descriptor
+  bool     iscred; //Contains credentials
   bool     started; //Has the operation been successfully started
   uint32_t len;     //Length of data to be transferred
   uint32_t offset;  //Offset (progress).  Done when len==offset&&len>0.

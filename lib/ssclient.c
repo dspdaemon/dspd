@@ -454,6 +454,9 @@ int dspd_ipc_process_messages(struct dspd_conn *conn, int timeout)
   struct pollfd pfd;
   int ret, result = 0;
   uint32_t objtype = *(uint32_t*)conn;
+  if ( objtype == DSPD_OBJ_TYPE_AIO )
+    return dspd_aio_process((struct dspd_aio_ctx*)conn, 0, timeout);
+			    
   if ( objtype != DSPD_OBJ_TYPE_IPC )
     return 0;
   dspd_mutex_lock(&conn->lock);
@@ -552,6 +555,9 @@ int32_t dspd_conn_recv_fd(struct dspd_conn *conn)
       ret = conn->fd_in;
       conn->fd_in = -1;
       dspd_mutex_unlock(&conn->lock);
+    } else if ( objtype == DSPD_OBJ_TYPE_AIO )
+    {
+      return dspd_aio_recv_fd((struct dspd_aio_ctx*)conn);
     } else
     {
       ret = -EAGAIN;
@@ -803,6 +809,8 @@ int dspd_conn_get_socket(struct dspd_conn *conn)
   int32_t ret;
   if ( objtype == DSPD_OBJ_TYPE_IPC )
     ret = conn->sock_fd;
+  else if ( objtype == DSPD_OBJ_TYPE_AIO )
+    ret = dspd_aio_get_iofd((struct dspd_aio_ctx*)conn);
   else
     ret = -ENOTSOCK;
   return ret;
