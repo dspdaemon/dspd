@@ -58,7 +58,8 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
   op.tag = UINT32_MAX;
   op.complete = sync_ctl_cb;
   op.data = (void*)&complete;
-  ret = dspd_aio_submit(ctx, &op, 0);
+  op.flags = 0;
+  ret = dspd_aio_submit(ctx, &op);
   if ( ret == 0 )
     {
       while ( complete == false )
@@ -83,12 +84,11 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
   return ret;
 }
 
-static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_op *op, uint32_t flags)
+static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_op *op)
 {
   op->error = EINPROGRESS;
   op->xfer = 0;
-  op->reserved = flags;
-  op->reserved <<= 32U;
+  op->reserved = 0;
   ctx->pending_ops[index] = op;
   ctx->output_pending = true;
   assert(ctx->pending_ops_count >= 0);
@@ -96,7 +96,7 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
 }
 
-int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint32_t flags)
+int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 {
   size_t n;
   size_t i;
@@ -125,7 +125,7 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint
 		  ctx->pending_ops = ptr;
 		}
 	    }
-	  insert_op(ctx, p, op, flags);
+	  insert_op(ctx, p, op);
 	  ret = 0;
 	  break;
 	}
@@ -149,7 +149,7 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint
 	      p = ctx->max_ops;
 	      ctx->pending_ops = ptr;
 	      ctx->max_ops = n;
-	      insert_op(ctx, p, op, flags);
+	      insert_op(ctx, p, op);
 	      ret = 0;
 	    }
 	}
@@ -208,7 +208,6 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
   size_t i, n, p;
   struct dspd_async_op *op;
   uint64_t rmask;
-  uint32_t rflags;
   //Check for existing op
   if ( ctx->current_op >= 0 )
     {
@@ -233,14 +232,12 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->current_op = p;
 	      ctx->position = i;
 	      ctx->req_out.len = sizeof(ctx->req_out);
-	      ctx->req_out.flags = 0;
+	      ctx->req_out.flags = op->flags;
 	      ctx->req_out.cmd = op->req;
 	      ctx->req_out.stream = op->stream;
 	      ctx->req_out.bytes_returned = 0;
 	      ctx->req_out.rdata.rlen = op->outbufsize;
 	      ctx->req_out.tag = create_tag(ctx, op->tag, p);
-	      rflags = (op->reserved >> 32U) & 0xFFFFFFFFU;
-	      ctx->req_out.flags |= rflags;
 	      rmask = ctx->seq_out;
 	      rmask |= (uint64_t)(p & 0xFFFFU) << 16U;
 	      op->reserved |= rmask;

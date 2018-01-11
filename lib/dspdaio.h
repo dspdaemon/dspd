@@ -13,6 +13,7 @@ struct dspd_async_op {
   int32_t      error;
   uint32_t     tag;
   void        *data;
+  uint32_t     flags;
   uint64_t     reserved;
   void (*complete)(void *context, struct dspd_async_op *op);
 };
@@ -96,7 +97,7 @@ void dspd_aio_set_dead_cb(struct dspd_aio_ctx *ctx,
 void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx, 
 			   void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg),
 			   void  *arg);
-int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, uint32_t flags);
+int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
 int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
 int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t timeout);
 int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,

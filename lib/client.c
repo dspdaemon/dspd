@@ -2800,12 +2800,12 @@ static int32_t client_setinfo(struct dspd_rctx *context,
 			      size_t        outbufsize)
 {
   struct dspd_client *cli = dspd_req_userdata(context);
-  int32_t ret = 0;
+  int32_t ret;
   const struct dspd_cli_info *info = inbuf;
   int32_t flags;
   dspd_slist_entry_wrlock(cli->list, cli->index);
   flags = dspd_req_flags(context);
-  if ( (flags & (DSPD_REQ_FLAG_CMSG_CRED|DSPD_REQ_FLAG_REMOTE)) &&
+  if ( (flags & DSPD_REQ_FLAG_CMSG_CRED) &&
        memchr(info->name, 0, sizeof(info->name)) != NULL )
     {
       if ( info->cred.cred.pid >= 0 )
@@ -2818,6 +2818,10 @@ static int32_t client_setinfo(struct dspd_rctx *context,
 	strlcpy(cli->name, info->name, sizeof(cli->name));
       if ( cli->vctrl_registered )
 	dspd_daemon_vctrl_set_value(cli->index, DSPD_PCM_SBIT_PLAYBACK, -1, cli->name);
+      ret = 0;
+    } else
+    {
+      ret = EPERM;
     }
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_err(context, 0, ret);
