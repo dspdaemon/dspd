@@ -192,6 +192,7 @@ struct dspd_req_ctx {
   //States of packets.
   struct dspd_pktstat      rxstat, txstat;
   int32_t fd_out;
+  int32_t pid, gid, uid;
 };
 void dspd_req_ctx_delete(struct dspd_req_ctx *ctx);
 struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,

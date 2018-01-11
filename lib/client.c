@@ -2805,7 +2805,7 @@ static int32_t client_setinfo(struct dspd_rctx *context,
   int32_t flags;
   dspd_slist_entry_wrlock(cli->list, cli->index);
   flags = dspd_req_flags(context);
-  if ( (flags & DSPD_REQ_FLAG_CMSG_CRED) &&
+  if ( ((flags & DSPD_REQ_FLAG_CMSG_CRED) != 0 || (flags & DSPD_REQ_FLAG_REMOTE) == 0) &&
        memchr(info->name, 0, sizeof(info->name)) != NULL )
     {
       if ( info->cred.cred.pid >= 0 )

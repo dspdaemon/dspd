@@ -489,6 +489,7 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
   ssize_t ret;
   struct dspd_async_op *op;
   struct iovec iov;
+  struct ucred uc = { -1, -1, -1 };
   if ( ctx->op_in < 0 )
     ctx->op_in = find_pending_op(ctx);
   if ( ctx->op_in >= 0 )
@@ -507,22 +508,36 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
   if ( len > maxlen )
     return -EPROTO;
 
-  if ( ctx->off_in == sizeof(ctx->req_in) && (ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_FD) )
+  if ( ctx->off_in == sizeof(ctx->req_in) )
     {
       iov.iov_len = len;
       iov.iov_base = ptr;
-      ret = ctx->ops->recvfd(ctx->ops_arg, &iov);
-      if ( ret < 0 )
+
+      if ( ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_FD )
 	{
-	  if ( ret == -EAGAIN || ret == -EWOULDBLOCK || ret == -EINTR )
-	    ret = -EINPROGRESS;
-	  return ret;
-	} else if ( ret >= 0 )
+	  ret = ctx->ops->recvfd(ctx->ops_arg, &iov);
+	  if ( ret < 0 )
+	    {
+	      if ( ret == -EAGAIN || ret == -EWOULDBLOCK || ret == -EINTR )
+		ret = -EINPROGRESS;
+	      return ret;
+	    } else if ( ret >= 0 )
+	    {
+	      ctx->off_in += len - iov.iov_len;
+	      if ( ctx->last_fd >= 0 )
+		close(ctx->last_fd);
+	      ctx->last_fd = ret;
+	    }
+	} else if ( ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_CRED )
 	{
-	  ctx->off_in += len - iov.iov_len;
-	  if ( ctx->last_fd >= 0 )
-	    close(ctx->last_fd);
-	  ctx->last_fd = ret;
+	  ret = ctx->ops->recv_cred(ctx->ops_arg, &uc, iov.iov_base, iov.iov_len);
+	  if ( ret > 0 )
+	    {
+	      ctx->off_in += ret;
+	      ctx->pid = uc.pid;
+	      ctx->gid = uc.gid;
+	      ctx->uid = uc.uid;
+	    }
 	}
     }
   if ( ctx->off_in < ctx->req_in.len )
@@ -548,7 +563,15 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
   if ( ctx->off_in == ctx->req_in.len )
     {
       if ( ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_FD )
-	memcpy(ptr, &ctx->last_fd, sizeof(ctx->last_fd));
+	{
+	  memcpy(ptr, &ctx->last_fd, sizeof(ctx->last_fd));
+	} else if ( ctx->req_in.flags & DSPD_REQ_FLAG_CMSG_CRED )
+	{
+	  struct ucred *uc = (struct ucred*)ptr;
+	  uc->pid = ctx->pid;
+	  uc->gid = ctx->gid;
+	  uc->uid = ctx->uid;
+	}
       ret = 0;
     }
 
@@ -765,6 +788,9 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   ctx->last_fd = -1;
   ctx->op_in = -1;
   ctx->slot = -1;
+  ctx->uid = -1;
+  ctx->pid = -1;
+  ctx->gid = -1;
   ctx->current_op = -1;
   ctx->pending_ops = calloc(max_req, sizeof(*ctx->pending_ops));
   ctx->max_ops = max_req;

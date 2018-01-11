@@ -20,6 +20,8 @@
 
 
 #define _GNU_SOURCE
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -66,6 +68,9 @@ struct dspd_req_ctx *dspd_req_ctx_new(size_t pktlen,
       ctx->hdrlen = hdrlen;
       ctx->rxmax = pktlen;
       ctx->txmax = pktlen;
+      ctx->uid = -1;
+      ctx->gid = -1;
+      ctx->pid = -1;
     }
   
   return ctx;
@@ -147,6 +152,7 @@ static int32_t recv_cmsg(struct dspd_req_ctx *ctx)
   struct iovec iov;
   ssize_t ret = -EINPROGRESS;
   size_t l;
+  struct ucred uc = { -1, -1, -1 };
   /*
     Get the FD and at least 1 byte.  Best case is that the whole payload comes in.
   */
@@ -165,10 +171,16 @@ static int32_t recv_cmsg(struct dspd_req_ctx *ctx)
 	} else
 	{
 	  //Must be cred
-	  ret = ctx->ops->recv_cred(ctx->arg, iov.iov_base, iov.iov_base, iov.iov_len);
+	  ret = ctx->ops->recv_cred(ctx->arg, &uc, iov.iov_base, iov.iov_len);
 	  if ( ret <= 0 )
 	    return ret;
+	  //Have at least 1 byte.  Save credentials since otherwise the
+	  //client could stall and overwrite the inline credentials with
+	  //arbitrary data.
 	  ctx->rxstat.offset += ret;
+	  ctx->pid = uc.pid;
+	  ctx->uid = uc.uid;
+	  ctx->gid = uc.gid;
 	}
     }
 
@@ -193,7 +205,18 @@ static int32_t recv_cmsg(struct dspd_req_ctx *ctx)
   if ( ctx->rxstat.offset == ctx->rxstat.len )
     {
       ret = ctx->rxstat.len;
-      memcpy(&buf[ctx->hdrlen], &ctx->recvfd, sizeof(ctx->recvfd));
+      if ( ctx->txstat.isfd )
+	{
+	  memcpy(&buf[ctx->hdrlen], &ctx->recvfd, sizeof(ctx->recvfd));
+	} else if ( ctx->txstat.iscred )
+	{
+	  struct ucred *u = (struct ucred*)&buf[ctx->hdrlen];
+	  u->pid = ctx->pid;
+	  u->gid = ctx->gid;
+	  u->uid = ctx->uid;
+	}
+	
+      
     }
   return ret;
 }

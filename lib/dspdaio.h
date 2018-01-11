@@ -70,6 +70,7 @@ struct dspd_aio_ctx {
   struct dspd_req_pointers  ptrs_out;
 
   int32_t                last_fd;
+  int32_t                uid, gid, pid;
   struct dspd_req        req_in;
   size_t                 off_in;
   char                   buf_in[SS_MAX_PAYLOAD];
