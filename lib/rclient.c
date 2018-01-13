@@ -2519,3 +2519,8 @@ int32_t dspd_rclient_get_trigger(struct dspd_rclient *client)
 {
   return client->trigger;
 }
+
+int32_t dspd_rclient_client_index(struct dspd_rclient *client)
+{
+  return client->bparams.client;
+}

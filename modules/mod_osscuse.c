@@ -54,7 +54,9 @@
 
 */
 
-
+#define _GNU_SOURCE
+#define _DSPD_HAVE_UCRED
+#include "../lib/socket.h"
 #include <unistd.h>
 #include <string.h>
 #include <linux/fuse.h>
@@ -488,6 +490,7 @@ static int cdev_find_slot(struct oss_dsp_cdev *dev)
 struct cdev_open_req {
   uint64_t unique;
   uint32_t flags; //IMPORTANT NOTE: fuse_read_in and fuse_write_in both can change this
+  int32_t  pid, uid, gid;
 };
 
 static void free_client_cb(struct cbpoll_ctx *ctx,
@@ -663,7 +666,8 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
   size_t br;
   int s = 0;
   struct dspd_rclient_bindparams bp = { 0 };
-
+  struct dspd_cli_info_pkt info;
+  char path[1024];
   cli = calloc(1, sizeof(*cli));
   if ( ! cli )
     {
@@ -828,12 +832,44 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
     }
 
 
- 
+  
 
   
   
   dspd_daemon_unref(device_index);
 
+
+  if ( snprintf(path, sizeof(path), "/proc/%d/task/%d/comm", req->pid, req->pid) < sizeof(path) )
+    {
+      int fd = open(path, O_RDONLY), ret;
+      memset(&info, 0, sizeof(info));
+      if ( fd >= 0 )
+	{
+	  while ( (ret = read(fd, info.name, sizeof(info.name) - 1UL)) < 0 )
+	    {
+	      ret = errno;
+	      if ( ret != EINTR && ret != EWOULDBLOCK && ret != EAGAIN )
+		break;
+	    }
+	  close(fd);
+	  char *p = strchr(info.name, '\n');
+	  if ( p )
+	    *p = 0;
+	}
+      if ( info.name[0] == 0 )
+	sprintf(info.name, "Client #%d (pid %d)", cli->client_index, req->pid);
+      info.cred.cred.pid = req->pid;
+      info.cred.cred.uid = req->uid;
+      info.cred.cred.gid = req->gid;
+      (void)dspd_stream_ctl(&dspd_dctx,
+			    cli->client_index,
+			    DSPD_SCTL_CLIENT_SETINFO,
+			    &info,
+			    sizeof(info),
+			    NULL,
+			    0,
+			    &br);
+    }
 
   cli->fh = slot;
   cli->fh <<= 32;
@@ -960,6 +996,9 @@ static int dsp_new_client(struct oss_dsp_cdev *dev, struct rtcuse_ipkt *pkt)
   
   req->unique = pkt->header.unique;
   req->flags = in->flags;
+  req->pid = pkt->header.pid;
+  req->uid = pkt->header.uid;
+  req->gid = pkt->header.gid;
   work.fd = dev->cdev->fd;
   work.index = dev->cbpoll_index;
   work.arg = slot;

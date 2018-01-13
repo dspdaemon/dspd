@@ -152,7 +152,10 @@ struct oss_cdev_client {
 
   const struct oss_cdev_ops *ops;
   struct oss_legacy_mixer_table *elements;
+
+  int32_t pid, gid, uid;
 };
+
 
 struct oss_dsp_cdev {
   bool                      is_mixer;

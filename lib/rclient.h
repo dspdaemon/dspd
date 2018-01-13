@@ -167,4 +167,6 @@ dspd_time_t dspd_rclient_get_trigger_tstamp(struct dspd_rclient *client, int32_t
 
 int32_t dspd_rclient_get_trigger(struct dspd_rclient *client);
 
+int32_t dspd_rclient_client_index(struct dspd_rclient *client);
+
 #endif

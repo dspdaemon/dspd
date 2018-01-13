@@ -19,7 +19,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-
+#define _DSPD_HAVE_UCRED
+#include "../lib/socket.h"
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../lib/cbpoll.h"
@@ -696,6 +697,9 @@ static int amsg_hello(struct sndio_client *cli)
   uint16_t mode = ntohs(h->mode);
   char buf[32];
   struct dspd_sg_info sg;
+  struct dspd_cli_info_pkt info;
+  socklen_t len;
+  char path[1024];
   if ( (mode & ~(DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) != 0 ||
        h->version != AMSG_VERSION )
     return -1; //Unsupported mask
@@ -743,6 +747,42 @@ static int amsg_hello(struct sndio_client *cli)
     } else
     {
       ret = -1;
+    }
+  if ( mode & DSPD_PCM_SBIT_PLAYBACK )
+    {
+      memset(&info, 0, sizeof(info));
+      len = sizeof(info.cred.cred);
+      if ( getsockopt(cli->fd, SOL_SOCKET, SO_PEERCRED, &info.cred.cred, &len) == 0 )
+	{
+	  if ( snprintf(path, sizeof(path), "/proc/%d/task/%d/comm", info.cred.cred.pid, info.cred.cred.pid) < sizeof(path) )
+	    {
+	      int fd = open(path, O_RDONLY), ret;
+	      memset(&info, 0, sizeof(info));
+	      if ( fd >= 0 )
+		{
+		  while ( (ret = read(fd, info.name, sizeof(info.name) - 1UL)) < 0 )
+		    {
+		      ret = errno;
+		      if ( ret != EINTR && ret != EWOULDBLOCK && ret != EAGAIN )
+			break;
+		    }
+		  close(fd);
+		  char *p = strchr(info.name, '\n');
+		  if ( p )
+		    *p = 0;
+		}
+	      if ( info.name[0] == 0 )
+		sprintf(info.name, "Client #%d (pid %d)", dspd_rclient_client_index(cli->pclient), info.cred.cred.pid);
+	    }
+	  //This will fail if sndio is running in a separate process.
+	  (void)dspd_rclient_ctl(cli->pclient,
+				 DSPD_SCTL_CLIENT_SETINFO,
+				 &info,
+				 sizeof(info),
+				 NULL,
+				 0,
+				 &br);
+	}
     }
   if ( ret == 0 )
     {
