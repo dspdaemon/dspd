@@ -310,7 +310,7 @@ struct dspd_async_event {
 
 
 #ifdef _DSPD_HAVE_UCRED
-struct dspd_cli_info {
+struct dspd_cli_info_pkt {
   union {
     struct ucred cred;
     int32_t      pad[4];
@@ -318,5 +318,18 @@ struct dspd_cli_info {
   char    name[32];
 };
 #endif
+
+//The -1 special makes Linux fill in the default credentials.
+//Otherwise, it is valid to use a thread id or some privileged processes may
+//fill in arbitrary credentials.
+#define DSPD_CLI_INFO_DEFAULT -1
+struct dspd_cli_info {
+  int32_t stream;
+#define DSPD_CLI_INFO_TID -2
+  int32_t pid;
+  int32_t uid;
+  int32_t gid;
+  char    name[32];
+};
 
 #endif

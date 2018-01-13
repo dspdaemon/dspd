@@ -1161,10 +1161,18 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 
   
 
-  err = dspd_conn_new(NULL, &dspd->conn);
+  //err = dspd_conn_new(NULL, &dspd->conn);
+  //if ( err < 0 )
+  //goto error;
+  err = dspd_aio_new((struct dspd_aio_ctx**)&dspd->conn, DSPD_AIO_DEFAULT);
+  if ( err < 0 )
+    goto error;
+  err = dspd_aio_connect((struct dspd_aio_ctx*)dspd->conn, NULL, NULL, NULL, NULL);
   if ( err < 0 )
     goto error;
   
+  
+
   dspd_conn_set_event_flag_cb(dspd->conn, dspd_event_flags_changed, dspd);
 
   if ( hwdev[0] == 0 )
@@ -1271,6 +1279,16 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 			&br);
 
   if ( err )
+    goto error;
+
+  struct dspd_cli_info info;
+  memset(&info, 0, sizeof(info));
+  info.stream = dspd->client_stream;
+  info.uid = DSPD_CLI_INFO_DEFAULT;
+  info.gid = DSPD_CLI_INFO_DEFAULT;
+  info.pid = DSPD_CLI_INFO_DEFAULT;
+  err = dspd_aio_set_info((struct dspd_aio_ctx*)dspd->conn, &info, NULL, NULL);
+  if ( err < 0 )
     goto error;
 
   //Create a reservation on the device

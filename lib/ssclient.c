@@ -576,6 +576,9 @@ void dspd_conn_delete(struct dspd_conn *conn)
       if ( conn->sock_fd >= 0 )
 	close(conn->sock_fd);
       free(conn);
+    } else if ( t == DSPD_OBJ_TYPE_AIO )
+    {
+      dspd_aio_delete((struct dspd_aio_ctx*)conn);
     }
 }
 
@@ -615,11 +618,18 @@ int dspd_conn_new(const char *addr, struct dspd_conn **ptr)
 
 uint32_t dspd_conn_revents(struct dspd_conn *conn)
 {
-  uint32_t ret;
-  dspd_mutex_lock(&conn->lock);
-  ret = conn->revents;
-  conn->revents = 0;
-  dspd_mutex_unlock(&conn->lock);
+  uint32_t ret = 0;
+  uint32_t magic = *(uint32_t*)conn;
+  if ( magic == DSPD_OBJ_TYPE_IPC )
+    {
+      dspd_mutex_lock(&conn->lock);
+      ret = conn->revents;
+      conn->revents = 0;
+      dspd_mutex_unlock(&conn->lock);
+    } else if ( magic == DSPD_OBJ_TYPE_AIO )
+    {
+      ret = dspd_aio_revents((struct dspd_aio_ctx*)conn);
+    }
   return ret;
 }
 
@@ -627,19 +637,33 @@ void dspd_conn_set_event_flag_cb(struct dspd_conn *conn,
 				 void (*event_flags_changed)(void *arg, uint32_t *flags),
 				 void *arg)
 {
-  dspd_mutex_lock(&conn->lock);
-  conn->event_flags_changed = event_flags_changed;
-  conn->arg = arg;
-  dspd_mutex_unlock(&conn->lock);
+  uint32_t magic = *(uint32_t*)conn;
+  if ( magic == DSPD_OBJ_TYPE_IPC )
+    {
+      dspd_mutex_lock(&conn->lock);
+      conn->event_flags_changed = event_flags_changed;
+      conn->arg = arg;
+      dspd_mutex_unlock(&conn->lock);
+    } else if ( magic == DSPD_OBJ_TYPE_AIO )
+    {
+      dspd_aio_set_event_flag_cb((struct dspd_aio_ctx*)conn, event_flags_changed, arg);
+    }
 }
 uint32_t dspd_conn_get_event_flags(struct dspd_conn *conn, bool clear)
 {
-  uint32_t ret;
-  dspd_mutex_lock(&conn->lock);
-  ret = conn->event_flags;
-  if ( clear )
-    conn->event_flags = 0;
-  dspd_mutex_unlock(&conn->lock);
+  uint32_t ret = 0;
+  uint32_t magic = *(uint32_t*)conn;
+  if ( magic == DSPD_OBJ_TYPE_IPC )
+    {
+      dspd_mutex_lock(&conn->lock);
+      ret = conn->event_flags;
+      if ( clear )
+	conn->event_flags = 0;
+      dspd_mutex_unlock(&conn->lock);
+    } else if ( magic == DSPD_OBJ_TYPE_AIO )
+    {
+      ret = dspd_aio_get_event_flags((struct dspd_aio_ctx*)conn, clear);
+    }
   return ret;
 }
 

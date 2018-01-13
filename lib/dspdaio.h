@@ -87,6 +87,18 @@ struct dspd_aio_ctx {
 		      const void              *buf,
 		      size_t                   len);
 
+  uint32_t event_flags;
+  void (*event_flags_changed)(void *arg, uint32_t *flags);
+  void *event_flags_changed_arg;
+  
+  uint32_t revents;
+
+  //Data for convenience functions, such as dspd_aio_set_info().
+  //Any dspd_aio_ function that can complete asynchronously without
+  //a dspd_async_op will use this buffer and for that reason, convenience
+  //functions must be run one at a time.
+  char   data[256];
+  size_t datalen;
 };
 
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);
@@ -131,6 +143,18 @@ void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx,
 					       size_t                  len),
 			   void  *async_event_arg);
 
+
+void dspd_aio_set_event_flag_cb(struct dspd_aio_ctx *ctx, 
+				 void (*event_flags_changed)(void *arg, uint32_t *flags),
+				void *arg);
+
+uint32_t dspd_aio_get_event_flags(struct dspd_aio_ctx *ctx, bool clear);
+uint32_t dspd_aio_revents(struct dspd_aio_ctx *ctx);
+
+int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx, 
+			  const struct dspd_cli_info *info,
+			  void (*complete)(void *context, struct dspd_async_op *op),
+			  void *arg);
 
 struct dspd_aio_fifo_master;
 struct dspd_aio_fifo_ctx;

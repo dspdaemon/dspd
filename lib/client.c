@@ -2801,7 +2801,7 @@ static int32_t client_setinfo(struct dspd_rctx *context,
 {
   struct dspd_client *cli = dspd_req_userdata(context);
   int32_t ret;
-  const struct dspd_cli_info *info = inbuf;
+  const struct dspd_cli_info_pkt *info = inbuf;
   int32_t flags;
   dspd_slist_entry_wrlock(cli->list, cli->index);
   flags = dspd_req_flags(context);
@@ -2986,7 +2986,7 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .handler = client_setinfo,
     .xflags = DSPD_REQ_FLAG_CMSG_FD,
     .rflags = 0,
-    .inbufsize = sizeof(struct dspd_cli_info),
+    .inbufsize = sizeof(struct dspd_cli_info_pkt),
     .outbufsize = 0,
   },
 };

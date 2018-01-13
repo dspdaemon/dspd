@@ -19,12 +19,17 @@
  */
 
 #define _GNU_SOURCE
+#define _DSPD_HAVE_UCRED
 #include "socket.h"
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include "sslib.h"
 #include "daemon.h"
+
 #include "dspdaio.h"
+
+#define DSPD_AIO_DATABUF (1ULL<<32U)
 
 static void sync_ctl_cb(void *context, struct dspd_async_op *op)
 {
@@ -43,7 +48,7 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 		      size_t       *bytes_returned)
 {
   struct dspd_async_op op;
-  volatile bool complete = false;
+  bool complete = false;
   int32_t ret;
   memset(&op, 0, sizeof(op));
   if ( bytes_returned )
@@ -80,6 +85,99 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 	  if ( bytes_returned )
 	    *bytes_returned = op.xfer;
 	}
+    }
+  return ret;
+}
+
+
+int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx, 
+			  const struct dspd_cli_info *info,
+			  void (*complete)(void *context, struct dspd_async_op *op),
+			  void *arg)
+{
+  struct dspd_async_op *op;
+  struct dspd_cli_info_pkt *pkt;
+  bool done = false;
+  int32_t ret, fd;
+  char path[512];
+  int32_t pid;
+  if ( ctx->datalen > 0 )
+    return -EAGAIN;
+  
+
+  op = (struct dspd_async_op*)ctx->data;
+  pkt = (struct dspd_cli_info_pkt*)&ctx->data[sizeof(*op)];
+  ctx->datalen = sizeof(*op) + sizeof(*pkt);
+  assert(ctx->datalen <= sizeof(ctx->data));
+  memset(op, 0, sizeof(*op));
+  memset(pkt, 0, sizeof(*pkt));
+  if ( info->pid == DSPD_CLI_INFO_TID )
+    pid = syscall(SYS_gettid);
+  else
+    pid = info->pid;
+  
+  if ( info->name[0] != 0 )
+    {
+      strlcpy(pkt->name, info->name, sizeof(pkt->name));
+    } else
+    {
+      ret = snprintf(path, sizeof(path), "/proc/self/task/%d/comm", pid);
+      if ( ret >= sizeof(path) )
+	return -ENAMETOOLONG; //Should not happen.
+      
+      //Get the name of this thread.  It could be the main thread and the only thread in
+      //this process.
+      fd = open(path, O_RDONLY);
+      if ( fd < 0 )
+	return -errno;
+      while ( (ret = read(fd, pkt->name, sizeof(pkt->name) - 1UL)) < 0 )
+	{
+	  ret = -errno;
+	  if ( ret != -EAGAIN && ret != -EINTR && ret != -EWOULDBLOCK )
+	    break;
+	}
+      close(fd);
+      if ( ret < 0 )
+	return ret;
+      char *p = strchr(pkt->name, '\n');
+      if ( p )
+	*p = 0;
+    }
+
+  op->stream = info->stream;
+  op->req = DSPD_SCTL_CLIENT_SETINFO;
+  op->inbuf = pkt;
+  op->inbufsize = sizeof(*pkt);
+  op->flags = DSPD_REQ_FLAG_CMSG_CRED;
+  if ( complete )
+    {
+      op->complete = complete;
+      op->data = arg;
+    } else
+    {
+      op->complete = sync_ctl_cb;
+      op->data = &done;
+    }
+  ret = dspd_aio_submit(ctx, op);
+  if ( ret == 0 )
+    op->reserved |= DSPD_AIO_DATABUF;
+  else
+    ctx->datalen = 0;
+    
+  if ( complete == NULL )
+    {
+      //Complete synchronously because there is no callback.
+      while ( done == false )
+	{
+	  ret = dspd_aio_process(ctx, 0, -1);
+	  if ( ret < 0 && ret != -EINPROGRESS )
+	    {
+	      if ( dspd_aio_cancel(ctx, op) == 0 )
+		dspd_aio_process(ctx, 0, 0);
+	      break;
+	    }
+	}
+      ret = op->error;
     }
   return ret;
 }
@@ -282,6 +380,12 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     ctx->op_in = -1;
   ctx->pending_ops_count--;
   assert(ctx->pending_ops_count >= 0);
+  if ( op->reserved & DSPD_AIO_DATABUF )
+    {
+      //This op uses the internal data buffer.
+      assert(ctx->datalen > 0);
+      ctx->datalen = 0;
+    }
   if ( op->complete )
     op->complete(ctx, op);
 }
@@ -578,6 +682,29 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
   return ret;
 }
 
+void dspd_aio_set_event_flag_cb(struct dspd_aio_ctx *ctx, 
+				 void (*event_flags_changed)(void *arg, uint32_t *flags),
+				 void *arg)
+{
+  ctx->event_flags_changed = event_flags_changed;
+  ctx->event_flags_changed_arg = arg;
+}
+
+uint32_t dspd_aio_get_event_flags(struct dspd_aio_ctx *ctx, bool clear)
+{
+  uint32_t ret = ctx->event_flags;
+  if ( clear )
+    ctx->event_flags = 0;
+  return ret;
+}
+
+uint32_t dspd_aio_revents(struct dspd_aio_ctx *ctx)
+{
+  uint32_t ret = ctx->revents;
+  ctx->revents = 0;
+  return ret;
+}
+
 int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 {
   ssize_t ret;
@@ -587,6 +714,7 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
   struct dspd_async_event *evt;
   void *ptr;
   size_t buflen;
+  uint32_t flags;
   ret = recv_header(ctx);
   if ( ret == 0 )
     {
@@ -614,6 +742,22 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 	      buf = NULL;
 	    }
 	  
+	  flags = ctx->req_in.flags & 0xFFFFU;
+	  if ( (flags ^ ctx->event_flags) != 0 )
+	    {
+	      ctx->event_flags |= flags;
+	      if ( ctx->event_flags_changed )
+		ctx->event_flags_changed(ctx->event_flags_changed_arg, &ctx->event_flags);
+
+	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLIN )
+		ctx->revents |= POLLIN;
+	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLOUT )
+		ctx->revents |= POLLOUT;
+	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLPRI )
+		ctx->revents |= POLLPRI;
+	    }
+	  
+
 	  //It is possible to have event flags carried by a regular reply.
 	  if ( ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT ||
 		 (ctx->req_in.flags & (0xFFFF ^ DSPD_REQ_FLAG_ERROR)) != 0 ) &&
