@@ -2300,7 +2300,9 @@ static int32_t daemon_reply_err(struct dspd_rctx *rctx,
 				int32_t flags, 
 				int32_t err)
 {
-  return err * -1;
+  if ( err > 0 )
+    err *= -1;
+  return err;
 }
 
 

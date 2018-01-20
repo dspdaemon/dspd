@@ -1069,6 +1069,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   snd_config_iterator_t cfgi, next;
   char hwdev[32];
   bool excl = false;
+
   *pcmp = NULL;
   dspd = calloc(1, sizeof(*dspd));
   if ( ! dspd )
@@ -1170,7 +1171,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   err = dspd_aio_connect((struct dspd_aio_ctx*)dspd->conn, NULL, NULL, NULL, NULL);
   if ( err < 0 )
     goto error;
-  
+
   
 
   dspd_conn_set_event_flag_cb(dspd->conn, dspd_event_flags_changed, dspd);
@@ -1281,6 +1282,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   if ( err )
     goto error;
 
+
+
   struct dspd_cli_info info;
   memset(&info, 0, sizeof(info));
   info.stream = dspd->client_stream;
@@ -1288,6 +1291,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   info.gid = DSPD_CLI_INFO_DEFAULT;
   info.pid = DSPD_CLI_INFO_DEFAULT;
   err = dspd_aio_set_info((struct dspd_aio_ctx*)dspd->conn, &info, NULL, NULL);
+
   if ( err < 0 )
     goto error;
 
@@ -1300,10 +1304,11 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 			NULL,
 			0,
 			&br);
+
   if ( err )
     goto error;
 
-  
+
   struct dspd_rclient_bindparams bparams = { 0 };
   bparams.client = dspd->client_stream;
   bparams.conn = dspd->conn;
@@ -1352,6 +1357,9 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
  
   dspd->io.private_data = dspd;
   snd_pcm_ioplug_reinit_status(&dspd->io);
+
+  
+
   return 0;
   
  error:

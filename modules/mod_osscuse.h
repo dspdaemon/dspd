@@ -240,4 +240,15 @@ struct osscuse_open_req {
   struct rtcuse_cdev_params params;
 };
 
+
+int32_t oss_mixer_add_devmap(int32_t device, void *context);
+void oss_mixer_remove_devmap(int32_t device);
+int32_t oss_mixer_ctl(void                *context,
+		      int32_t              stream,
+		      int32_t              cmd,
+		      const void          *inbuf,
+		      size_t               inbufsize,
+		      void                *outbuf,
+		      size_t               outbufsize,
+		      size_t              *bytes_returned);
 #endif

@@ -1962,14 +1962,14 @@ static int32_t nctl_mix_nrext(struct dspd_rctx *context,
   if ( idx < 0 )
     return dspd_req_reply_err(context, 0, ENODEV);
 
-  ret = dspd_stream_ctl(&dspd_dctx,
-			idx,
-			DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
-			NULL,
-			0,
-			&count,
-			sizeof(count),
-			&len);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      idx,
+		      DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
+		      NULL,
+		      0,
+		      &count,
+		      sizeof(count),
+		      &len);
   dspd_daemon_unref(idx);
   if ( ret == 0 )
     {
@@ -1989,14 +1989,14 @@ static int get_range(int devidx, int ctrlidx, int type, struct dspd_mix_range *r
   memset(&val, 0, sizeof(val));
   val.index = ctrlidx;
   val.type = type;
-  return dspd_stream_ctl(&dspd_dctx,
-			 devidx,
-			 DSPD_SCTL_SERVER_MIXER_GETRANGE,
-			 &val,
-			 sizeof(val),
-			 r,
-			 sizeof(*r),
-			 &len);
+  return oss_mixer_ctl(&dspd_dctx,
+		       devidx,
+		       DSPD_SCTL_SERVER_MIXER_GETRANGE,
+		       &val,
+		       sizeof(val),
+		       r,
+		       sizeof(*r),
+		       &len);
 }
 
 static int ctrl_channels(struct dspd_mix_info *info)
@@ -2049,26 +2049,26 @@ static int32_t nctl_mix_extinfo(struct dspd_rctx *context,
     {
       if ( ctrl >= 0 )
 	{
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				idx,
-				DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
-				&ctrl,
-				sizeof(ctrl),
-				&info,
-				sizeof(info),
-				&len);
+	  ret = oss_mixer_ctl(&dspd_dctx,
+			      idx,
+			      DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
+			      &ctrl,
+			      sizeof(ctrl),
+			      &info,
+			      sizeof(info),
+			      &len);
 	} else
 	{
 	  memset(&cmd, 0, sizeof(cmd));
 	  cmd.index = ctrl;
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				idx,
-				DSPD_SCTL_SERVER_MIXER_GETVAL,
-				&cmd,
-				sizeof(cmd),
-				&val,
-				sizeof(val),
-				&len);
+	  ret = oss_mixer_ctl(&dspd_dctx,
+			      idx,
+			      DSPD_SCTL_SERVER_MIXER_GETVAL,
+			      &cmd,
+			      sizeof(cmd),
+			      &val,
+			      sizeof(val),
+			      &len);
 	}
     }
   
@@ -2297,14 +2297,14 @@ static int32_t nctl_mix_read(struct dspd_rctx *context,
   if ( idx < 0 )
     return dspd_req_reply_err(context, 0, ENODEV);
   ctrl = in->ctrl - 1;
-  ret = dspd_stream_ctl(&dspd_dctx,
-			idx,
-			DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
-			&ctrl,
-			sizeof(ctrl),
-			&info,
-			sizeof(info),
-			&len);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      idx,
+		      DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
+		      &ctrl,
+		      sizeof(ctrl),
+		      &info,
+		      sizeof(info),
+		      &len);
   if ( ret == 0 )
     {
       channels = ctrl_channels(&info);
@@ -2346,27 +2346,27 @@ static int32_t nctl_mix_read(struct dspd_rctx *context,
       cmd.type = check_type(&info);
       cmd.tstamp = (unsigned int)in->timestamp;
       cmd.flags = DSPD_CTRLF_TSTAMP_32BIT;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    idx,
-			    DSPD_SCTL_SERVER_MIXER_GETVAL,
-			    &cmd,
-			    sizeof(cmd),
-			    &val,
-			    sizeof(val),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  idx,
+			  DSPD_SCTL_SERVER_MIXER_GETVAL,
+			  &cmd,
+			  sizeof(cmd),
+			  &val,
+			  sizeof(val),
+			  &len);
       if ( channels == 2 && ret == 0 )
 	{
 	  cmd.channel = last_channel(&info);
 	  if ( cmd.channel == -1 )
 	    cmd.channel = 0; //Seems to to work
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				idx,
-				DSPD_SCTL_SERVER_MIXER_GETVAL,
-				&cmd,
-				sizeof(cmd),
-				&val2,
-				sizeof(val2),
-				&len);
+	  ret = oss_mixer_ctl(&dspd_dctx,
+			      idx,
+			      DSPD_SCTL_SERVER_MIXER_GETVAL,
+			      &cmd,
+			      sizeof(cmd),
+			      &val2,
+			      sizeof(val2),
+			      &len);
 	}
       
     } 
@@ -2414,14 +2414,14 @@ static int32_t nctl_mix_write(struct dspd_rctx *context,
   if ( idx < 0 )
     return dspd_req_reply_err(context, 0, ENODEV);
   ctrl = in->ctrl - 1;
-  ret = dspd_stream_ctl(&dspd_dctx,
-			idx,
-			DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
-			&ctrl,
-			sizeof(ctrl),
-			&info,
-			sizeof(info),
-			&len);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      idx,
+		      DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
+		      &ctrl,
+		      sizeof(ctrl),
+		      &info,
+		      sizeof(info),
+		      &len);
   if ( ret == 0 )
     {
       channels = ctrl_channels(&info);
@@ -2465,26 +2465,26 @@ static int32_t nctl_mix_write(struct dspd_rctx *context,
 	  cmd.channel = -1; //All
 	  cmd.value = in->value;
 	}
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    idx,
-			    DSPD_SCTL_SERVER_MIXER_SETVAL,
-			    &cmd,
-			    sizeof(cmd),
-			    NULL,
-			    0,
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  idx,
+			  DSPD_SCTL_SERVER_MIXER_SETVAL,
+			  &cmd,
+			  sizeof(cmd),
+			  NULL,
+			  0,
+			  &len);
       if ( ret == 0 && channels == 2 )
 	{
 	  cmd.value = in->value >> shift;
 	  cmd.channel = last_channel(&info);
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				idx,
-				DSPD_SCTL_SERVER_MIXER_SETVAL,
-				&cmd,
-				sizeof(cmd),
-				NULL,
-				0,
-				&len);
+	  ret = oss_mixer_ctl(&dspd_dctx,
+			      idx,
+			      DSPD_SCTL_SERVER_MIXER_SETVAL,
+			      &cmd,
+			      sizeof(cmd),
+			      NULL,
+			      0,
+			      &len);
 	}
     } 
   dspd_daemon_unref(idx);
@@ -2780,22 +2780,22 @@ static int32_t nctl_mixerinfo(struct dspd_rctx *context,
     return dspd_req_reply_err(context, 0, ENODEV);
   
   ret = dspd_stream_ctl(&dspd_dctx,
-			  idx,
-			  DSPD_SCTL_SERVER_STAT,
-			  NULL,
-			  0,
-			  &devinfo,
-			  sizeof(devinfo),
-			  &len);
+			idx,
+			DSPD_SCTL_SERVER_STAT,
+			NULL,
+			0,
+			&devinfo,
+			sizeof(devinfo),
+			&len);
   if ( ret == 0 )
-    ret = dspd_stream_ctl(&dspd_dctx,
-			  idx,
-			  DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
-			  NULL,
-			  0,
-			  &nrext,
-			  sizeof(nrext),
-			  &len);
+    ret = oss_mixer_ctl(&dspd_dctx,
+			idx,
+			DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
+			NULL,
+			0,
+			&nrext,
+			sizeof(nrext),
+			&len);
   if ( ret == 0 )
     {
       ret = dspd_stream_ctl(&dspd_dctx,
@@ -2885,14 +2885,14 @@ static int32_t nctl_enuminfo(struct dspd_rctx *context,
   for ( i = 0; i < OSS_ENUM_MAXVALUE; i++ )
     {
       eidx.enum_idx = i;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    idx,
-			    DSPD_SCTL_SERVER_MIXER_ENUM_INFO,
-			    &eidx,
-			    sizeof(eidx),
-			    &info,
-			    sizeof(info),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  idx,
+			  DSPD_SCTL_SERVER_MIXER_ENUM_INFO,
+			  &eidx,
+			  sizeof(eidx),
+			  &info,
+			  sizeof(info),
+			  &len);
       if ( ret == EINVAL )
 	{
 	  ret = 0;
@@ -3055,14 +3055,14 @@ static int32_t get_current_recsrc(struct oss_cdev_client *cli, int32_t *val)
       cmd.channel = first_bit(elem->channels);
       if ( cmd.channel < 0 )
 	cmd.channel = 0;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    cli->device_index,
-			    DSPD_SCTL_SERVER_MIXER_GETVAL,
-			    &cmd,
-			    sizeof(cmd),
-			    &data,
-			    sizeof(data),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  cli->device_index,
+			  DSPD_SCTL_SERVER_MIXER_GETVAL,
+			  &cmd,
+			  sizeof(cmd),
+			  &data,
+			  sizeof(data),
+			  &len);
       if ( ret != 0 )
 	return ret;
       if ( data.value < elem->enum_count )
@@ -3093,14 +3093,14 @@ static int32_t set_rec_bit(struct oss_cdev_client *cli, const struct oss_mix_ele
 	      cmd.value = i;
 	      cmd.channel = -1;
 	      cmd.type = elem->type;
-	      ret = dspd_stream_ctl(&dspd_dctx,
-				    cli->device_index,
-				    DSPD_SCTL_SERVER_MIXER_SETVAL,
-				    &cmd,
-				    sizeof(cmd),
-				    NULL,
-				    0,
-				    &len);
+	      ret = oss_mixer_ctl(&dspd_dctx,
+				  cli->device_index,
+				  DSPD_SCTL_SERVER_MIXER_SETVAL,
+				  &cmd,
+				  sizeof(cmd),
+				  NULL,
+				  0,
+				  &len);
 	      if ( ret == 0 )
 		*val = v & ~n;
 	      break;
@@ -3256,28 +3256,28 @@ static int32_t ctl_mixer_readwrite(struct dspd_rctx *context,
   cmd.tstamp = elem->tstamp;
   cmd.flags = DSPD_CTRLF_SCALE_PCT;
   cmd.value = input_val & 0xFF;
-  ret = dspd_stream_ctl(&dspd_dctx,
-			cli->device_index,
-			sreq,
-			&cmd,
-			sizeof(cmd),
-			&val,
-			sizeof(val),
-			&len);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      cli->device_index,
+		      sreq,
+		      &cmd,
+		      sizeof(cmd),
+		      &val,
+		      sizeof(val),
+		      &len);
   if ( ret )
     goto error;
   if ( stereo )
     {
       cmd.channel = last_bit(elem->channels);
       cmd.value = input_val >> 8U;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    cli->device_index,
-			    sreq,
-			    &cmd,
-			    sizeof(cmd),
-			    &val2,
-			    sizeof(val2),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  cli->device_index,
+			  sreq,
+			  &cmd,
+			  sizeof(cmd),
+			  &val2,
+			  sizeof(val2),
+			  &len);
       if ( ret )
 	goto error;
       result = val.value;
@@ -3327,14 +3327,14 @@ static int32_t ctl_mixer_info(struct dspd_rctx *context,
       //Got new mixer_info struct.
       memset(&cmd, 0, sizeof(cmd));
       cmd.index = UINT32_MAX;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    cli->device_index,
-			    DSPD_SCTL_SERVER_MIXER_GETVAL,
-			    &cmd,
-			    sizeof(cmd),
-			    &val,
-			    sizeof(val),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  cli->device_index,
+			  DSPD_SCTL_SERVER_MIXER_GETVAL,
+			  &cmd,
+			  sizeof(cmd),
+			  &val,
+			  sizeof(val),
+			  &len);
       if ( ret )
 	return dspd_req_reply_err(context, 0, ret);
       info->modify_counter = val.update_count;
@@ -3667,14 +3667,14 @@ static int init_enum(int32_t device,
 
   val.index = idx;
   val.type = DSPD_MIXF_ENUM;
-  ret = dspd_stream_ctl(&dspd_dctx,
-			device,
-			DSPD_SCTL_SERVER_MIXER_GETRANGE,
-			&val,
-			sizeof(val),
-			&r,
-			sizeof(r),
-			&len);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      device,
+		      DSPD_SCTL_SERVER_MIXER_GETRANGE,
+		      &val,
+		      sizeof(val),
+		      &r,
+		      sizeof(r),
+		      &len);
   if ( ret )
     return ret;
   
@@ -3691,14 +3691,14 @@ static int init_enum(int32_t device,
   for ( i = 0; i < r.max; i++ )
     {
       eidx.enum_idx = i;
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    device,
-			    DSPD_SCTL_SERVER_MIXER_ENUM_INFO,
-			    &eidx,
-			    sizeof(eidx),
-			    &einfo,
-			    sizeof(einfo),
-			    &len);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  device,
+			  DSPD_SCTL_SERVER_MIXER_ENUM_INFO,
+			  &eidx,
+			  sizeof(eidx),
+			  &einfo,
+			  sizeof(einfo),
+			  &len);
       if ( ret )
 	return ret;
       einfo.flags = DSPD_MIXF_CVOL;
@@ -3750,14 +3750,14 @@ int oss_new_legacy_mixer_assignments(int32_t device, struct oss_legacy_mixer_tab
     tbl->elements[i].elem_index = -1;
 
 
-  ret = dspd_stream_ctl(&dspd_dctx,
-			device,
-			DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
-			NULL,
-			0,
-			&count,
-			sizeof(count),
-			&br);
+  ret = oss_mixer_ctl(&dspd_dctx,
+		      device,
+		      DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
+		      NULL,
+		      0,
+		      &count,
+		      sizeof(count),
+		      &br);
   if ( ret )
     goto out;
   if ( count == 0 )
@@ -3775,14 +3775,14 @@ int oss_new_legacy_mixer_assignments(int32_t device, struct oss_legacy_mixer_tab
   
   for ( i = 0; i < count; i++ )
     {
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    device,
-			    DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
-			    &i,
-			    sizeof(i),
-			    &info,
-			    sizeof(info),
-			    &br);
+      ret = oss_mixer_ctl(&dspd_dctx,
+			  device,
+			  DSPD_SCTL_SERVER_MIXER_ELEM_INFO,
+			  &i,
+			  sizeof(i),
+			  &info,
+			  sizeof(info),
+			  &br);
       if ( ret < 0 )
 	goto out;
       elem = &tbl->elements[i];

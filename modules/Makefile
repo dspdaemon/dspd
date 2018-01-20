@@ -33,7 +33,7 @@ libsamplerate:
 	$(CC) $(CFLAGS) $(MLIBS) -lsamplerate -shared -o mod_libsamplerate.so mod_libsamplerate.c
 
 osscuse:
-	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_osscuse.so mod_osscuse.c io_osscuse.c rtcuse.c
+	$(CC) $(CFLAGS) $(MLIBS) -shared -o mod_osscuse.so mod_osscuse.c io_osscuse.c rtcuse.c oss_ctlmap.c
 	$(CC) $(CFLAGS) $(MLIBS) -o osscuse_cdev_helper osscuse_cdev_helper.c rtcuse.c
 udev:
 	$(CC) $(CFLAGS) $(MLIBS) -lasound -ludev -shared -o mod_udev.so mod_udev.c

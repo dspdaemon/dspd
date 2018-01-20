@@ -1195,6 +1195,8 @@ static int ctl_new_client(struct oss_dsp_cdev *dev, struct oss_cdev_client **cli
     }
   c->cdev->clients[c->cdev_slot] = c;
 
+  
+
   *cliptr = c;
   return 0;
 
@@ -1917,9 +1919,17 @@ static bool cdev_destructor(void *data,
 {
   struct oss_dsp_cdev *cdev = data;
   if ( cdev->is_mixer )
-    dspd_log(0, "Destroying control device %d", cdev->cdev_index);
-  else
-    dspd_log(0, "Destroying character device %d", cdev->cdev_index);
+    {
+      dspd_log(0, "Destroying control device %d", cdev->cdev_index);
+      if ( cdev->playback_index >= 0 )
+	oss_mixer_remove_devmap(cdev->playback_index);
+      if ( cdev->capture_index >= 0 )
+	oss_mixer_remove_devmap(cdev->capture_index);
+      
+    } else
+    {
+      dspd_log(0, "Destroying character device %d", cdev->cdev_index);
+    }
   cdev_destroy(cdev);
   return false;
 }
@@ -2088,7 +2098,12 @@ static struct oss_dsp_cdev *ctl_new(int32_t device, const struct dspd_device_sta
   if ( dspd_mutex_init(&dev->lock, NULL) != 0 )
     goto error;
 
-  
+  if ( device > 0 )
+    {
+      err = oss_mixer_add_devmap(device, &dspd_dctx);
+      if ( err < 0 )
+	dspd_log(0, "Could not add device %d to oss mixer map.  Using raw controls.", device);
+    }
  
   return dev;
 

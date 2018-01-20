@@ -121,10 +121,12 @@ int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx,
       strlcpy(pkt->name, info->name, sizeof(pkt->name));
     } else
     {
-      ret = snprintf(path, sizeof(path), "/proc/self/task/%d/comm", pid);
+      if ( pid > 0 )
+	ret = snprintf(path, sizeof(path), "/proc/self/task/%d/comm", pid);
+      else
+	ret = strlcpy(path, "/proc/self/comm", sizeof(path) - 1UL);
       if ( ret >= sizeof(path) )
 	return -ENAMETOOLONG; //Should not happen.
-      
       //Get the name of this thread.  It could be the main thread and the only thread in
       //this process.
       fd = open(path, O_RDONLY);
