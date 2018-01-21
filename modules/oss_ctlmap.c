@@ -357,9 +357,11 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
   uint32_t chmask, m;
   size_t i;
   const char *name;
-  
+  size_t ctl_count;
   if ( rctl->info.flags & (DSPD_MIXF_PVOL|DSPD_MIXF_PDB) )
     {
+      ctl = NULL;
+      ctl_count = 0;
       chmask = rctl->info.pchan_mask;
       for ( i = 0; i < DSPD_MIXER_CHN_LAST; i++ )
 	{
@@ -374,6 +376,7 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
 		  ctl->info.pchan_mask = m;
 		  chmask &= ~m;
 		  set_range(ctl);
+		  ctl_count++;
 		  strlcpy(ctl->info.name, name, sizeof(ctl->info.name));
 		} else
 		{
@@ -382,7 +385,7 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
 		}
 	    }
 	}
-      if ( chmask )
+      if ( ret == 0 && chmask != 0 )
 	{
 	  for ( i = 0; i < DSPD_MIXER_CHN_LAST; i++ )
 	    {
@@ -392,6 +395,7 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
 		  ctl = add_ctl(map, rctl, DSPD_MIXF_PVOL);
 		  if ( ctl )
 		    {
+		      ctl_count++;
 		      ctl->info.flags = rctl->info.flags & (DSPD_MIXF_PVOL|DSPD_MIXF_PDB|DSPD_MIXF_PMONO|DSPD_MIXF_PVJOINED|DSPD_MIXF_COMMVOL);
 		      ctl->info.pchan_mask = m;
 		      chmask &= ~m;
@@ -407,6 +411,9 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
 		}
 	    }
 	}
+      //If there is only one control, then use the control name instead of the channel or channel pair name.
+      if ( ctl_count == 1 && ctl != NULL )
+	strlcpy(ctl->info.name, rctl->info.name, sizeof(rctl->info.name));
       
     }
   if ( rctl->info.flags & (DSPD_MIXF_CVOL|DSPD_MIXF_CDB) )
