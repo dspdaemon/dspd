@@ -360,8 +360,8 @@ void dsp_write(struct oss_cdev_client *cli,
     flags |= O_NONBLOCK; //Can't block if trigger bit is not set.
   flags |= cli->dsp.fflags;
 
-  if ( dspd_dctx.debug && (size % cli->dsp.frame_bytes) )
-    fprintf(stderr, "Got invalid write size\n");
+  //if ( dspd_dctx.debug && (size % cli->dsp.frame_bytes) )
+  //fprintf(stderr, "Got invalid write size\n");
 
   size = (size / cli->dsp.frame_bytes) * cli->dsp.frame_bytes;
 
@@ -2425,25 +2425,28 @@ static int32_t nctl_mix_write(struct dspd_rctx *context,
   if ( ret == 0 )
     {
       channels = ctrl_channels(&info);
-      if ( channels == 2 )
+      
+      if ( channels == 2 || channels == 1 )
 	{
 	  ret = get_range(idx, ctrl, check_type(&info), &r);
 	  if ( ret == 0 )
 	    {
 	      if ( r.min == 0 && r.max == 255 )
 		{
-		  shift = 8;
+		  if ( channels == 2 )
+		    shift = 8;
 		  mask = 0xFF;
 		} else if ( r.min == 0 && r.max == 32767 )
 		{
-		  shift = 16;
+		  if ( channels == 2 )
+		    shift = 16;
 		  mask = 0xFFFF;
 		} else
 		{
 		  channels = 1;
 		}
 	    }
-	}
+	} 
     }
 
 
@@ -2454,7 +2457,7 @@ static int32_t nctl_mix_write(struct dspd_rctx *context,
       cmd.type = check_type(&info);
       cmd.tstamp = (unsigned int)in->timestamp;
       cmd.flags = DSPD_CTRLF_TSTAMP_32BIT;
-      if ( channels == 2 )
+      if ( channels == 2 || channels == 1 )
 	{
 	  cmd.value = in->value & mask;
 	  cmd.channel = first_channel(&info);
@@ -2465,6 +2468,7 @@ static int32_t nctl_mix_write(struct dspd_rctx *context,
 	  cmd.channel = -1; //All
 	  cmd.value = in->value;
 	}
+      get_range(idx, ctrl, check_type(&info), &r);
       ret = oss_mixer_ctl(&dspd_dctx,
 			  idx,
 			  DSPD_SCTL_SERVER_MIXER_SETVAL,
@@ -2831,7 +2835,6 @@ static int32_t nctl_mixerinfo(struct dspd_rctx *context,
       ret = dspd_req_reply_buf(context, 0, out, sizeof(*out));
     } else
     {
-      fprintf(stderr, "ERROR %d\n", ret);
       ret = dspd_req_reply_err(context, 0, EINVAL);
     }
   return ret;

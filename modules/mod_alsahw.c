@@ -1201,7 +1201,7 @@ static int32_t alsa_mixer_elem_info(struct dspd_rctx *rctx,
 	   info->update_count = elem->update_count;
 	   info->ctl_index = snd_mixer_selem_get_index(e);
 	   strlcpy(info->name, name, sizeof(info->name));
-	   
+	  
 	   if ( elem->flags & DSPD_MIXF_PLAYBACK )
 	     {
 	       for ( i = 0; i < DSPD_MIXER_CHN_LAST; i++ )
@@ -1220,6 +1220,13 @@ static int32_t alsa_mixer_elem_info(struct dspd_rctx *rctx,
 	{
 	  ret = -EINVAL;
 	}
+    } else if ( idx == UINT32_MAX )
+    {
+      memset(info, 0, sizeof(*info));
+      info->update_count = hdl->mixer_update_count;
+      info->tstamp = hdl->mixer_tstamp;
+      info->ctl_index = -1;
+      ret = 0;
     } else
     {
       ret = -EINVAL;
