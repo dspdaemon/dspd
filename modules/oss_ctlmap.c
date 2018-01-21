@@ -1,3 +1,25 @@
+/*
+ *   OSS_CTLMAP - Map ALSA style controls to an OSSv4 compatible layout
+ *
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
+ */
+
+
+
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +52,16 @@ struct dspd_ctl_map {
 
 
 
-//ossxmix has some problems with control ranges that include negative numbers.
+/*
+
+  The ossxmix utility has some problems with control ranges that include negative numbers and OSS
+  can't understand multi channel controls.  OSS tends to expose controls intended for a GUI and
+  ALSA tends to expose low level hardware controls.  The information that the OSS API expects is similar
+  to what alsamixer generates internally for its user interface.  For that reason, this code is based
+  on the way alsamixer works.  If a device doesn't show up correctly in ossxmix, then the best thing to
+  do is find out what alsamixer is doing and try to duplicate that here.
+
+*/
 
 //mapped value to native control
 static int32_t m2ctl(const struct dspd_ctlm *ctl, int32_t mval)
@@ -245,7 +276,6 @@ static const char *is_paired(int32_t mask, uint32_t firstbit)
   };
 
   size_t i;
-  int32_t m;
   const char *ret = NULL;
   const struct ctl_chpair *p;
   uint32_t nextbit = firstbit + 1;
@@ -365,7 +395,8 @@ static int32_t add_voldb(struct dspd_ctl_map *map, const struct dspd_ctlm *rctl)
 		      ctl->info.flags = rctl->info.flags & (DSPD_MIXF_PVOL|DSPD_MIXF_PDB|DSPD_MIXF_PMONO|DSPD_MIXF_PVJOINED|DSPD_MIXF_COMMVOL);
 		      ctl->info.pchan_mask = m;
 		      chmask &= ~m;
-		      strlcpy(ctl->info.name, name, sizeof(ctl->info.name));
+		      if ( strcmp(name, "Mono") != 0 )
+			strlcpy(ctl->info.name, name, sizeof(ctl->info.name));
 		      if ( chmask != ctl->info.pchan_mask )
 			set_range(ctl);
 		    } else
