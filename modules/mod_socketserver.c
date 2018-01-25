@@ -1127,6 +1127,8 @@ static int32_t merge_params(struct dspd_cli_params *p,
       p->max_latency = 0;
       p->src_quality = MIN(pparams->src_quality, cparams->src_quality);
       p->xflags = pparams->xflags | DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS;
+      assert(cparams->format == pparams->format);
+      p->format = pparams->format;
       ret = 0;
     } else
     {
@@ -1262,28 +1264,44 @@ static int32_t client_setparams(struct dspd_rctx *context,
       if ( (p->stream & DSPD_PCM_SBIT_PLAYBACK) && pstream >= 0 )
 	{
 	  ret = copy_cli_params(&params, p, DSPD_PCM_SBIT_PLAYBACK);
+	  
 	  if ( ret == 0 )
-	    ret = dspd_stream_ctl(&dspd_dctx,
-				  pstream,
-				  DSPD_SCTL_CLIENT_SETPARAMS,
-				  &params,
-				  sizeof(params),
-				  &pparams,
-				  sizeof(pparams),
-				  &br);
+	    {
+	      assert(params.format == p->format);
+	      ret = dspd_stream_ctl(&dspd_dctx,
+				    pstream,
+				    DSPD_SCTL_CLIENT_SETPARAMS,
+				    &params,
+				    sizeof(params),
+				    &pparams,
+				    sizeof(pparams),
+				    &br);
+	      if ( ret == 0 )
+		{
+		  assert(pparams.format == params.format);
+		}
+	    }
+	  
 	}
       if ( ret == 0 && (p->stream & DSPD_PCM_SBIT_CAPTURE) && cstream >= 0 )
 	{
 	  ret = copy_cli_params(&params, p, DSPD_PCM_SBIT_CAPTURE);
 	  if ( ret == 0 )
-	    ret = dspd_stream_ctl(&dspd_dctx,
-				  cstream,
-				  DSPD_SCTL_CLIENT_SETPARAMS,
-				  &params,
-				  sizeof(params),
-				  &cparams,
-				  sizeof(cparams),
-				  &br);
+	    {
+	      assert(params.format == p->format);
+	      ret = dspd_stream_ctl(&dspd_dctx,
+				    cstream,
+				    DSPD_SCTL_CLIENT_SETPARAMS,
+				    &params,
+				    sizeof(params),
+				    &cparams,
+				    sizeof(cparams),
+				    &br);
+	      if ( ret == 0 )
+		{
+		  assert(cparams.format == params.format);
+		}
+	    }
 	}
     }
   if ( ret == 0 )

@@ -1475,7 +1475,7 @@ static void capture_xfer(void                            *dev,
   uint32_t count = 0;
   struct dspd_pcm_status *cs;
   const float *infr;
-  size_t i, c, j;
+  volatile size_t i, c, j;
   struct dspd_chmap *map = &cli->capture_cmap.map;
   float volume = dspd_load_float32(&cli->capture.volume);
   uint32_t client_hwptr, client_aptr;
@@ -1501,7 +1501,6 @@ static void capture_xfer(void                            *dev,
 
   
 
- 
  
   while ( offset < frames && space > 0 )
     {

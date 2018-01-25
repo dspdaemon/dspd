@@ -1357,7 +1357,8 @@ static void process_client_capture(struct dspd_pcm_device *dev,
 	  diff = pointer - dev->capture.status->appl_ptr;
 	  adj = dev->capture.ops->adjust_pointer(dev->capture.handle, diff);
 	  len = dev->capture.cycle.len - adj;
-	  offset = adj + dev->capture.cycle.offset;
+	  offset = (adj + dev->capture.cycle.offset) % dev->capture.params.bufsize;
+	  
 	  if ( max_xfer > len )
 	    max_xfer = len;
 	  ops->capture_xfer(dev,
