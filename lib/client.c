@@ -36,7 +36,7 @@
 struct dspd_client {
   struct dspd_client_stream     playback;
   struct dspd_client_stream     capture;
-  const struct dspd_pcmcli_ops *ops;
+  const struct dspd_client_ops *ops;
   uint32_t                      latency;
   int32_t                       index;
   int32_t                       device;
@@ -172,7 +172,7 @@ static void client_error(void *dev, int32_t index, void *client, int32_t err)
 }
 
 
-static const struct dspd_pcmcli_ops client_ops = {
+static const struct dspd_client_ops client_ops = {
   .get_playback_status = get_playback_status,
   .playback_xfer = playback_xfer,
 

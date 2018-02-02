@@ -1,6 +1,8 @@
 #ifndef _DSPDAIO_H_
 #define _DSPDAIO_H_
 struct ucred;
+struct dspd_async_op;
+typedef void (*dspd_aio_ccb_t)(void *context, struct dspd_async_op *op);
 struct dspd_async_op {
   uint32_t     stream;
   uint32_t     req;
@@ -15,7 +17,7 @@ struct dspd_async_op {
   void        *data;
   uint32_t     flags;
   uint64_t     reserved;
-  void (*complete)(void *context, struct dspd_async_op *op);
+  dspd_aio_ccb_t complete;
 };
 
 struct dspd_aio_ops {
@@ -153,7 +155,7 @@ uint32_t dspd_aio_revents(struct dspd_aio_ctx *ctx);
 
 int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx, 
 			  const struct dspd_cli_info *info,
-			  void (*complete)(void *context, struct dspd_async_op *op),
+			  dspd_aio_ccb_t complete,
 			  void *arg);
 
 struct dspd_aio_fifo_master;

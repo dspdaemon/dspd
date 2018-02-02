@@ -92,7 +92,7 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 
 int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx, 
 			  const struct dspd_cli_info *info,
-			  void (*complete)(void *context, struct dspd_async_op *op),
+			  dspd_aio_ccb_t complete,
 			  void *arg)
 {
   struct dspd_async_op *op;

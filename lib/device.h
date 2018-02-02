@@ -11,7 +11,7 @@
 #include <setjmp.h>
 
 struct dspd_pcmcli_status;
-struct dspd_pcmcli_ops;
+struct dspd_client_ops;
 
 #include "atomic.h"
 //Maximum objects supported.  Don't change this.

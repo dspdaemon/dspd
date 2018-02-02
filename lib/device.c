@@ -976,7 +976,7 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
 
 static bool process_rewound_playback(struct dspd_pcm_device *dev,
 				     void *client,
-				     const struct dspd_pcmcli_ops *ops,
+				     const struct dspd_client_ops *ops,
 				     uint64_t *pointer,
 				     uint32_t  frames,
 				     uint32_t  rw)
@@ -1046,7 +1046,7 @@ static intptr_t safe_rewindable(struct dspd_pcm_device *dev, intptr_t latency)
 
 static bool process_client_playback(struct dspd_pcm_device *dev,
 				    void *client,
-				    const struct dspd_pcmcli_ops *ops)
+				    const struct dspd_client_ops *ops)
 {
   uint64_t pointer, start_count;
   uint32_t latency;
@@ -1239,7 +1239,7 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 
 static bool process_rewound_capture(struct dspd_pcm_device *dev,
 				    void *client,
-				    const struct dspd_pcmcli_ops *ops,
+				    const struct dspd_client_ops *ops,
 				    uint64_t *pointer,
 				    uint32_t  frames)
 {
@@ -1283,7 +1283,7 @@ static bool process_rewound_capture(struct dspd_pcm_device *dev,
 
 static void process_client_capture(struct dspd_pcm_device *dev,
 				   void *client,
-				   const struct dspd_pcmcli_ops *ops)
+				   const struct dspd_client_ops *ops)
 {
   int32_t ret;
   uint64_t pointer, start_count;
@@ -1395,7 +1395,7 @@ static void process_client_capture(struct dspd_pcm_device *dev,
 
 static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32_t error)
 {
-  struct dspd_pcmcli_ops *cli_ops;
+  struct dspd_client_ops *cli_ops;
   struct dspd_pcmsrv_ops *srv_ops;
   void *cli;
   if ( error == -1 )
@@ -1506,7 +1506,7 @@ static bool process_clients_once(struct dspd_pcm_device *dev, uint32_t ops)
   int32_t maxidx, i, c;
   bool playback = false, capture = false, pr, cr, err = 0;
   uint8_t tm;
-  struct dspd_pcmcli_ops *cli_ops;
+  struct dspd_client_ops *cli_ops;
   struct dspd_pcmsrv_ops *srv_ops;
   void *cli;
 
@@ -2467,7 +2467,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
   int ret;
   int client, c;
   uint8_t tm;
-  struct dspd_pcmcli_ops *cli_ops;
+  struct dspd_client_ops *cli_ops;
   struct dspd_pcmsrv_ops *srv_ops;
   void *cli;
   bool error = false;

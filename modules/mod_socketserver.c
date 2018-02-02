@@ -1558,36 +1558,40 @@ static int32_t client_getchannelmap(struct dspd_rctx *context,
   int32_t pstream = -1, cstream = -1;
   int32_t stream = *(int32_t*)inbuf, ret = EINVAL;
   size_t br = 0;
+  char *ptr = outbuf;
+  size_t offset = 0;
   ret = get_streams(context, &cli, &pstream, &cstream, stream);
   if ( ret == 0 )
     {
-      if ( stream == DSPD_PCM_SBIT_PLAYBACK )
+      if ( stream & DSPD_PCM_SBIT_PLAYBACK )
 	{
 	  ret = dspd_stream_ctl(&dspd_dctx,
 				pstream,
 				req,
 				inbuf,
 				inbufsize,
-				outbuf,
+				ptr,
 				outbufsize,
 				&br);
-	} else if ( stream == DSPD_PCM_SBIT_CAPTURE )
+	  if ( ret == 0 )
+	    offset += br;
+	}
+      if ( ret == 0 && (stream & DSPD_PCM_SBIT_CAPTURE) )
 	{
 	  ret = dspd_stream_ctl(&dspd_dctx,
 				cstream,
 				req,
 				inbuf,
 				inbufsize,
-				outbuf,
-				outbufsize,
+				&ptr[offset],
+				outbufsize - offset,
 				&br);
-	} else
-	{
-	  ret = EBADF;
+	  if ( ret == 0 )
+	    offset += br;
 	}
     }
-  if ( ret == 0 && br > 0 )
-    ret = dspd_req_reply_buf(context, 0, outbuf, outbufsize);
+  if ( ret == 0 && offset > 0 )
+    ret = dspd_req_reply_buf(context, 0, outbuf, offset);
   else
     ret = dspd_req_reply_err(context, 0, ret);
   return ret;

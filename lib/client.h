@@ -59,7 +59,7 @@ struct dspd_pcmcli_status {
 };
 
 
-struct dspd_pcmcli_ops {
+struct dspd_client_ops {
 
   int32_t (*get_playback_status)(void     *dev,
 				 void     *client,      

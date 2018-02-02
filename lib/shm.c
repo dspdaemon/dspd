@@ -107,6 +107,7 @@ static size_t calculate_size(const struct dspd_shm_addr *sect,
   uint64_t ret = sizeof(struct dspd_shm_header);
   uint32_t i, s;
   const struct dspd_shm_addr *sptr;
+  size_t p = sysconf(_SC_PAGESIZE);
   ret += (sizeof(struct dspd_shm_section) * nsect);
   for ( i = 0; i < nsect; i++ )
     {
@@ -116,6 +117,8 @@ static size_t calculate_size(const struct dspd_shm_addr *sect,
 	s++;
       ret += (s * SHM_ALIGN);
     }
+  if ( ret % p )
+    ret = ((ret / p) + 1) * p;
   if ( ret > UINT32_MAX )
     ret = 0;
   return ret;
