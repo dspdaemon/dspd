@@ -111,7 +111,6 @@ typedef struct _snd_pcm_dspd {
   } chmap;
 
   snd_pcm_uframes_t appl_ptr;
-
   bool dead;
   bool excl;
   size_t min_periods;
@@ -209,35 +208,31 @@ static int dspd_stop(snd_pcm_ioplug_t *io)
 static int dspd_alsa_pause(snd_pcm_ioplug_t *io, int enable)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
-  int ret;
+  int32_t ret;
   size_t br;
+  snd_pcm_uframes_t fill;
+  const struct dspd_rclient_swparams *swparams = dspd_rclient_get_sw_params(dspd->client);
   if ( dspd_rclient_get_trigger(dspd->client) != dspd->stream ||
        dspd_rclient_get_streams(dspd->client) != dspd->stream )
     return -EBADFD;
   dspd_update_pointer(dspd);
-
   if ( enable )
     {
-      ret = dspd_rclient_ctl(dspd->client,
-			     DSPD_SCTL_CLIENT_STOP,
-			     &dspd->stream,
-			     sizeof(dspd->stream),
-			     NULL,
-			     0,
-			     &br);
-    } else
-    {
-      ret = dspd_rclient_ctl(dspd->client,
-			     DSPD_SCTL_CLIENT_START,
-			     &dspd->stream,
-			     sizeof(dspd->stream),
-			     NULL,
-			     0,
-			     &br);
+      if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  fill = io->appl_ptr - io->hw_ptr;
+	  if ( fill < swparams->start_threshold )
+	    return 0;
+	}
     }
-  //if ( ret == 0 )
-  //dspd->client.trigger = 0;
-  
+
+  ret = dspd_rclient_ctl(dspd->client,
+			 DSPD_SCTL_CLIENT_PAUSE,
+			 &enable,
+			 sizeof(enable),
+			 NULL,
+			 0,
+			 &br);
   return ret;
 }
 

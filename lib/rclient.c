@@ -1990,6 +1990,66 @@ static int32_t rclient_synccmd(struct dspd_rclient *client,
   return ret;
 }
 
+static int32_t rclient_pause(struct dspd_rclient *client,
+			     uint32_t req,
+			     const void   *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize,
+			     size_t       *bytes_returned)
+{
+  dspd_time_t tstamps[2] = { 0, 0 };
+  int32_t ret;
+  int32_t enable;
+  size_t br;
+  if ( inbufsize != sizeof(enable) )
+    return -EINVAL;
+  enable = *(int32_t*)inbuf;
+  *bytes_returned = 0;
+  ret = dspd_stream_ctl(client->bparams.conn,
+			client->bparams.client,
+			req,
+			&enable,
+			sizeof(enable),
+			tstamps,
+			sizeof(tstamps),
+			&br);
+  if ( ret == 0 )
+    {
+      if ( outbuf != NULL && outbufsize >= sizeof(tstamps) )
+	{
+	  memcpy(outbuf, tstamps, sizeof(tstamps));
+	  *bytes_returned = sizeof(tstamps);
+	}
+      if ( PLAYBACK_ENABLED(client) )
+	{
+	  if ( enable )
+	    {
+	      dspd_mbx_reset(&client->playback.mbx);
+	      dspd_intrp_reset(&client->playback_intrp);
+	      client->playback.trigger_tstamp = 0;
+	    } else if ( br == sizeof(tstamps) )
+	    {
+	      client->playback.trigger_tstamp = tstamps[DSPD_PCM_STREAM_PLAYBACK];
+	    }
+	}
+      if ( CAPTURE_ENABLED(client) )
+	{
+	  if ( enable )
+	    {
+	      dspd_intrp_reset(&client->capture_intrp);
+	      dspd_mbx_reset(&client->capture.mbx);
+	      client->capture.trigger_tstamp = 0;
+	    } else
+	    {
+	      client->capture.trigger_tstamp = tstamps[DSPD_PCM_STREAM_CAPTURE];
+	    }
+	}
+    }
+  return ret;
+}
+
+
 typedef int32_t (*dspd_req_filter_t)(struct dspd_rclient *client,
 				     uint32_t      req,
 				     const void   *inbuf,
@@ -2004,6 +2064,7 @@ static const dspd_req_filter_t rclient_filters[] = {
   [CLIDX(DSPD_SCTL_CLIENT_SETTRIGGER)] = rclient_settrigger,
   [CLIDX(DSPD_SCTL_CLIENT_SETPARAMS)] = rclient_setparams,
   [CLIDX(DSPD_SCTL_CLIENT_SYNCCMD)] = rclient_synccmd,
+  [CLIDX(DSPD_SCTL_CLIENT_PAUSE)] = rclient_pause,
 };
 
 

@@ -169,4 +169,5 @@ int32_t dspd_rclient_get_trigger(struct dspd_rclient *client);
 
 int32_t dspd_rclient_client_index(struct dspd_rclient *client);
 
+
 #endif
