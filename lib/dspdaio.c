@@ -188,7 +188,7 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
 {
   op->error = EINPROGRESS;
   op->xfer = 0;
-  op->reserved = 0;
+  op->reserved = (uint64_t)(index & 0xFFFFU) << 16U;
   ctx->pending_ops[index] = op;
   ctx->output_pending = true;
   assert(ctx->pending_ops_count >= 0);
@@ -267,7 +267,7 @@ int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     {
       if ( ctx->pending_ops[i] == op )
 	{
-	  if ( op->error == EINPROGRESS ) //Did not start sending
+	  if ( op->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
 	    {
 	      //If this op is next in line then remove it
 	      if ( (size_t)ctx->current_op == i )
@@ -307,7 +307,6 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 {
   size_t i, n, p;
   struct dspd_async_op *op;
-  uint64_t rmask;
   //Check for existing op
   if ( ctx->current_op >= 0 )
     {
@@ -338,9 +337,8 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->req_out.bytes_returned = 0;
 	      ctx->req_out.rdata.rlen = op->outbufsize;
 	      ctx->req_out.tag = create_tag(ctx, op->tag, p);
-	      rmask = ctx->seq_out;
-	      rmask |= (uint64_t)(p & 0xFFFFU) << 16U;
-	      op->reserved |= rmask;
+	      op->reserved |= (uint64_t)ctx->seq_out;
+	      assert(((op->reserved >> 16U) & 0xFFFFU) == p);
 	      ctx->cnt_out = 1;
 	      ctx->iov_out[0].iov_base = &ctx->req_out;
 	      ctx->iov_out[0].iov_len = sizeof(ctx->req_out);
@@ -865,20 +863,27 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
       if ( ret > 0 )
 	ret = 0;
     }
+  
   if ( revents & POLLIN )
     ret = dspd_aio_recv(ctx);
+    
   if ( ret == 0 && (revents & POLLOUT) )
     ret = dspd_aio_send(ctx);
   if ( ret == -EAGAIN )
     ret = -EINPROGRESS;
+  
   if ( ret == 0 )
     {
       if ( ctx->io_ready )
 	ctx->io_ready(ctx, ctx->io_ready_arg);
-    } else if ( ret != -EINPROGRESS && ctx->io_dead )
+    } else if ( ret != -EINPROGRESS )
     {
-      ctx->io_dead(ctx, ctx->io_dead_arg, false);
-      ctx->io_dead = NULL;
+      ctx->dead = true;
+      if ( ctx->io_dead )
+	{
+	  ctx->io_dead(ctx, ctx->io_dead_arg, false);
+	  ctx->io_dead = NULL;
+	}
     }
   return ret;
 }

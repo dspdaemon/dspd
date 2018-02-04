@@ -101,6 +101,7 @@ struct dspd_aio_ctx {
   //functions must be run one at a time.
   char   data[256];
   size_t datalen;
+  bool dead;
 };
 
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);

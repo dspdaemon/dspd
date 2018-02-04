@@ -720,7 +720,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	  i64 = *(int64_t*)inbuf;
 	  i32 = i64 >> 32U;
 	  dev = i64 & 0xFFFFFFFFLL;
-	  ret = open_device(cli, dev, i32, &info);
+	  ret = open_device(cli, i32, dev, &info);
 	  if ( ret >= 0 )
 	    {
 	      if ( (i32 & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
