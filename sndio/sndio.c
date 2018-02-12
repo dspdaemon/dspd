@@ -985,6 +985,7 @@ static int amsg_getpar(struct sndio_client *cli)
   const struct dspd_cli_params *clp;
   unsigned int bits, len, usig, be;
   int ret = 0;
+  bool f;
   AMSG_INIT(&cli->opkt.msg);
   if ( cli->pstate != PROTO_INIT && cli->pstate != PROTO_CONFIGURED )
     {
@@ -1002,7 +1003,7 @@ static int amsg_getpar(struct sndio_client *cli)
 	  fmt = cli->cparams.format;
 	  clp = &cli->cparams;
 	}
-      if ( dspd_pcm_format_info(fmt, &bits, &len, &usig, &be) )
+      if ( dspd_pcm_format_info(fmt, &bits, &len, &usig, &be, &f) )
 	{
 	  par->bps = len;
 	  par->bits = bits;
@@ -1540,7 +1541,8 @@ static int par2cli(const struct dspd_device_stat *info,
   clp->format = dspd_pcm_build_format(par->bits,
 				      par->bps,
 				      ! par->sig,
-				      ! par->le);
+				      ! par->le,
+				      false);
   if ( clp->format < 0 )
     clp->format = DSPD_PCM_FORMAT_S16_NE;
   if ( mode & DSPD_PCM_SBIT_PLAYBACK )
@@ -1629,7 +1631,8 @@ static int cli2par(int mode,
 		   struct sio_par *par)
 {
   unsigned int bits, len, usig, be;
-  if ( ! dspd_pcm_format_info(clp->format, &bits, &len, &usig, &be) )
+  bool f;
+  if ( ! dspd_pcm_format_info(clp->format, &bits, &len, &usig, &be, &f) )
     return -1;
   par->bps = len;
   par->bits = bits;

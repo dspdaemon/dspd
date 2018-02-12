@@ -1,3 +1,6 @@
+#The -DPIC and -rdynamic arguments to $(CC) are the special flags that make ALSA plugins work.
+#Otherwise, symbols are not resolved.
+
 include ../config.makefile
 include ../rules.makefile
 LIBS :=-lrt -lasound
@@ -9,21 +12,21 @@ APLDFLAGS=-shared -lm -ldl -lpthread -lasound -lrt \
 MAKEOBJ=$(CC) $(APCFLAGS) -c
 
 
-all: pcm_devel.o pcm_dspd.o
+all: pcm_devel pcm_dspd
 
 skel:
 	$(MAKEOBJ) pcm_skel.c
-	$(CC) $(APLDFLAGS) $(APCFLAGS) -o libasound_module_pcm_skel.so \
+	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -o libasound_module_pcm_skel.so \
 	pcm_skel.o
 
-pcm_devel.o:
+pcm_devel:
 	$(MAKEOBJ) pcm_devel.c
 	$(CC) -rdynamic -shared $(CFLAGS) $(LIBS) -pthread -o libasound_module_pcm_devel.so \
 	pcm_devel.o
 
 
 
-pcm_dspd.o:
+pcm_dspd:
 	$(MAKEOBJ) pcm_dspd.c
 	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so \
 	pcm_dspd.o

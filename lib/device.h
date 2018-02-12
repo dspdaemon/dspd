@@ -368,6 +368,7 @@ struct dspd_cli_params {
     Size are in nanoseconds.
   */
 #define DSPD_CLI_XFLAG_NANOSECONDS 4
+#define DSPD_CLI_XFLAG_LATENCY_NS 8
   int32_t xflags; //translation flags
 
   /*
@@ -381,8 +382,9 @@ struct dspd_cli_params {
     is not being specified in this instance (could be not used
     or specified separately).
   */
-#define DSPD_CLI_PCHAN(_c) (_c&0xFFFFU)
-#define DSPD_CLI_CCHAN(_c) ((_c>>16U)&0xFFFF)
+#define DSPD_CLI_PCHAN(_c) ((_c)&0xFFFFU)
+#define DSPD_CLI_CCHAN(_c) (((_c)>>16U)&0xFFFFU)
+#define DSPD_CLI_FDCHAN(_p,_c) (((_c)<<16U)|((_p)&0xFFFFU))
 #define DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS 16
 
 };

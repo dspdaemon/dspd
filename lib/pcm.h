@@ -251,12 +251,13 @@ struct pcm_conv {
 #define DSPD_PCM_SBIT_CTL DSPD_PCM_SBIT(DSPD_PCM_STREAM_CTL)
 const struct pcm_conv *dspd_getconv(int format);
 size_t dspd_get_pcm_format_size(int format);
-int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int usig, unsigned int big_endian);
-bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, unsigned int *usig, unsigned int *big_endian);
+int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int usig, unsigned int big_endian, bool isfloat);
+bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, unsigned int *usig, unsigned int *big_endian, bool *isfloat);
 
 
 bool dspd_pcm_format_is_integer(int format);
 
 int32_t dspd_pcm_format_from_name(const char *name);
 const char *dspd_pcm_name_from_format(int32_t format);
+
 #endif

@@ -44,6 +44,7 @@ static inline int get_lpo2(int x)
   return (sizeof(x) * 8) - (__builtin_clz(x - 1) + 1);
 }
 
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(_a) (sizeof(_a)/sizeof(_a[0]))
 #endif

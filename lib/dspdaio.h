@@ -132,7 +132,7 @@ int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req);
 void dspd_aio_destroy(struct dspd_aio_ctx *ctx);
 void dspd_aio_delete(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio);
-
+bool dspd_aio_is_local(struct dspd_aio_ctx *aio);
 struct dspd_aio_fifo_ops;
 int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops, void *arg);
 void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx, 

@@ -36,6 +36,7 @@ int dspd_timer_getpollfd(struct dspd_timer *tmr, struct pollfd *pfd);
 void dspd_timer_destroy(struct dspd_timer *tmr);
 int dspd_timer_fire(struct dspd_timer *tmr, bool latch);
 int dspd_timer_ack(struct dspd_timer *tmr);
+int dspd_timer_get(struct dspd_timer *tmr, dspd_time_t *abstime, uint32_t *per);
 #define dspd_timer_reset(_t) dspd_timer_set(_t, 0, 0)
 
 struct dspd_intrp {

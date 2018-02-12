@@ -192,6 +192,13 @@ int dspd_timer_set(struct dspd_timer *tmr, dspd_time_t abstime, uint32_t per)
   return 0;
 }
 
+int dspd_timer_get(struct dspd_timer *tmr, dspd_time_t *abstime, uint32_t *per)
+{
+  *abstime = tmr->oneshot_next;
+  *per = tmr->interval;
+  return 0;
+}
+
 int dspd_timer_getexp(struct dspd_timer *tmr, dspd_time_t *exp)
 {
   int ret;

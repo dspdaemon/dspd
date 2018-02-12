@@ -2224,7 +2224,7 @@ const struct pcm_conv *dspd_getconv(int format)
 #define DSPD_PCM_FMT_FLAG_MSB    2
 #define DSPD_PCM_FMT_FLAG_LE     4
 #define DSPD_PCM_FMT_FLAG_BE     8
-
+#define DSPD_PCM_FMT_FLAG_FLOAT  16
 struct dspd_pcm_format_info {
   bool     integer;
   uint16_t length;
@@ -2261,13 +2261,13 @@ static const struct dspd_pcm_format_info format_info_table[] = {
   /** Unsigned 32 bit Big Endian */
   [DSPD_PCM_FORMAT_U32_BE] = { .integer = true, .length = 4, .bits = 32, .flags = DSPD_PCM_FMT_FLAG_BE },
   /** Float 32 bit Little Endian, Range -1.0 to 1.0 */
-  [DSPD_PCM_FORMAT_FLOAT_LE] = { .length = 4, .bits = 32, .flags = DSPD_PCM_FMT_FLAG_LE | DSPD_PCM_FMT_FLAG_SIGNED },
+  [DSPD_PCM_FORMAT_FLOAT_LE] = { .length = 4, .bits = 32, .flags = DSPD_PCM_FMT_FLAG_LE | DSPD_PCM_FMT_FLAG_SIGNED | DSPD_PCM_FMT_FLAG_FLOAT },
   /** Float 32 bit Big Endian, Range -1.0 to 1.0 */
-  [DSPD_PCM_FORMAT_FLOAT_BE] = { .length = 4, .bits = 32, .flags = DSPD_PCM_FMT_FLAG_BE | DSPD_PCM_FMT_FLAG_SIGNED },
+  [DSPD_PCM_FORMAT_FLOAT_BE] = { .length = 4, .bits = 32, .flags = DSPD_PCM_FMT_FLAG_BE | DSPD_PCM_FMT_FLAG_SIGNED | DSPD_PCM_FMT_FLAG_FLOAT },
   /** Float 64 bit Little Endian, Range -1.0 to 1.0 */
-  [DSPD_PCM_FORMAT_FLOAT64_LE] = { .length = 8, .bits = 64, .flags = DSPD_PCM_FMT_FLAG_LE | DSPD_PCM_FMT_FLAG_SIGNED },
+  [DSPD_PCM_FORMAT_FLOAT64_LE] = { .length = 8, .bits = 64, .flags = DSPD_PCM_FMT_FLAG_LE | DSPD_PCM_FMT_FLAG_SIGNED | DSPD_PCM_FMT_FLAG_FLOAT },
   /** Float 64 bit Big Endian, Range -1.0 to 1.0 */
-  [DSPD_PCM_FORMAT_FLOAT64_BE] = { .length = 8, .bits = 64, .flags = DSPD_PCM_FMT_FLAG_BE | DSPD_PCM_FMT_FLAG_SIGNED },
+  [DSPD_PCM_FORMAT_FLOAT64_BE] = { .length = 8, .bits = 64, .flags = DSPD_PCM_FMT_FLAG_BE | DSPD_PCM_FMT_FLAG_SIGNED | DSPD_PCM_FMT_FLAG_FLOAT },
   /** IEC-958 Little Endian */
   [DSPD_PCM_FORMAT_IEC958_SUBFRAME_LE] = { .length = 0 },
   /** IEC-958 Big Endian */
@@ -2293,9 +2293,9 @@ static const struct dspd_pcm_format_info format_info_table[] = {
   /** Unsigned 24bit Big Endian in 3bytes format */
   [DSPD_PCM_FORMAT_U24_3BE] = { .integer = true, .length = 3, .bits = 24, .flags = DSPD_PCM_FMT_FLAG_BE },
   /** Signed 20bit Little Endian in 3bytes format */
-  [DSPD_PCM_FORMAT_S20_3LE] = { .integer = true, .length = 3, .bits = 20, .flags = DSPD_PCM_FMT_FLAG_LE },
+  [DSPD_PCM_FORMAT_S20_3LE] = { .integer = true, .length = 3, .bits = 20, .flags = DSPD_PCM_FMT_FLAG_LE | DSPD_PCM_FMT_FLAG_SIGNED },
   /** Signed 20bit Big Endian in 3bytes format */
-  [DSPD_PCM_FORMAT_S20_3BE] = { .integer = true, .length = 3, .bits = 20, .flags = DSPD_PCM_FMT_FLAG_BE },
+  [DSPD_PCM_FORMAT_S20_3BE] = { .integer = true, .length = 3, .bits = 20, .flags = DSPD_PCM_FMT_FLAG_BE | DSPD_PCM_FMT_FLAG_SIGNED },
   /** Unsigned 20bit Little Endian in 3bytes format */
   [DSPD_PCM_FORMAT_U20_3LE] = { .integer = true, .length = 3, .bits = 20, .flags = DSPD_PCM_FMT_FLAG_LE  },
   /** Unsigned 20bit Big Endian in 3bytes format */
@@ -2346,7 +2346,7 @@ bool dspd_pcm_format_is_integer(int format)
   ((bits == (length*8)) && msb == 1) || ((bits < (length*8)) && msb == 0) || (bits == 8 && bps == 1)
 
 */
-int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int usig, unsigned int big_endian)
+int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int usig, unsigned int big_endian, bool isfloat)
 {
   size_t i;
   const struct dspd_pcm_format_info *info;
@@ -2358,10 +2358,12 @@ int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int u
     flags |= DSPD_PCM_FMT_FLAG_LE;
   if ( ! usig )
     flags |= DSPD_PCM_FMT_FLAG_SIGNED;
+  if ( isfloat )
+    flags |= DSPD_PCM_FMT_FLAG_FLOAT;
   for ( i = 0; i < ARRAY_SIZE(format_info_table); i++ )
     {
       info = &format_info_table[i];
-      if ( (info->flags & flags) == flags &&
+      if ( info->flags == flags &&
 	   info->bits == bits && info->length == length )
 	{
 	  format = i;
@@ -2371,7 +2373,7 @@ int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int u
   return format;
 }
 
-bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, unsigned int *usig, unsigned int *big_endian)
+bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, unsigned int *usig, unsigned int *big_endian, bool *isfloat)
 {
   bool ret = false;
   const struct dspd_pcm_format_info *info;
@@ -2384,6 +2386,7 @@ bool dspd_pcm_format_info(int format, unsigned int *bits, unsigned int *length, 
 	  *length = info->length;
 	  *usig = !! (info->flags & DSPD_PCM_FMT_FLAG_SIGNED);
 	  *big_endian = !! (info->flags & DSPD_PCM_FMT_FLAG_BE);
+	  *isfloat = !!(info->flags & DSPD_PCM_FMT_FLAG_FLOAT);
 	  ret = true;
 	}
     }

@@ -2086,7 +2086,10 @@ int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio)
   return aio->iofd;
 }
 
-
+bool dspd_aio_is_local(struct dspd_aio_ctx *aio)
+{
+  return aio->local;
+}
 
 
 
