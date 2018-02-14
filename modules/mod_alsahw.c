@@ -2050,7 +2050,7 @@ int alsahw_open(const struct dspd_drv_params *params,
   struct alsahw_handle *hbuf = NULL;
   struct alsahw_mcfg mincfg;
   const struct pcm_conv *conv;
-  snd_pcm_chmap_t *chmap;
+  snd_pcm_chmap_t *chmap = NULL;
   int mmap = 0, batch = 0;
   unsigned int fragsize, bufsize;
   ret = snd_pcm_hw_params_malloc(&hwp);
@@ -2368,6 +2368,7 @@ int alsahw_open(const struct dspd_drv_params *params,
     }
 
  out:
+  free(chmap);
   if ( ret )
     {
       if ( hbuf )
