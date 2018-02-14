@@ -812,9 +812,10 @@ static snd_pcm_chmap_t *dspd_get_chmap(snd_pcm_ioplug_t *io)
       for ( i = 0; i < map.map.channels; i++ )
 	dspd->chmap.map.pos[i] = map.map.pos[i];
       dspd->chmap.map.channels = map.map.channels;
-      m = &dspd->chmap.map;
+      m = dspd_memdup(&dspd->chmap, sizeof(dspd->chmap));
     } else
     {
+      errno = ret * -1;
       m = NULL;
     }
   return m;
