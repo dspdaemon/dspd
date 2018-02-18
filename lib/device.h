@@ -409,6 +409,9 @@ struct dspd_device_stat {
   char addr[64]; //Hardware address
   char desc[128];
   int32_t streams;
+#define DSPD_DEV_DEFAULT_PLAYBACK DSPD_PCM_SBIT_PLAYBACK
+#define DSPD_DEV_DEFAULT_CAPTURE DSPD_PCM_SBIT_CAPTURE
+#define DSPD_DEV_DEFAULT_ANY (DSPD_DEV_DEFAULT_PLAYBACK|DSPD_DEV_DEFAULT_CAPTURE)
   int32_t flags;
   int32_t error;
   int32_t reserved;
@@ -417,6 +420,13 @@ struct dspd_device_stat {
   struct dspd_cli_params capture;
 };
 
+
+struct dspd_device_mstat {
+  int32_t playback_slot;
+  int32_t capture_slot;
+  struct dspd_device_stat playback_info;
+  struct dspd_device_stat capture_info;
+};
 
 
 struct dspd_cli_params;

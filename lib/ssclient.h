@@ -29,6 +29,7 @@ struct dspd_conn {
 
 };
 
+
 enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_QUIT = 1,
   DSPD_SOCKSRV_REQ_NEWCLI,
@@ -44,6 +45,7 @@ enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_FREE,
   DSPD_SOCKSRV_REQ_ECHO,
   DSPD_SOCKSRV_REQ_EVENT,
+  DSPD_SOCKSRV_REQ_DEFAULTDEV,
  };
 
 struct socksrv_ctl_event {

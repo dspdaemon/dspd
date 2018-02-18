@@ -501,6 +501,78 @@ static int32_t socksrv_req_event(struct dspd_rctx *context,
     }
   return ret;
 }
+
+static int32_t socksrv_req_defaultdev(struct dspd_rctx *context,
+				      uint32_t      req,
+				      const void   *inbuf,
+				      size_t        inbufsize,
+				      void         *outbuf,
+				      size_t        outbufsize)
+{
+  uint64_t devs;
+  uint32_t streams = 0;
+  int32_t p, c;
+  size_t br;
+  int32_t ret = EINVAL;
+  struct dspd_device_mstat *info = outbuf;
+  if ( outbufsize >= sizeof(*info) && inbufsize >= sizeof(streams) )
+    {
+      memset(info, 0, sizeof(*info));
+      //Get all streams
+      ret = dspd_stream_ctl(&dspd_dctx,
+			    0,
+			    DSPD_DCTL_GET_DEFAULTDEV,
+			    &streams,
+			    sizeof(streams),
+			    &devs,
+			    sizeof(devs),
+			    &br);
+  
+      if ( ret == 0 && br == sizeof(devs) )
+	{
+	  //Get requested streams
+	  streams = *(uint32_t*)inbuf;
+	  p = devs >> 32U;
+	  c = devs & 0xFFFFFFFFULL;
+	  info->playback_slot = -1;
+	  info->capture_slot = -1;
+	  if ( p >= 0 && (streams & DSPD_PCM_SBIT_PLAYBACK) )
+	    {
+	      ret = dspd_stream_ctl(&dspd_dctx,
+				    p,
+				    DSPD_SCTL_SERVER_STAT,
+				    NULL,
+				    0,
+				    &info->playback_info,
+				    sizeof(info->playback_info),
+				    &br);
+	      if ( ret == 0 && br == sizeof(info->playback_info) )
+		info->playback_slot = p;
+	    }
+	  if ( ret == 0 && c >= 0 && (streams & DSPD_PCM_SBIT_CAPTURE) )
+	    {
+	      ret = dspd_stream_ctl(&dspd_dctx,
+				    c,
+				    DSPD_SCTL_SERVER_STAT,
+				    NULL,
+				    0,
+				    &info->capture_info,
+				    sizeof(info->capture_info),
+				    &br);
+	      if ( ret == 0 && br == sizeof(info->capture_info) )
+		info->capture_slot = c;
+	    }
+      	} else
+	{
+	  ret = EINVAL;
+	}
+    }
+  if ( ret == 0 )
+    ret = dspd_req_reply_buf(context, 0, info, sizeof(*info));
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
+}
 static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				uint32_t             req,
 				const void          *inbuf,
@@ -911,6 +983,9 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	ret = socksrv_req_event(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
       else
 	ret = dspd_req_reply_err(rctx, 0, EINVAL);
+      break;
+    case DSPD_SOCKSRV_REQ_DEFAULTDEV:
+      ret = socksrv_req_defaultdev(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
       break;
     default:
       ret = dspd_req_reply_err(rctx, 0, EINVAL);
