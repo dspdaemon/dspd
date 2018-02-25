@@ -249,7 +249,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 
  out:
 
-   if ( err != 0 )
+   if ( err < 0 )
      {
        if ( devidx > 0 )
 	 {
@@ -261,7 +261,7 @@ int32_t dspd_rclient_open_dev(struct dspd_rclient *client,
 			   NULL,
 			   0,
 			   NULL);
-	 } else if ( prev > 0 )
+	 } else if ( prev > 0 && prev != devidx )
 	 {
 	   dspd_stream_ctl(client->bparams.conn,
 			   -1,

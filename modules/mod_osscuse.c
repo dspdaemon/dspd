@@ -771,6 +771,11 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 	}
       device_index = c;
     }
+  if ( device_index < 0 )
+    {
+      err = ENODEV;
+      goto error;
+    }
 
   if ( cli->mode == O_RDONLY )
     cli->dsp.trigger = PCM_ENABLE_INPUT;
@@ -1133,7 +1138,7 @@ static int ctl_new_client(struct oss_dsp_cdev *dev, struct oss_cdev_client **cli
   size_t br;
   if ( c )
     {
-      
+      c->device_index = -1;
       c->cdev_slot = cdev_find_slot(dev);
       
       
@@ -1203,6 +1208,8 @@ static int ctl_new_client(struct oss_dsp_cdev *dev, struct oss_cdev_client **cli
  error:
   if ( c )
     {
+      if ( c->device_index >= 0 )
+	dspd_daemon_unref(c->device_index);
       oss_delete_legacy_mixer_assignments(c->elements);
       free(c);
     }
@@ -1282,6 +1289,8 @@ static int ctl_fd_event(void *data,
 	    {
 	      dev->clients[pcli->cdev_slot] = NULL;
 	      oss_delete_legacy_mixer_assignments(pcli->elements);
+	      if ( pcli->device_index >= 0 )
+		dspd_daemon_unref(pcli->device_index);
 	      free(pcli);
 	      ret = dsp_reply_generic_error(dev, dev->ctlpkt->header.unique, 0);
 	    } else
@@ -2468,11 +2477,13 @@ static int oss_remove(void *arg, const struct dspd_dict *device)
 	      if ( cdev->playback_index > 0 )
 		{
 		  dspd_daemon_unref(cdev->playback_index);
+		  
 		  cdev->playback_index = -1;
 		}
 	      if ( cdev->capture_index > 0 )
 		{
 		  dspd_daemon_unref(cdev->capture_index);
+		  
 		  cdev->capture_index = -1;
 		}
 	      oss_unlock_cdev(cdev);
@@ -2483,11 +2494,13 @@ static int oss_remove(void *arg, const struct dspd_dict *device)
 	      dsp_cdev_seterror(cdev, -ENODEV);
 	      if ( cdev->playback_index > 0 )
 		{
+		  oss_mixer_remove_devmap(cdev->playback_index);
 		  dspd_daemon_unref(cdev->playback_index);
 		  cdev->playback_index = -1;
 		}
 	      if ( cdev->capture_index > 0 )
 		{
+		  oss_mixer_remove_devmap(cdev->capture_index);
 		  dspd_daemon_unref(cdev->capture_index);
 		  cdev->capture_index = -1;
 		}

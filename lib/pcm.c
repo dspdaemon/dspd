@@ -2354,7 +2354,7 @@ int dspd_pcm_build_format(unsigned int bits, unsigned int length, unsigned int u
   int format = -1;
   if ( big_endian )
     flags |= DSPD_PCM_FMT_FLAG_BE;
-  else
+  else if ( bits > 8 && length > 1 )
     flags |= DSPD_PCM_FMT_FLAG_LE;
   if ( ! usig )
     flags |= DSPD_PCM_FMT_FLAG_SIGNED;
@@ -2483,3 +2483,14 @@ int32_t dspd_pcm_format_from_name(const char *name)
   return ret;
 }
 
+const char *dspd_pcm_stream_bit_name(int32_t sbits)
+{
+  const char *ret = "unknown";
+  if ( sbits == DSPD_PCM_SBIT_FULLDUPLEX )
+    ret = "full duplex";
+  else if ( sbits == DSPD_PCM_SBIT_PLAYBACK )
+    ret = "playback";
+  else if ( sbits == DSPD_PCM_SBIT_CAPTURE )
+    ret = "capture";
+  return ret;
+}

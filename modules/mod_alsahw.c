@@ -2726,7 +2726,11 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
       else
 	err = dspd_daemon_vctrl_register(-1, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
       if ( err < 0 )
-	dspd_log(0, "Could not register virtual control: error %d", err);
+	{
+	  dspd_log(0, "Could not register virtual control: error %d", err);
+	  if ( err == -ENOSYS )
+	    err = 0;
+	}
     } else
     {
       params.stream = DSPD_PCM_STREAM_PLAYBACK;
@@ -2755,7 +2759,11 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	goto out;
       err = dspd_daemon_vctrl_register(ret, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
       if ( err < 0 )
-	dspd_log(0, "Could not register virtual control: error %d", err);
+	{
+	  dspd_log(0, "Could not register virtual control: error %d", err);
+	  if ( err == -ENOSYS )
+	    err = 0;
+	}
     }
 
 
@@ -2779,15 +2787,44 @@ static int alsahw_remove(void *arg, const struct dspd_dict *device)
   const char *slot = dspd_dict_value_for_key(device, DSPD_HOTPLUG_SLOT);
   const char *stream = dspd_dict_value_for_key(device, DSPD_HOTPLUG_STREAM);
   int32_t idx, sbits, playback = -1, capture = -1;
-  if ( slot && stream)
+  dspd_log(0, "alsahw: Got remove event for slot %s stream %s", slot, stream);
+  if ( slot && stream )
     {
-      if ( dspd_strtoi32(slot, &idx, 0) == 0 && dspd_strtoi32(slot, &sbits, 0) == 0 )
+      sbits = 0;
+      if ( strcmp(stream, "capture") == 0 )
+	sbits = DSPD_PCM_SBIT_CAPTURE;
+      else if ( strcmp(stream, "playback") == 0 )
+	sbits = DSPD_PCM_SBIT_PLAYBACK;
+      else if ( strcmp(stream, "fullduplex") == 0 )
+	sbits = DSPD_PCM_SBIT_FULLDUPLEX;
+
+      if ( dspd_strtoi32(slot, &idx, 0) == 0 && sbits != 0 )
 	{
 	  if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
 	    playback = idx;
 	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
 	    capture = idx;
 	  dspd_daemon_vctrl_unregister(playback, capture);
+	  if ( playback > 0 )
+	    {
+	      if ( dspd_daemon_ref(playback, DSPD_DCTL_ENUM_TYPE_SERVER) == 0 )
+		{
+		  (void)dspd_stream_ctl(&dspd_dctx, playback, DSPD_SCTL_SERVER_REMOVE, NULL, 0, NULL, 0, NULL);
+		  dspd_daemon_unref(playback);
+		}
+	    }
+	  if ( capture > 0 )
+	    {
+	      if ( dspd_daemon_ref(capture, DSPD_DCTL_ENUM_TYPE_SERVER) == 0 )
+		{
+		  (void)dspd_stream_ctl(&dspd_dctx, capture, DSPD_SCTL_SERVER_REMOVE, NULL, 0, NULL, 0, NULL);
+		  dspd_daemon_unref(capture);
+		}
+	    }
+	      
+	} else
+	{
+	  dspd_log(0, "alsahw: Invalid event for slot '%s' stream '%s'", slot, stream);
 	}
     }
   return 0;

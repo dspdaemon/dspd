@@ -402,6 +402,7 @@ struct dspd_cli_stat {
   int32_t uid;
   int32_t gid;
   char    name[32];
+
 };
 struct dspd_device_stat {
   char name[64]; //Driver specific device name (hw:0, etc)
@@ -416,6 +417,7 @@ struct dspd_device_stat {
   int32_t error;
   int32_t reserved;
   uint64_t slot_id;
+  uint32_t refcount;
   struct dspd_cli_params playback;
   struct dspd_cli_params capture;
 };

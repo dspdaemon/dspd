@@ -21,7 +21,7 @@ skel:
 
 pcm_devel:
 	$(MAKEOBJ) pcm_devel.c
-	$(CC) -rdynamic -shared $(CFLAGS) $(LIBS) -pthread -o libasound_module_pcm_devel.so \
+	$(CC) -rdynamic -shared $(APCFLAGS) $(LIBS) -pthread -o libasound_module_pcm_devel.so \
 	pcm_devel.o
 
 

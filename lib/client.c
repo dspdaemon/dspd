@@ -335,13 +335,12 @@ static int32_t dspd_client_release(struct dspd_client *cli)
 			    NULL,
 			    0,
 			    &br);
-      if ( cli->device >= 0 )
-	{
-	  dspd_slist_entry_wrlock(cli->list, cli->device);
-	  dspd_slist_unref(cli->list, cli->device);
-	  dspd_slist_entry_rw_unlock(cli->list, cli->device);
-	  cli->device = -1;
-	}
+      
+      dspd_slist_entry_wrlock(cli->list, cli->device);
+      dspd_slist_unref(cli->list, cli->device);
+      dspd_slist_entry_rw_unlock(cli->list, cli->device);
+      cli->device = -1;
+
       dspd_slist_entry_srvlock(cli->list, cli->index);
       dspd_slist_entry_set_key(cli->list, cli->index, 0);
       dspd_slist_entry_srvunlock(cli->list, cli->index);
@@ -783,6 +782,7 @@ static int32_t get_playback_status(void     *dev,
       //Do not accept this latency if it is too high
       //if ( *latency > cli->latency )
       //	*latency = cli->latency;
+
       *latency = cli->latency;
       
       if ( cli->playback.started == false )
@@ -1249,7 +1249,12 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
       dspd_slist_entry_srvlock(cli->list, (uintptr_t)cli->index);
       ret = dspd_stream_setparams(&cli->playback, params);
       if ( ret == 0 && params != NULL )
-	cli->latency = params->latency;
+	{
+	  if ( params->latency )
+	    cli->latency = params->latency;
+	  else
+	    cli->latency = params->fragsize;
+	}
       dspd_slist_entry_srvunlock(cli->list, (uintptr_t)cli->index);
       if ( ! cli->vctrl_registered )
 	{
@@ -1310,7 +1315,12 @@ static int32_t capture_set_params(void *handle, const struct dspd_cli_params *pa
       dspd_mbx_reset(cli->sync_start_tstamp);
       ret = dspd_stream_setparams(&cli->capture, params);
       if ( ret == 0 && params != NULL )
-	cli->latency = params->latency;
+	{
+	  if ( params->latency )
+	    cli->latency = params->latency;
+	  else
+	    cli->latency = params->fragsize;
+	}
       dspd_slist_entry_srvunlock(cli->list, (uintptr_t)cli->index);
     }
   return ret;
@@ -1864,7 +1874,8 @@ static int32_t client_connect(struct dspd_rctx *context,
 				    &client_ops);
       if ( server_ops )
 	{
-	  dspd_slist_ref(cli->list, idx);
+	  if ( cli->device != idx )
+	    dspd_slist_ref(cli->list, idx);
 	  err = 0;
 	} else
 	{

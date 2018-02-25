@@ -259,5 +259,5 @@ bool dspd_pcm_format_is_integer(int format);
 
 int32_t dspd_pcm_format_from_name(const char *name);
 const char *dspd_pcm_name_from_format(int32_t format);
-
+const char *dspd_pcm_stream_bit_name(int32_t sbits);
 #endif

@@ -112,12 +112,13 @@ int main(int argc, char **argv)
 		    us2 = 0;
 		  us1 /= 1000;
 		  us2 /= 1000;
-		  fprintf(stderr, "DEVICE[%d]: NAME=%s STREAMS=0x%x PLAYBACK=%uus CAPTURE=%uus\n",
+		  fprintf(stderr, "DEVICE[%d]: NAME=%s STREAMS=0x%x PLAYBACK=%uus CAPTURE=%uus REFCOUNT=%u\n",
 			  dev, 
 			  devinfo.name,
 			  devinfo.streams,
 			  us1,
-			  us2);
+			  us2,
+			  devinfo.refcount);
 			  
 		}
 	    }

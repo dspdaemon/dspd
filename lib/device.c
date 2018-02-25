@@ -1434,7 +1434,9 @@ static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32
 	Increment reference count so the client can change its locks if necessary.
 	Might sleep because it takes a lock to do it.
       */
+
       
+
       if ( dspd_daemon_ref(client, DSPD_DCTL_ENUM_TYPE_CLIENT) == 0 )
 	{
 
@@ -1765,6 +1767,9 @@ static void schedule_playback_wake(void *userdata)
   int32_t ret;
   uintptr_t len, count, i, l, written = 0, total;
   uint16_t revents;
+  if ( AO_load(&dev->error) != 0 )
+    dspd_scheduler_abort(dev->sched);
+
   dev->trigger = false; //If it triggered then that was processed already.
   dspd_sync_reg(dev);
   if ( ! dev->capture.ops )
@@ -1974,6 +1979,9 @@ static void schedule_capture_wake(void *data)
 {
   struct dspd_pcm_device *dev = data;
   int32_t ret;
+  if ( AO_load(&dev->error) != 0 )
+    dspd_scheduler_abort(dev->sched);
+
   dev->trigger = false; //If it triggered then that was processed already.
   dspd_sync_reg(dev);
   if ( ! dev->playback.ops )
@@ -2306,7 +2314,18 @@ static void *dspd_dev_thread(void *arg)
   alert_all_clients(dev, ENODEV);
 
   dspd_pcm_device_unregister_tls();
+
+  const char *devname = NULL;
+  if ( dev->playback.handle )
+    devname = dev->playback.params.name;
+  else if ( dev->capture.handle )
+    devname = dev->capture.params.name;
+  dspd_log(0, "Device thread %s (%s) exiting.  refcount=%d", name, devname, dspd_slist_refcnt(dspd_dctx.objects, dev->key));
+
   dspd_daemon_unref(dev->key);
+
+  
+
   return NULL;
 }
 
@@ -2792,6 +2811,7 @@ int32_t dspd_pcm_device_new(void **dev,
       dspd_slist_ref(list, (uintptr_t)index);
       dspd_slist_entry_srvunlock(list, (uintptr_t)index);
       dspd_slist_entry_rw_unlock(list, (uintptr_t)index);
+
     }
   dspd_threadattr_destroy(&attr);
   *dev = devptr;
@@ -3376,6 +3396,7 @@ static int32_t server_stat(struct dspd_rctx *context,
     stat->flags |= DSPD_DEV_DEFAULT_PLAYBACK;
   else if ( dspd_dctx.hotplug.default_capture == dev->key )
     stat->flags |= DSPD_DEV_DEFAULT_CAPTURE;
+  stat->refcount = dspd_slist_refcnt(dspd_dctx.objects, dev->key);
 
   return dspd_req_reply_buf(context, 0, stat, sizeof(*stat));
 }
@@ -3783,6 +3804,20 @@ static int32_t server_lock(struct dspd_rctx *context,
   return ret;
 }
 
+static int32_t server_remove(struct dspd_rctx *context,
+			     uint32_t      req,
+			     const void   *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize)
+  
+{
+  struct dspd_pcm_device *dev = dspd_req_userdata(context);
+  AO_store(&dev->error, ENODEV);
+  dspd_sched_trigger(dev->sched);
+  return dspd_req_reply_err(context, 0, 0);
+}
+
 static const struct dspd_req_handler device_req_handlers[] = {
   [SRVIDX(DSPD_SCTL_SERVER_MIN)] = {
     .handler = server_filter,
@@ -3885,6 +3920,13 @@ static const struct dspd_req_handler device_req_handlers[] = {
     .rflags = 0,
     .inbufsize = sizeof(struct dspd_dev_lock_req),
     .outbufsize = sizeof(struct dspd_dev_lock_req)
+  },
+  [SRVIDX(DSPD_SCTL_SERVER_REMOVE)] = {
+    .handler = server_remove,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0
   },
   
 };

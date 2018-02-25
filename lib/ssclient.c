@@ -679,7 +679,7 @@ int32_t dspd_select_device(struct dspd_conn *ssc,
   size_t br;
   struct dspd_device_stat dstat;
   uint32_t mtype;
-  size_t n, i;
+  ssize_t n, i;
   if ( select_device == NULL )
     {
       err = dspd_stream_ctl(ssc, 0, DSPD_DCTL_GET_DEFAULTDEV, &streams, sizeof(streams), &def, sizeof(def), &br);
@@ -769,7 +769,7 @@ int32_t dspd_select_device(struct dspd_conn *ssc,
 	  n = br * 8;
 	  memset(&dstat, 0, sizeof(dstat));
 	  br = 0;
-	  for ( i = 0; i < n; i++ )
+	  for ( i = n - 1; i >= 0; i-- )
 	    {
 	      if ( dspd_test_bit(mask, i) )
 		{

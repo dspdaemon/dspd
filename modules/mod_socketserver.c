@@ -3186,7 +3186,7 @@ static const struct cbpoll_fd_ops socksrv_ctlpipe_ops = {
 static void socksrv_init_device(void *arg, const struct dspd_dict *device)
 {
   const struct dspd_kvpair *slot;
-  int32_t index, ret;
+  int32_t index = 0, ret;
   size_t br;
   struct dspd_mixer_cbinfo socksrv_mixer_cb = {
     .remove = false,
@@ -3348,7 +3348,10 @@ static int socksrv_init(void *daemon, void **context)
 	.outbufsize = 0,
 	.bytes_returned = &br});
   if ( ret < 0 )
-    dspd_log(0, "Could not install mixer callback for device %d: error %d", index, ret);
+    {
+      dspd_log(0, "Could not install mixer callback for device 0: error %d", ret);
+      ret = 0;
+    }
 
   if ( ! dctx->new_aio_ctx )
     {
