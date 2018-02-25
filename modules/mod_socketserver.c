@@ -338,15 +338,15 @@ static int32_t open_client_stream(struct ss_cctx *cli)
       cb.arg = cli;
       cb.callback = socksrv_error;
       cb.index = DSPD_CLIENT_CB_ERROR;
+      ret = dspd_client_get_index(clptr);
       dspd_stream_ctl(&dspd_dctx,
-		      cli->stream,
+		      ret,
 		      DSPD_SCTL_CLIENT_SETCB,
 		      &cb,
 		      sizeof(cb),
 		      NULL,
 		      0,
 		      &br);
-      ret = dspd_client_get_index(clptr);
     }
   return ret;
 }

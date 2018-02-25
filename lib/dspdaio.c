@@ -755,6 +755,8 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 		ctx->revents |= POLLOUT;
 	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLPRI )
 		ctx->revents |= POLLPRI;
+	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLHUP )
+		ctx->revents |= POLLHUP;
 	    }
 	  
 
