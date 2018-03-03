@@ -90,4 +90,6 @@ int32_t dspd_parse_opt(int32_t defaultvalue,
 		       const char *opt, ...);
 size_t dspd_strlen_safe(const char *str);
 
+const char *dspd_strtok_c(const char *str, const char *delim, const char **saveptr, size_t *length);
+
 #endif

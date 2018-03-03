@@ -19,6 +19,7 @@
  */
 
 #define _GNU_SOURCE
+#define _DSPD_HAVE_UCRED
 #include <unistd.h>
 #include <sys/types.h>          /* See NOTES */
 #include <sys/socket.h>
@@ -2037,6 +2038,34 @@ static int32_t client_pause(struct dspd_rctx *context,
   return ret;
 }
 
+static int32_t client_setinfo(struct dspd_rctx *context,
+			      uint32_t      req,
+			      const void   *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t pstream = -1, cstream = -1;
+  struct ss_cctx *cli;
+  const struct dspd_cli_info_pkt *info = inbuf;
+  int32_t ret = get_streams(context, &cli, &pstream, &cstream, 0);
+  size_t br = 0;
+  int32_t flags = dspd_req_flags(context);
+  if ( ret == 0 && (((flags & DSPD_REQ_FLAG_CMSG_CRED) != 0 || (flags & DSPD_REQ_FLAG_REMOTE) == 0) &&
+		    memchr(info->name, 0, sizeof(info->name)) != NULL) )
+    {
+      if ( pstream >= 0 )
+	ret = dspd_stream_ctl(&dspd_dctx, pstream, req, inbuf, inbufsize, outbuf, outbufsize, &br);
+      if ( ret == 0 && cstream >= 0 && cstream != pstream )
+	ret = dspd_stream_ctl(&dspd_dctx, cstream, req, inbuf, inbufsize, outbuf, outbufsize, &br);
+    }
+  if ( ret == 0 && br > 0 )
+    ret = dspd_req_reply_buf(context, 0, outbuf, br);
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
+}
+
 static const struct dspd_req_handler client_req_handlers[] = {
   [CLIDX(DSPD_SCTL_CLIENT_START)] = {
     .handler = client_start,
@@ -2193,7 +2222,13 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .rflags = 0,
     .inbufsize = sizeof(int32_t),
     .outbufsize = 0,
-
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_SETINFO)] = {
+    .handler = client_setinfo,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(struct dspd_cli_info_pkt),
+    .outbufsize = 0,
   },
 };
 

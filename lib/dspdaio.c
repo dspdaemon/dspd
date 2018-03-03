@@ -111,10 +111,19 @@ int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx,
   assert(ctx->datalen <= sizeof(ctx->data));
   memset(op, 0, sizeof(*op));
   memset(pkt, 0, sizeof(*pkt));
+ 
   if ( info->pid == DSPD_CLI_INFO_TID )
     pid = syscall(SYS_gettid);
   else
     pid = info->pid;
+  if ( pid < 0 )
+    pkt->cred.cred.pid = 0;
+  else
+    pkt->cred.cred.pid = pid;
+  if ( info->uid > 0 )
+    pkt->cred.cred.uid = info->uid;
+  if ( info->gid > 0 )
+    pkt->cred.cred.gid = info->gid;
   
   if ( info->name[0] != 0 )
     {
@@ -2058,7 +2067,7 @@ ssize_t dspd_aio_sock_recv_cred(void *arg, struct ucred *uc, void *data, size_t 
       if ( ret != -EPROTO )
 	{
 	  cmhp = CMSG_FIRSTHDR(&msgh);
-	  if ( cmhp->cmsg_level == SOL_SOCKET && cmhp->cmsg_type == SCM_CREDENTIALS )
+	  if ( cmhp != NULL && cmhp->cmsg_level == SOL_SOCKET && cmhp->cmsg_type == SCM_CREDENTIALS )
 	    {
 	      ucredp = (struct ucred *)CMSG_DATA(cmhp);
 	      if ( ucredp )

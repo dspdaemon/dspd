@@ -72,7 +72,7 @@ struct dspd_chmap {
 /*Full sized channel map.  This is the most space that a channel map will ever need.*/
 struct dspd_fchmap {
   struct dspd_chmap map;
-  uint8_t pos[DSPD_CHMAP_LAST+1];
+  uint8_t pos[(DSPD_CHMAP_LAST+1)*2UL];
 };
 #define DSPD_CHMAP_MAXSIZE sizeof(struct dspd_fchmap)
 #define DSPD_CHMAP_MAXCHAN (DSPD_CHMAP_LAST-DSPD_CHMAP_FL+1)
@@ -99,7 +99,7 @@ void dspd_chmap_dump(const struct dspd_chmap *map);
 size_t dspd_chmap_bufsize(uint8_t channels, uint8_t stream);
 size_t dspd_chmap_sizeof(const struct dspd_chmap *map);
 size_t dspd_fchmap_sizeof(const struct dspd_fchmap *map);
-
+int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map);
 
 
 

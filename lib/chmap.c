@@ -22,6 +22,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include "sslib.h"
 
 
@@ -315,4 +317,76 @@ size_t dspd_chmap_sizeof(const struct dspd_chmap *map)
 size_t dspd_fchmap_sizeof(const struct dspd_fchmap *map)
 {
   return dspd_chmap_sizeof(&map->map);
+}
+
+int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map)
+{
+  char buf[16];
+  const char *saveptr, *tok;
+  size_t len, pos = 0;
+  int32_t ret = 0;
+  char *p;
+  uint8_t src, dest;
+  bool have_multi = false;
+  memset(map, 0, sizeof(*map));
+  for ( tok = dspd_strtok_c(str, ",", &saveptr, &len); 
+	tok; 
+	tok = dspd_strtok_c(NULL, ",", &saveptr, &len) )
+    {
+     
+      if ( pos == DSPD_CHMAP_LAST )
+	{
+	  ret = -ECHRNG;
+	  break;
+	}
+      
+      if ( len >= sizeof(buf) )
+	{
+	  ret = -E2BIG;
+	  break;
+	}
+      memcpy(buf, tok, len);
+      buf[len] = 0;
+
+      p = strchr(buf, '=');
+      if ( ! p )
+	{
+	  //The format is 'A,B,C...'
+	  if ( have_multi )
+	    {
+	      ret = -EINVAL;
+	      break;
+	    }
+	  ret = dspd_strtou8(buf, &src, 0);
+	  if ( ret < 0 )
+	    break;
+	  map->map.pos[pos] = src;
+	} else
+	{
+	  //The format is 'A=B,C=D,...'
+	  if ( pos > 0 && have_multi == false )
+	    {
+	      ret = -EINVAL;
+	      break;
+	    }
+	  have_multi = true;
+
+	  *p = 0;
+	  p++;
+	  ret = dspd_strtou8(buf, &src, 0);
+	  if ( ret < 0 )
+	    break;
+	  ret = dspd_strtou8(p, &dest, 0);
+	  if ( ret < 0 )
+	    break;
+
+	  map->map.pos[pos*2] = src;
+	  map->map.pos[(pos*2)+1UL] = dest;
+	}
+      pos++;
+    }
+  map->map.channels = pos;
+  if ( have_multi )
+    map->map.stream |= DSPD_CHMAP_MULTI;
+  return ret;
 }

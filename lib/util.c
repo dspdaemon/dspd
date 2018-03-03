@@ -574,3 +574,50 @@ size_t dspd_strlen_safe(const char *str)
     return strlen(str);
   return 0;
 }
+
+/*
+  This is like strtok_r(), but it doesn't modify the input string.  The return value is a
+  pointer to the next token, if any, and the length is the number of characters in the
+  string.  The caller could turn in into a string:
+
+  if ( length < sizeof(tmpbuf) )
+  {
+     memcpy(tmpbuf, tok, length);
+     tmpbuf[length] = 0;
+   } else 
+   { 
+     //ERROR: Too big
+   }
+*/
+const char *dspd_strtok_c(const char *str, const char *delim, const char **saveptr, size_t *length)
+{
+  const char *ret = NULL;
+  if ( ! str )
+    str = *saveptr;
+  else
+    *saveptr = str;
+  const char *d;
+  size_t dlen = strlen(delim);
+  do {
+    d = strstr(str, delim);
+    if ( d )
+      {
+	*length = (size_t)d - (size_t)str;
+	*saveptr = &str[(*length)+dlen];
+	ret = str;
+      } else if ( str[0] == 0 )
+      {
+	*length = 0;
+      } else
+      {
+	*length = strlen(str);
+	if ( *length > 0 )
+	  {
+	    ret = str;
+	    *saveptr = &str[*length];
+	  }
+      }
+    str = *saveptr;
+  } while ( *length == 0 && ret != NULL );
+  return ret;
+}
