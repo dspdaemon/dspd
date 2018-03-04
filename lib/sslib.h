@@ -31,4 +31,5 @@
 #include "ssclient.h"
 #include "rtalloc.h"
 #include "dspdaio.h"
+#include "pcmcli.h"
 #endif

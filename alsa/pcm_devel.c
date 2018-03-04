@@ -59,11 +59,30 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
   char fname[256];
   static void *handle = NULL;
   int debug = 0;
+  long ul;
+  snd_config_iterator_t cfgi, next;
   p = getenv("SND_PCM_DEVEL_DEBUG");
   if ( p )
     debug = atoi(p);
   if ( debug )
     fprintf(stderr, "pcm_devel: Loaded dspd pcm development plugin\n");
+  
+  snd_config_for_each(cfgi, next, conf) 
+    {
+      snd_config_t *it = snd_config_iterator_entry(cfgi);
+      const char *key;
+      if (snd_config_get_id(it, &key) < 0)
+	continue;
+      if ( strcmp(key, "lib") == 0 && solib == NULL )
+	{
+	  snd_config_get_string(it, &solib);
+	} else if ( strcmp(key, "debug") == 0 )
+	{
+	  if ( snd_config_get_integer(it, &ul) == 0 )
+	    debug = ul;
+	}
+    }
+
   if ( ! solib )
     {
       fprintf(stderr, "pcm_devel: No library specified\n");
@@ -72,7 +91,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 
   if ( ! handle )
     {
-      handle = dlopen(solib, RTLD_NOW);
+      handle = snd_dlopen(solib, RTLD_NOW);
       if ( ! handle )
 	{
 	  if ( debug )
@@ -81,7 +100,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 	}
     }
 
-  if ( strcmp(solib, "libasound_module_pcm_") == 0 )
+  const char soname[] = "libasound_module_pcm_";
+  if ( strncmp(solib, soname, sizeof(soname)-1) == 0 )
     {
       strcpy(str, solib);
     } else if ( (ptr = strstr(solib, "/libasound_module_pcm_")) )

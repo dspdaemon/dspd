@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <sys/uio.h>
 #include <stdarg.h>
-
+#include <errno.h>
 struct dspd_ll {
   void           *pointer;
   struct dspd_ll *prev, *next;
@@ -91,5 +91,18 @@ int32_t dspd_parse_opt(int32_t defaultvalue,
 size_t dspd_strlen_safe(const char *str);
 
 const char *dspd_strtok_c(const char *str, const char *delim, const char **saveptr, size_t *length);
+
+static inline bool dspd_tmperr(int err)
+{
+  if ( err > 0 )
+    err *= -1;
+  return err == -EAGAIN || 
+    err == -EWOULDBLOCK || 
+    err == -EINTR || 
+    err == -EBUSY || 
+    err == -EINVAL;
+}
+
+#define dspd_fatal_err(_e) (!dspd_tmperr(_e))
 
 #endif
