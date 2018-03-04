@@ -418,6 +418,7 @@ struct dspd_device_stat {
   int32_t reserved;
   uint64_t slot_id;
   uint32_t refcount;
+  uint32_t pad;
   struct dspd_cli_params playback;
   struct dspd_cli_params capture;
 };
