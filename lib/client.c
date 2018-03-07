@@ -2306,7 +2306,7 @@ static int32_t client_reserve(struct dspd_rctx *context,
 				NULL,
 				0,
 				&br);
-	  return dspd_req_reply_err(context, 0, ret);
+	  goto out;
 	}
     }
   
@@ -2336,6 +2336,7 @@ static int32_t client_reserve(struct dspd_rctx *context,
 	}
     }
 
+ out:
   dspd_slist_entry_srvunlock(cli->list, cli->index);
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_err(context, 0, ret);

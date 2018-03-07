@@ -21,6 +21,7 @@ esd		     (ALSA)
 fluidsynth   	     (ALSA,OSS)
 d2x-rebirth	     (ALSA)
 d1x-rebirth	     (ALSA)
+ossxmix              (OSS)
 
 The following applications mostly work:
 
@@ -28,8 +29,6 @@ aucat                (sndio,ALSA)
  May abort capture on xrun with sndio protocol.  ALSA support requires
  a special pcm.hw entry in .asoundrc to override hardware access.
 
-ossxmix              (OSS)
- Some controls aren't correctly represented due to bugs in dspd.
 
 aumix                (OSS)
  The OSSv3 mixer API sucks.  Maybe it would be better to just represent a small

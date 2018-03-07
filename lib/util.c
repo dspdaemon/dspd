@@ -381,17 +381,20 @@ size_t strlcpy(char * __restrict dst,
 	       const char * __restrict src, 
 	       size_t size)
 {
-  size_t i = 0, s = size - 1;
-  while ( src[i] != 0 && i < s )
+  size_t i = 0, n = size - 1;
+  while ( i < n && src[i] != 0 )
     {
       dst[i] = src[i];
       i++;
-     }
-  while ( i < size )
-     {
-       dst[i] = 0;
-       i++;
-     }
+    }
+  n = i;
+  while ( n < size )
+    {
+      dst[n] = 0;
+      n++;
+    }
+  while ( src[i] )
+    i++;
   return i;
 }
 

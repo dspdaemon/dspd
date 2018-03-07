@@ -2691,6 +2691,22 @@ int32_t dspd_pcmcli_hw_params_set_fragsize(struct dspd_pcmcli *client,
   return params->fragsize;
 }
 
+int32_t dspd_pcmcli_hw_params_set_latency(struct dspd_pcmcli *client, 
+					  struct dspd_cli_params *params,
+					  int32_t frames)
+{
+  int32_t fs = params->fragsize, l = params->latency;
+  int32_t ret;
+  ret = dspd_pcmcli_hw_params_set_fragsize(client, params, frames);
+  if ( fs > 0 )
+    params->fragsize = fs;
+  if ( ret > 0 )
+    params->latency = ret;
+  else
+    params->latency = l;
+  return ret;
+}
+
 int32_t dspd_pcmcli_hw_params_set_format(struct dspd_pcmcli *cli,
 					 struct dspd_cli_params *params,
 					 int32_t format)

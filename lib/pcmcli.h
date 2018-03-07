@@ -174,6 +174,9 @@ int32_t dspd_pcmcli_hw_params_set_bufsize(struct dspd_pcmcli *client,
 int32_t dspd_pcmcli_hw_params_set_fragsize(struct dspd_pcmcli *client, 
 					   struct dspd_cli_params *params,
 					   int32_t size);
+int32_t dspd_pcmcli_hw_params_set_latency(struct dspd_pcmcli *client, 
+					  struct dspd_cli_params *params,
+					  int32_t frames);
 int32_t dspd_pcmcli_hw_params_set_format(struct dspd_pcmcli *cli,
 					 struct dspd_cli_params *params,
 					 int32_t format);
