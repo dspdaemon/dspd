@@ -432,17 +432,15 @@ void dsp_write(struct oss_cdev_client *cli,
 						       &abstime);
 	      if ( ret < 0 )
 		break;
-	      
+   
 	      
 	      ret = dspd_cdev_client_sleep(cli, &abstime, alertable);
 	      if ( ret != 0 )
 		{
-		  alertable = 0;
 		  if ( ret != ETIMEDOUT && ret != EINPROGRESS )
 		    break;
 		  else if ( ret == EINPROGRESS )
 		    alertable = false; //Got new request, so hurry up.
-		  
 		}
 	    }
 	}

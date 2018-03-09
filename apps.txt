@@ -13,10 +13,11 @@ Mozilla Seamonkey    (ALSA)
 Firefox              (ALSA)
 Chromium Browser     (ALSA)
 Chromium BSU         (OSS)
+google-chrome	     (ALSA)
 KDE 4.10.5           (ALSA)
 aplay/arecord        (ALSA)
 ossplay              (OSS)
-mplayer              (OSS)
+mplayer              (ALSA,OSS)
 esd		     (ALSA)
 fluidsynth   	     (ALSA,OSS)
 d2x-rebirth	     (ALSA)
@@ -47,7 +48,6 @@ opera 12       	     (ALSA)
 Not tested for a while, but previously known to work:
 
 artsd	       	     (ALSA,OSS)
-google-chrome	     Nearly identical to Chromium and did previously work.
 vlc		     (OSS)
 
 
