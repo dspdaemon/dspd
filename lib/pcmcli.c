@@ -939,6 +939,8 @@ int32_t dspd_pcmcli_get_status(struct dspd_pcmcli *client, int32_t stream, bool 
 		    {
 		      status->delay += diff;
 		    }
+		  if ( status->error == 0 && status->avail >= s->stream.params.bufsize && client->no_xrun == false )
+		    status->error = -EPIPE;
 		}
 	    }
 	} else
@@ -972,6 +974,10 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
       if ( ! client->constant_latency )
 	{
 	  ret = dspd_pcmcli_stream_avail(&client->playback.stream, hw_ptr, appl_ptr);
+	  if ( client->state == PCMCLI_STATE_RUNNING && 
+	       client->no_xrun == false && 
+	       ret >= client->playback.stream.params.bufsize )
+	    ret = -EPIPE;
 	} else
 	{
 	  ret = dspd_pcmcli_get_status(client, stream, false, &status);
@@ -985,6 +991,10 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
     } else if ( stream == DSPD_PCM_SBIT_CAPTURE )
     {
       ret = dspd_pcmcli_stream_avail(&client->capture.stream, hw_ptr, appl_ptr);
+      if ( client->state == PCMCLI_STATE_RUNNING && 
+	   client->no_xrun == false && 
+	   ret >= client->capture.stream.params.bufsize )
+	ret = -EPIPE;
     } else
     {
       ret = -EINVAL;
