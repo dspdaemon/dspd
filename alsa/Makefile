@@ -31,6 +31,12 @@ pcm_dspd:
 	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so \
 	pcm_dspd.o
 
+
+pcm_dspd_new:
+	$(MAKEOBJ) pcm_dspd_new.c
+	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so \
+	pcm_dspd_new.c
+
 install:
 	mkdir -p $(REAL_LIBDIR)/alsa-lib
 	install -m555 libasound_module_pcm_dspd.so $(REAL_LIBDIR)/alsa-lib/

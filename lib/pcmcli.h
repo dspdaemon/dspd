@@ -180,6 +180,9 @@ int32_t dspd_pcmcli_hw_params_set_latency(struct dspd_pcmcli *client,
 int32_t dspd_pcmcli_hw_params_set_format(struct dspd_pcmcli *cli,
 					 struct dspd_cli_params *params,
 					 int32_t format);
+
+int32_t dspd_pcmcli_hw_params_get_channels(struct dspd_pcmcli *cli, struct dspd_cli_params *params, int32_t stream);
+
 const struct dspd_device_stat *dspd_pcmcli_device_info(struct dspd_pcmcli *client, int32_t sbit);
 
 

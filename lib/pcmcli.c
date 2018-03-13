@@ -1659,7 +1659,7 @@ int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t fl
   if ( ret == 0 && (flags & DSPD_PCMCLI_NOTIMER) == 0 )
     {
       ret = dspd_timer_init(&client->timer);
-      if ( ret == 0 && (client->streams & DSPD_PCM_SBIT_PLAYBACK) )
+      if ( ret == 0 )
 	client->timer_ops = &pcmcli_timer_ops;
       if ( ret == 0 )
 	{
@@ -2553,6 +2553,24 @@ int32_t dspd_pcmcli_hw_params_default(struct dspd_pcmcli *client, struct dspd_cl
       if ( ! dspd_aio_is_local(client->conn) )
 	params->flags |= DSPD_CLI_FLAG_SHM;
 
+    }
+  return ret;
+}
+
+int32_t dspd_pcmcli_hw_params_get_channels(struct dspd_pcmcli *client, struct dspd_cli_params *params, int32_t stream)
+{
+  int32_t ret = -EINVAL;
+  stream &= params->stream;
+  stream &= client->streams;
+  if ( params->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS )
+    {
+      if ( stream == DSPD_PCM_SBIT_PLAYBACK )
+	ret = DSPD_CLI_PCHAN(params->channels);
+      else if ( stream == DSPD_PCM_SBIT_CAPTURE )
+	ret = DSPD_CLI_CCHAN(params->channels);
+    } else if ( stream )
+    {
+      ret = params->channels;
     }
   return ret;
 }
