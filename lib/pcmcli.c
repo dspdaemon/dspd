@@ -993,7 +993,7 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
       ret = dspd_pcmcli_stream_avail(&client->capture.stream, hw_ptr, appl_ptr);
       if ( client->state == PCMCLI_STATE_RUNNING && 
 	   client->no_xrun == false && 
-	   ret >= client->capture.stream.params.bufsize )
+	   ret >= client->swparams.stop_threshold )
 	ret = -EPIPE;
     } else
     {
@@ -1349,6 +1349,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
       if ( ret == 0 )
 	{
 	  client->fragsize = hwparams->fragsize;
+	  client->swparams.stop_threshold = hwparams->bufsize;
 	  s = -1;
 	  ret = dspd_stream_ctl(client->conn, -1, DSPD_SCTL_CLIENT_CONNECT, &s, sizeof(s), NULL, 0, &br);
 	}
@@ -1414,7 +1415,13 @@ static void swparams_complete(void *context, struct dspd_async_op *op)
   if ( op->error == 0 )
     {
       if ( op->xfer > 0 )
-	memmove(&cli->swparams, op->outbuf, op->xfer);
+	{
+	  memmove(&cli->swparams, op->outbuf, op->xfer);
+	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	    cli->playback.stream.xrun_threshold = cli->swparams.stop_threshold;
+	  if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	    cli->capture.stream.xrun_threshold = cli->swparams.stop_threshold;
+	}
     }
   complete_event(cli, op->error);
 }

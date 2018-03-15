@@ -383,28 +383,29 @@ int dspd_alsa_sw_params(snd_pcm_ioplug_t *io,
   int ret;
   snd_pcm_uframes_t frames;
   struct dspd_rclient_swparams swp;
-
+  snd_pcm_uframes_t boundary;
   memset(&swp, 0, sizeof(swp));
   ret = snd_pcm_sw_params_get_start_threshold(params, &frames);
-  if ( ret == 0 )
+  if ( ret == 0 && snd_pcm_sw_params_get_boundary(params, &boundary) == 0 )
     {
       dspd->start_threshold = frames;
       swp.start_threshold = frames;
-    }
-  ret = snd_pcm_sw_params_get_avail_min(params, &frames);
-  if ( ret == 0 )
-    {
-      swp.avail_min = frames;
-      ret = snd_pcm_sw_params_get_stop_threshold(params, &frames);
+      ret = snd_pcm_sw_params_get_avail_min(params, &frames);
       if ( ret == 0 )
 	{
-	  ret = dspd_pcmcli_set_poll_threshold(dspd->client, swp.avail_min);
-	  if ( ret > 0 )
+	  swp.avail_min = frames;
+	  ret = snd_pcm_sw_params_get_stop_threshold(params, &frames);
+	  if ( ret == 0 )
 	    {
-	      swp.stop_threshold = frames;
-	      swp.avail_min = ret;
-	      dspd->avail_min = swp.avail_min;
-	      ret = dspd_pcmcli_set_swparams(dspd->client, &swp, true, NULL, NULL);
+	      (void)dspd_pcmcli_set_no_xrun(dspd->client, frames == boundary);
+	      ret = dspd_pcmcli_set_poll_threshold(dspd->client, swp.avail_min);
+	      if ( ret > 0 )
+		{
+		  swp.stop_threshold = frames;
+		  swp.avail_min = ret;
+		  dspd->avail_min = swp.avail_min;
+		  ret = dspd_pcmcli_set_swparams(dspd->client, &swp, true, NULL, NULL);
+		}
 	    }
 	}
     }
