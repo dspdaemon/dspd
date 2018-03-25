@@ -20,7 +20,7 @@ all: $(OBJECTS) solib
 dspdc:
 	$(CC) $(LIBS) $(CFLAGS) -shared -o libdspdc.so $(DSPDC_OBJ)
 dspds:
-	$(CC) $(LIBS) $(CFLAGS) -shared -o libdspds.so $(DSPDS_OBJ)
+	$(CC) $(LIBS) $(CFLAGS) -L. -ldspdc -shared -o libdspds.so $(DSPDS_OBJ)
 
 solib: dspdc dspds
 #	$(CC) $(LIBS) $(OBJECTS) $(CFLAGS) -shared -o libsoundserver.so
