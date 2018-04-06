@@ -87,7 +87,7 @@ struct alsahw_handle {
   uintptr_t                 xfer;
   uintptr_t                 started;
 
-  struct dspd_chmap         *channel_map;
+  struct dspd_pcm_chmap    *channel_map;
 
   struct alsahw_mix_elem   *elements;
   size_t                     elements_count, max_elements;

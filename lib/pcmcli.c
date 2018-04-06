@@ -1502,7 +1502,7 @@ static void channelmap_complete(void *context, struct dspd_async_op *op)
 
 
 int32_t dspd_pcmcli_set_channelmap(struct dspd_pcmcli *client, 
-				   const struct dspd_chmap *chmap, 
+				   const struct dspd_pcm_chmap *chmap, 
 				   bool sync, 
 				   dspd_aio_ccb_t complete,
 				   void *data)
@@ -1513,7 +1513,7 @@ int32_t dspd_pcmcli_set_channelmap(struct dspd_pcmcli *client,
       ret = submit_io(client, 
 		      DSPD_SCTL_CLIENT_SETCHANNELMAP,
 		      chmap,
-		      dspd_chmap_sizeof(chmap),
+		      dspd_pcm_chmap_sizeof(chmap->count, chmap->flags),
 		      NULL,
 		      0,
 		      channelmap_complete);
@@ -1528,7 +1528,7 @@ int32_t dspd_pcmcli_set_channelmap(struct dspd_pcmcli *client,
 
 int32_t dspd_pcmcli_get_channelmap(struct dspd_pcmcli *client, 
 				   int32_t stream, 
-				   struct dspd_chmap *chmap,
+				   struct dspd_pcm_chmap *chmap,
 				   size_t chmap_bufsize,
 				   dspd_aio_ccb_t complete,
 				   void *data)

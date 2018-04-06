@@ -28,17 +28,14 @@
 
 
 
-/*
-  Find a named position
- */
-int32_t dspd_chmap_index(const struct dspd_chmap *map, 
-			 uint32_t pos)
+
+static ssize_t find_channel(const struct dspd_pcm_chmap *map, uint16_t channel)
 {
-  uint8_t i;
-  int32_t ret = -1;
-  for ( i = 0; i < map->channels; i++ )
+  size_t i;
+  ssize_t ret = -1;
+  for ( i = 0; i < map->count; i++ )
     {
-      if ( map->pos[i] == pos )
+      if ( map->pos[i] == channel )
 	{
 	  ret = i;
 	  break;
@@ -46,287 +43,443 @@ int32_t dspd_chmap_index(const struct dspd_chmap *map,
     }
   return ret;
 }
-
-/*
-  Generate a map to convert from input to output.
-  It is technically possible to mix dynamically from two
-  different channel maps if they are compatible but there
-  is really no need to do it since the output generated here
-  won't often change.
-*/
-bool dspd_chmap_getconv(const struct dspd_chmap *from,
-			const struct dspd_chmap *to,
-			struct dspd_chmap *cmap)
+static int32_t stereo_to_mono(const struct dspd_pcm_chmap *in, 
+			      const struct dspd_pcm_chmap *out,
+			      struct dspd_pcm_chmap *map)
 {
-  uint8_t i;
-  bool ret = true;
-  int32_t pos;
-  cmap->channels = from->channels;
-  for ( i = 0; i < from->channels; i++ )
+  size_t i;
+  map->flags = DSPD_CHMAP_MATRIX;
+  for ( i = 0; i < in->count; i++ )
+    map->pos[i] = 0;
+  map->ichan = in->count;
+  map->ochan = out->count;
+  map->count = map->ichan;
+  return 0;
+}
+static int32_t mono_to_stereo(const struct dspd_pcm_chmap *in, 
+			      const struct dspd_pcm_chmap *out,
+			      struct dspd_pcm_chmap *map)
+{
+  ssize_t ch1, ch2;
+  size_t i, o;
+  (void)in;
+  ch1 = find_channel(out, DSPD_CHMAP_FL);
+  ch2 = find_channel(out, DSPD_CHMAP_FR);
+  if ( ch1 >= 0 && ch2 >= 0 )
     {
-      pos = dspd_chmap_index(to, from->pos[i]);
-      if ( pos < 0 )
+      map->pos[0] = 0;
+      map->pos[1] = ch1;
+      map->pos[2] = 0;
+      map->pos[3] = ch2;
+      map->count = 4U;
+    } else
+    {
+      for ( i = 0, o = 0; i < out->count; i++ )
 	{
-	  ret = false;
-	  break;
+	  if ( out->pos[i] > DSPD_CHMAP_MONO )
+	    {
+	      map->pos[o] = 0;
+	      o++;
+	      map->pos[o] = i;
+	      o++;
+	    }
 	}
-      /*
-	The input (pos[i]) actually goes to pos.
-	
-	That means:
-	output[cmap->pos[i]] += input[i];
-	
-
-       */
-      cmap->pos[i] = pos;
+      if ( map->count < 1U )
+	return -EINVAL;
+      map->count = o;
     }
-  
+  map->ochan = out->count;
+  map->ichan = 1U;
+  map->flags = DSPD_CHMAP_MULTI | DSPD_CHMAP_MATRIX;
+  return 0;
+}
+static int32_t translate_map(const struct dspd_pcm_chmap *in, 
+			     const struct dspd_pcm_chmap *out,
+			     struct dspd_pcm_chmap *map)
+{
+  size_t i, o;
+  ssize_t ch;
+  int32_t ret = 0;
+  map->flags = DSPD_CHMAP_MATRIX;
 
+  if ( out->flags & DSPD_PCM_SBIT_CAPTURE )
+    {
+      for ( i = 0, o = 0; i < out->count && o < map->count; i++ )
+	{
+	  ch = find_channel(in, out->pos[i]);
+	  if ( ch < 0 )
+	    {
+	      ret = -EINVAL;
+	      break;
+	    }
+	  map->pos[o] = ch;
+	  o++;
+	  map->pos[o] = i;
+	  o++;
+	}
+      map->count = o;
+      map->ichan = in->ichan;
+      map->ochan = out->ichan;
+      map->flags |= DSPD_CHMAP_MULTI;
+    } else
+    {
+      map->ichan = in->count;
+      map->ochan = out->count;
+      for ( i = 0; i < in->count; i++ )
+	{
+	  ch = find_channel(out, in->pos[i]);
+	  if ( ch < 0 )
+	    {
+	      ret = -EINVAL;
+	      break;
+	    }
+	  map->pos[i] = ch;
+	}	
+      map->count = i;
+    }
   return ret;
 }
 
-void dspd_chmap_getdefault(struct dspd_chmap *map, unsigned int channels)
+int32_t dspd_pcm_chmap_translate(const struct dspd_pcm_chmap *in, 
+				 const struct dspd_pcm_chmap *out,
+				 struct dspd_pcm_chmap *map)
 {
-  unsigned int i;
-  if ( channels == 1 )
+  int32_t ret = -EINVAL;
+  size_t i;
+  if ( in == NULL )
     {
-      map->channels = 1;
-      map->pos[0] = DSPD_CHMAP_MONO;
-    } else
-    {
-      for ( i = 0; i < channels; i++ )
-	map->pos[i] = i + DSPD_CHMAP_FL;
-      map->channels = channels;
-    }
-}
-
-void dspd_chmap_add_route(struct dspd_chmap *map, uint32_t in, uint32_t out)
-{
-  size_t offset;
-  if ( map->stream & DSPD_CHMAP_MULTI )
-    {
-      offset = map->channels * 2;
-      map->pos[offset] = in;
-      map->pos[offset+1] = out;
-      map->channels++;
-    } else
-    {
-      map->pos[in] = out;
-    }
-}
-
-/*
-  Get a generic map from a device map.  The client should set
-  climap->channels to whatever it wants and allocate enough
-  space to hold all of devmap.  The result may have a different
-  number of channels, but it will still correspond to whatever
-  was requested.  This is because a mono input may need to be
-  copied to multiple outputs.
-  
-  The results are undefined if the caller does not initialize climap to all 0,
-  except for climap->channels.
-
-*/
-int dspd_chmap_create_generic(const struct dspd_chmap *devmap, 
-			      struct dspd_chmap *climap)
-
-{
-  
-  unsigned int channels = climap->channels, i, ret = 0;
-  int32_t idx, r, l;
-  if ( channels == 1 )
-    {
-      if ( devmap->channels > channels )
+      if ( map->count <= out->ichan )
 	{
-	  climap->stream |= DSPD_CHMAP_MULTI;
-	  climap->channels = 0;
-	  if ( (idx = dspd_chmap_index(devmap, DSPD_CHMAP_FL)) >= 0 )
-	    dspd_chmap_add_route(climap, 0, idx);
-	  if ( (idx = dspd_chmap_index(devmap, DSPD_CHMAP_FR)) >= 0 )
-	    dspd_chmap_add_route(climap, 0, idx);
-	  if ( (idx = dspd_chmap_index(devmap, DSPD_CHMAP_FC)) >= 0 )
-	    dspd_chmap_add_route(climap, 0, idx);
-	  if ( climap->channels == 0 )
+	  for ( i = 0; i < out->ichan; i++ )
+	    map->pos[i] = i;
+	  map->ichan = map->count;
+	  map->ochan = map->count;
+	  ret = 0;
+	}
+    } else if ( (in->flags & DSPD_CHMAP_MATRIX) == 0 )
+    {
+      if ( in->count > 0 && out->count == 1 && out->pos[0] == DSPD_CHMAP_MONO )
+	{
+	  ret = stereo_to_mono(in, out, map);
+	} else if ( in->count == 1 && out->count > 1 && in->pos[0] == DSPD_CHMAP_MONO )
+	{
+	  ret = mono_to_stereo(in, out, map);
+	} else if ( in->count <= out->count )
+	{
+	  ret = translate_map(in, out, map);
+	}
+    }
+  return ret;
+}
+
+const struct dspd_pcm_chmap *dspd_pcm_chmap_get_default(size_t channels)
+{
+  static const struct dspd_pcm_chmap_container maps[] = {
+    { .map = { .count = 1U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_MONO  
+      }
+    },
+    { .map = { .count = 2U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_FL,  
+	DSPD_CHMAP_FR,  
+      }
+    },
+    { .map = { .count = 3U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_FL,  
+	DSPD_CHMAP_FR, 
+	DSPD_CHMAP_FC, 
+      } 
+    },
+    { .map = { .count = 4U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_FL,  
+	DSPD_CHMAP_FR, 
+	DSPD_CHMAP_FC, 
+	DSPD_CHMAP_LFE, 
+      } 
+    },
+    { .map = { .count = 6U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_FL,  
+	DSPD_CHMAP_FR, 
+	DSPD_CHMAP_FC, 
+	DSPD_CHMAP_LFE, 
+	DSPD_CHMAP_RL,  
+	DSPD_CHMAP_RR,
+      } 
+    },
+    { .map = { .count = 8U, .flags = 0 }, .pos = { 
+	DSPD_CHMAP_FL,  
+	DSPD_CHMAP_FR, 
+	DSPD_CHMAP_FC, 
+	DSPD_CHMAP_LFE, 
+	DSPD_CHMAP_RL,  
+	DSPD_CHMAP_RR,
+	DSPD_CHMAP_SL,  
+	DSPD_CHMAP_SR,
+      } 
+    },
+  };
+  size_t i;
+  const struct dspd_pcm_chmap *ret = NULL;
+  for ( i = 0; i < ARRAY_SIZE(maps); i++ )
+    {
+      if ( maps[i].map.count == channels )
+	{
+	  ret = &maps[i].map;
+	  break;
+	}
+    }
+  return ret;
+}
+
+
+int32_t dspd_pcm_chmap_test_channels(const struct dspd_pcm_chmap *map, size_t channels_in, size_t channels_out)
+{
+  size_t i, inp, outp;
+  int32_t ret = 0;
+  if ( map->flags & DSPD_CHMAP_MATRIX )
+    {
+      if ( (map->count % 2U) == 0 )
+	{
+	  if ( map->flags & DSPD_PCM_SBIT_PLAYBACK )
 	    {
-	      if ( (idx = dspd_chmap_index(devmap, DSPD_CHMAP_MONO)) >= 0 )
-		dspd_chmap_add_route(climap, 0, idx);
+	      if ( channels_out == 0 )
+		channels_out = UINTPTR_MAX;
+	      if ( channels_out != map->ichan )
+		return -EINVAL;
+	    } else if ( map->flags & DSPD_PCM_SBIT_CAPTURE )
+	    {
+	      if ( channels_in == 0 )
+		channels_in = UINTPTR_MAX;
+	      if ( channels_out != map->ochan )
+		return -EINVAL;
 	    }
-	  if ( climap->channels == 0 )
+	  for ( i = 0; i < map->count; i += 2UL )
 	    {
-	      //Don't know what to do, so copy to each channel
-	      for ( i = 0; i < devmap->channels; i++ )
-		dspd_chmap_add_route(climap, 0, i);
-	    }
-	  if ( devmap->stream & DSPD_PCM_SBIT_CAPTURE )
-	    {
-	      for ( i = 0; i < (climap->channels * 2); i += 2 )
+	      inp = map->pos[i];
+	      outp = map->pos[i+1UL];
+	      if ( inp >= channels_in || outp >= channels_out )
 		{
-		  unsigned int n = climap->pos[i];
-		  climap->pos[i] = climap->pos[i+1];
-		  climap->pos[i+1] = n;
+		  ret = -ECHRNG;
+		  break;
 		}
 	    }
 	} else
 	{
-	  //Only one channel (mono output) so copy to that one.
-	  climap->pos[0] = 0;
-	  climap->stream &= ~DSPD_CHMAP_MULTI;
+	  ret = -EINVAL;
 	}
-    } else if ( channels == 2 )
+    } else
     {
-      climap->stream &= ~DSPD_CHMAP_MULTI;
-      if ( devmap->channels < channels )
+      if ( (map->flags & DSPD_PCM_SBIT_PLAYBACK) && 
+	   (channels_in > map->count || (channels_out != 0 && map->count > channels_out)))
 	{
-	  climap->pos[0] = 0;
-	  climap->pos[1] = 0;
+	  ret = -EDOM;
+	} else if ( (map->flags & DSPD_PCM_SBIT_CAPTURE) && 
+		    (channels_out > map->count || (channels_in != 0 && map->count > channels_in)))
+	{
+	  ret = -EDOM;
 	} else
 	{
-	  r = dspd_chmap_index(devmap, DSPD_CHMAP_FL);
-	  l = dspd_chmap_index(devmap, DSPD_CHMAP_FR);
-	  if ( r >= 0 && l >= 0 )
+	  for ( i = 0; i < map->count; i++ )
 	    {
-	      climap->pos[0] = r;
-	      climap->pos[1] = l;
-	    } else
-	    {
-	      climap->pos[0] = devmap->pos[0];
-	      climap->pos[1] = devmap->pos[1];
-	    }
-	}
-    } else if ( devmap->channels >= channels )
-    {
-      climap->stream &= ~DSPD_CHMAP_MULTI;
-      for ( i = 0; i < channels; i++ )
-	climap->pos[i] = devmap->pos[i];
-    } else
-    {
-      ret = -EDOM;
-    }
-  return ret;
-}
-
-static bool dspd_chmap_test_multi(const struct dspd_chmap *srv,
-				  const struct dspd_chmap *cli,
-				  uint32_t actual_channels)
-
-{
-  size_t i, n = cli->channels * 2;
-  uint8_t in, out;
-  bool ret = true;
-  if ( srv->stream & DSPD_PCM_SBIT_CAPTURE )
-    {
-      for ( i = 0; i < n; i += 2 )
-	{
-	  in = cli->pos[i];
-	  out = cli->pos[i+1];
-	  if ( out >= actual_channels ||
-	       in >= srv->channels )
-	    {
-	      ret = false;
-	      break;
-	    }
-	}
-    } else
-    {
-      for ( i = 0; i < n; i += 2 )
-	{
-	  in = cli->pos[i];
-	  out = cli->pos[i+1];
-	  if ( in >= actual_channels ||
-	       out >= srv->channels )
-	    {
-	      ret = false;
-	      break;
+	      if ( map->pos[i] == DSPD_CHMAP_MONO && map->count > 1U )
+		{
+		  ret = -ECHRNG;
+		  break;
+		} else if ( map->pos[i] < DSPD_CHMAP_MONO || map->pos[i] > DSPD_CHMAP_LAST )
+		{
+		  ret = -ECHRNG;
+		  break;
+		}
 	    }
 	}
     }
   return ret;
 }
 
-bool dspd_chmap_test(const struct dspd_chmap *srv,
-		     const struct dspd_chmap *cli,
-		     uint32_t actual_channels)
+
+//The second argument is the returned map (arg #3) from dspd_pcm_chmap_translate() or
+//the input map (arg #1).
+int32_t dspd_pcm_chmap_test(const struct dspd_pcm_chmap *in,  
+			    const struct dspd_pcm_chmap *out)
 {
   size_t i;
-  bool ret = true;
-  if ( (srv->stream & DSPD_CHMAP_MULTI) ||
-       srv->channels > DSPD_CHMAP_LAST ||
-       cli->channels > DSPD_CHMAP_LAST ||
-       srv->channels == 0 ||
-       cli->channels == 0 ||
-       ((cli->stream & DSPD_CHMAP_MULTI) == 0 && actual_channels < cli->channels))
+  int32_t ret = 1;
+  ssize_t c;
+  bool sub = true;
+  if ( out != NULL && out->count == 0 )
     {
-      ret = false;
-    } else if ( cli->stream & DSPD_CHMAP_MULTI )
+      ret = -EINVAL;
+    } else if ( in->flags & DSPD_CHMAP_MATRIX )
     {
-      ret = dspd_chmap_test_multi(srv, cli, actual_channels);
+      //Analyze a conversion matrix
+      if ( (in->count == 0 || in->ichan == 0 || in->ochan == 0) || (out != NULL && in->ochan > out->count) )
+	{
+	  ret = -EINVAL;
+	} else if ( in->flags & DSPD_CHMAP_MULTI )
+	{
+	  for ( i = 0; i < in->count; i += 2 )
+	    {
+	      if ( in->pos[i] >= in->ichan ||
+		   in->pos[i+1UL] >= in->ochan ||
+		   (out != NULL && in->pos[i+1UL] >= out->count) )
+		{
+		  ret = -ECHRNG;
+		  break;
+		}
+	    }
+	} else
+	{
+	  for ( i = 0; i < in->count; i++ )
+	    {
+	      if ( out != NULL )
+		{
+		  if ( in->pos[i] >= out->count )
+		    {
+		      ret = -ECHRNG;
+		      break;
+		    }
+		}
+	      if ( in->pos[i] >= in->ichan || in->pos[i] >= in->ochan )
+		{
+		  ret = -ECHRNG;
+		  break;
+		}
+	    }
+	}
     } else
     {
-      for ( i = 0; i < cli->channels; i++ )
+      //Analyze an enumerated map
+      if ( in->count == 0 || out == NULL )
 	{
-	  if ( cli->pos[i] >= srv->channels )
+	  ret = -EINVAL;
+	} else
+	{
+	  for ( i = 0; i < in->count; i++ )
 	    {
-	      ret = false;
+	      c = find_channel(out, in->pos[i]);
+	      if ( c < 0 )
+		{
+		  ret = -EBADSLT;
+		  break;
+		} else if ( c != (ssize_t)i )
+		{
+		  sub = false;
+		}
+	    }
+	  //If the input map is a strict subset of the output map then 
+	  //a channel map is not required.
+	  if ( ret == 1 && sub == true )
+	    ret = 0;
+	}
+    } 
+  return ret;
+}
+
+
+
+size_t dspd_pcm_chmap_sizeof(size_t count, int32_t flags)
+{
+  size_t ret;
+  if ( count <= DSPD_CHMAP_LAST )
+    {
+      ret = sizeof(uint32_t) * count;
+      if ( flags & DSPD_CHMAP_MULTI )
+	ret *= 2;
+      ret += sizeof(struct dspd_pcm_chmap);
+    } else
+    {
+      ret = 0;
+    }
+  return ret;
+}
+
+static const char *channel_names[] = {
+  "UNKNOWN", "unspecified",
+  "NA", "N/A, silent",
+  "MONO", "mono stream",
+  "FL", "front left",
+  "FR", "front right",
+  "RL", "rear left",
+  "RR", "rear right",
+  "FC", "front center",
+  "LFE", "subwoofer",
+  "SL", "side left",
+  "SR", "side right",
+  "RC", "rear center",
+  "FLC", "front left center",
+  "FRC", "front right center",
+  "RLC", "rear left center",
+  "RRC", "rear right center",
+  "FLW", "front left wide",
+  "FRW", "front right wide",
+  "FLH", "front left high",
+  "FCH", "front center high",
+  "FRH", "front right high",
+  "TC", "top center",
+  "TFL", "top front left",
+  "TFR", "top front right",
+  "TFC", "top front center",
+  "TRL", "top rear left",
+  "TRR", "top rear right",
+  "TRC", "top rear center",
+  "TFLC", "top front left center",
+  "TFRC", "top front right center",
+  "TSL", "top side left",
+  "TSR", "top side right",
+  "LLFE", "left subwoofer",
+  "RLFE", "right subwoofer",
+  "BC", "bottom center",
+  "BLC", "bottom left center",
+  "BRC", "bottom right center",
+};
+
+const char *dspd_pcm_chmap_channel_name(size_t channel, bool abbrev)
+{
+  size_t n = ARRAY_SIZE(channel_names) / 2UL, i;
+  const char *ret = NULL;
+  if ( channel < n )
+    {
+      i = channel * 2UL;
+      if ( ! abbrev )
+	i++;
+      ret = channel_names[i];
+    }
+  return ret;
+}
+
+ssize_t dspd_pcm_chmap_index(const char *name)
+{
+  unsigned long l;
+  ssize_t ret = -EINVAL;
+  size_t i;
+  if ( dspd_strtoul(name, &l, 0) == 0 )
+    {
+      if ( l <= DSPD_CHMAP_LAST )
+	ret = l;
+    } else
+    {
+      for ( i = 0; i < ARRAY_SIZE(channel_names); i += 2 )
+	{
+	  if ( strcasecmp(name, channel_names[i]) == 0 )
+	    {
+	      ret = i / 2;
 	      break;
 	    }
 	}
     }
   return ret;
-  
-}
-
-void dspd_chmap_dump(const struct dspd_chmap *map)
-{
-  unsigned int i;
-  if ( map->stream & DSPD_CHMAP_MULTI )
-    {
-      for ( i = 0; i < map->channels * 2; i += 2 )
-	{
-	  fprintf(stderr, "CH[%d]: %d=>%d\n", i / 2, (int)map->pos[i], (int)map->pos[i+1]);
-	}
-    } else
-    {
-       for ( i = 0; i < map->channels; i++ )
-	 fprintf(stderr, "CH[%d]: %d\n", i, (int)map->pos[i]);
-    }
 }
 
 
 
-size_t dspd_chmap_bufsize(uint8_t channels, uint8_t stream)
-{
-  size_t len;
-  if ( channels > DSPD_CHMAP_LAST )
-    {
-      len = 0; //Bad channel map
-    } else
-    {
-      len = sizeof(struct dspd_chmap);
-      if ( stream & DSPD_CHMAP_MULTI )
-	channels *= 2;
-      len += channels;
-    }
-  return len;
-}
 
-size_t dspd_chmap_sizeof(const struct dspd_chmap *map)
-{
-  return dspd_chmap_bufsize(map->channels, map->stream);
-}
-
-size_t dspd_fchmap_sizeof(const struct dspd_fchmap *map)
-{
-  return dspd_chmap_sizeof(&map->map);
-}
-
-int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map)
+int32_t dspd_pcm_chmap_from_string(const char *str, struct dspd_pcm_chmap_container *map)
 {
   char buf[16];
   const char *saveptr, *tok;
   size_t len, pos = 0;
-  int32_t ret = 0;
+  int32_t ret = 0, src, dest;
   char *p;
-  uint8_t src, dest;
   bool have_multi = false;
   memset(map, 0, sizeof(*map));
   for ( tok = dspd_strtok_c(str, ",", &saveptr, &len); 
@@ -348,7 +501,7 @@ int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map)
       memcpy(buf, tok, len);
       buf[len] = 0;
 
-      p = strchr(buf, '=');
+      p = strstr(buf, "=>");
       if ( ! p )
 	{
 	  //The format is 'A,B,C...'
@@ -357,13 +510,13 @@ int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map)
 	      ret = -EINVAL;
 	      break;
 	    }
-	  ret = dspd_strtou8(buf, &src, 0);
+	  ret = dspd_pcm_chmap_index(buf);
 	  if ( ret < 0 )
 	    break;
-	  map->map.pos[pos] = src;
+	  map->map.pos[pos] = ret;
 	} else
 	{
-	  //The format is 'A=B,C=D,...'
+	  //The format is 'A=>B,C=>D,...'
 	  if ( pos > 0 && have_multi == false )
 	    {
 	      ret = -EINVAL;
@@ -372,21 +525,293 @@ int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map)
 	  have_multi = true;
 
 	  *p = 0;
-	  p++;
-	  ret = dspd_strtou8(buf, &src, 0);
+	  p += 2UL;
+	  ret = dspd_strtoi32(buf, &src, 0);
 	  if ( ret < 0 )
 	    break;
-	  ret = dspd_strtou8(p, &dest, 0);
+	  ret = dspd_strtoi32(p, &dest, 0);
 	  if ( ret < 0 )
 	    break;
 
-	  map->map.pos[pos*2] = src;
-	  map->map.pos[(pos*2)+1UL] = dest;
+	  if ( map->map.ichan < src )
+	    map->map.ichan = src;
+	  map->map.pos[pos*2UL] = src;
+	  
+	  if ( map->map.ochan < dest )
+	    map->map.ochan = dest;
+	  map->map.pos[(pos*2UL)+1UL] = dest;
 	}
       pos++;
     }
-  map->map.channels = pos;
+  map->map.count = pos;
   if ( have_multi )
-    map->map.stream |= DSPD_CHMAP_MULTI;
+    {
+      map->map.flags |= DSPD_CHMAP_MULTI;
+    }
+  map->map.ichan = 0;
+  map->map.ochan = 0;
   return ret;
+}
+
+static ssize_t chmap_matrix_to_string(const struct dspd_pcm_chmap *map, char *buf, size_t len)
+{
+  size_t i, o = 0;
+  size_t offset = 0;
+  ssize_t ret = 0;
+  int n;
+  if ( map->flags & DSPD_CHMAP_MULTI )
+    {
+      for ( i = 0; i < map->count; i += 2 )
+	{
+	  if ( o > 0 )
+	    n = snprintf(&buf[offset], len - offset, "%u=>%u", map->pos[i], map->pos[i+1UL]);
+	  else
+	    n = snprintf(&buf[offset], len - offset, ",%u=>%u", map->pos[i], map->pos[i+1UL]);
+	  offset += n;
+	  if ( offset >= len )
+	    {
+	      ret = -ENOSPC;
+	      break;
+	    }
+	}
+    } else
+    {
+      for ( i = 0; i < map->count; i++ )
+	{
+	  if ( o > 0 )
+	    n = snprintf(&buf[offset], len - offset, "%u", map->pos[i]);
+	  else
+	    n = snprintf(&buf[offset], len - offset, ",%u", map->pos[i]);
+	  offset += n;
+	  if ( offset >= len )
+	    {
+	      ret = -ENOSPC;
+	      break;
+	    }
+	}
+    }
+  if ( ret == 0 && offset > 0 )
+    ret = offset;
+  return ret;
+}
+
+static ssize_t chmap_to_string(const struct dspd_pcm_chmap *map, char *buf, size_t len)
+{
+  size_t offset = 0;
+  size_t i;
+  const char *c;
+  ssize_t ret = 0;
+  int n;
+  char tmp[32];
+  for ( i = 0; i < map->count; i++ )
+    {
+      c = dspd_pcm_chmap_channel_name(map->pos[i], true);
+      if ( c == NULL || strcmp(c, "NA") == 0 || strcmp(c, "UNKNOWN") == 0 )
+	{
+	  n = map->pos[i] & DSPD_CHMAP_POSITION_MASK;
+	  if ( n > DSPD_CHMAP_UNKNOWN && n <= DSPD_CHMAP_LAST )
+	    {
+	      sprintf(tmp, "%u", n);
+	      c = tmp;
+	    } else
+	    {
+	      ret = -EINVAL;
+	      break;
+	    }
+	}
+      if ( i > 0 )
+	n = snprintf(&buf[offset], len - offset, ",%s", c);
+      else
+	n = snprintf(&buf[offset], len - offset, "%s", c);
+      offset += n;
+      if ( offset > len )
+	{
+	  ret = -ENOSPC;
+	  break;
+	}
+    }
+  if ( ret == 0 && offset > 0 )
+    ret = offset;
+  return ret;
+}
+
+ssize_t dspd_pcm_chmap_to_string(const struct dspd_pcm_chmap *map, char *buf, size_t len)
+{
+  ssize_t ret;
+  if ( map->flags & DSPD_CHMAP_MATRIX )
+    {
+      if ( (map->flags & DSPD_CHMAP_MATRIX) && (map->count % 2U) )
+	ret = -EINVAL;
+      else
+	ret = chmap_matrix_to_string(map, buf, len);
+    } else
+    {
+      ret = chmap_to_string(map, buf, len);
+    }
+  return ret;
+}
+
+int32_t dspd_pcm_chmap_any(const struct dspd_pcm_chmap *map, struct dspd_pcm_chmap *result)
+{
+  const struct dspd_pcm_chmap *m;
+  size_t i, o;
+  uint32_t c, f = result->flags & DSPD_PCM_SBIT_FULLDUPLEX;
+  int32_t ret = -EINVAL;
+  if ( map == NULL || result->count == 1 )
+    {
+      if ( result->count > 0 && result->count <= DSPD_CHMAP_LAST )
+	{
+	  m = dspd_pcm_chmap_get_default(result->count);
+	  if ( m )
+	    {
+	      memcpy(result, m, dspd_pcm_chmap_sizeof(m->count, m->flags));
+	      ret = 0;
+	    } else
+	    {
+	      if ( result->count == 1U )
+		{
+		  result->pos[0] = DSPD_CHMAP_MONO;
+		} else
+		{
+		  for ( i = 0; i < result->count; i++ )
+		    result->pos[i] = DSPD_CHMAP_FL+i;
+		}
+	      ret = 0;
+	      result->ichan = 0;
+	      result->ochan = 0;
+	    }
+	}
+    } else
+    {
+      if ( ! (map->flags & DSPD_CHMAP_MATRIX) )
+	{
+	  m = dspd_pcm_chmap_get_default(result->count);
+	  if ( m )
+	    {
+	      if ( dspd_pcm_chmap_test(m, map) >= 0 )
+		{
+		  memcpy(result, m, dspd_pcm_chmap_sizeof(m->count, m->flags));
+		  result->flags |= f;
+		  return 0;
+		}
+	    }
+	  for ( i = 0, o = 0; i < map->count && o < result->count; i++ )
+	    {
+	      c = map->pos[i] & DSPD_CHMAP_POSITION_MASK;
+	      if ( c >= DSPD_CHMAP_MONO && c <= DSPD_CHMAP_LAST )
+		{
+		  result->pos[o] = map->pos[i];
+		  o++;
+		}
+	    }
+	  if ( o > 0 )
+	    {
+	      ret = 0;
+	      result->ichan = 0;
+	      result->ochan = 0;
+	      result->count = o;
+	    }
+	}
+    }
+  result->flags |= f;
+  return ret;
+}
+
+void dspd_pcm_chmap_write_buf(const struct dspd_pcm_chmap * __restrict map, 
+			      const float                 * __restrict inbuf,
+			      double                      * __restrict outbuf,
+			      size_t                                   frames,
+			      double                                   volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j++ )
+	outbuf[map->pos[j]] += (inbuf[j] * volume); 
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
+}
+
+
+void dspd_pcm_chmap_write_buf_multi(const struct dspd_pcm_chmap * __restrict map, 
+				    const float                 * __restrict inbuf,
+				    double                      * __restrict outbuf,
+				    size_t                                   frames,
+				    double                                   volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j += 2UL )
+	outbuf[map->pos[j+1UL]] += (inbuf[map->pos[j]] * volume);
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
+}
+
+void dspd_pcm_chmap_write_buf_simple(const struct dspd_pcm_chmap * __restrict map, 
+				     const float                 * __restrict inbuf,
+				     double                      * __restrict outbuf,
+				     size_t                                   frames,
+				     double                                   volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j++ )
+	outbuf[j] += (inbuf[j] * volume);
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
+}
+
+
+void dspd_pcm_chmap_read_buf(const struct dspd_pcm_chmap * __restrict map, 
+			     const float                 * __restrict inbuf,
+			     float                       * __restrict outbuf,
+			     size_t                                   frames,
+			     float                                    volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j++ )
+	outbuf[map->pos[j]] += (inbuf[j] * volume);
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
+}
+
+
+void dspd_pcm_chmap_read_buf_multi(const struct dspd_pcm_chmap * __restrict map, 
+				   const float                 * __restrict inbuf,
+				   float                       * __restrict outbuf,
+				   size_t                                   frames,
+				   float                                    volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j += 2UL )
+	outbuf[map->pos[j+1UL]] += (inbuf[map->pos[j]] * volume);
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
+}
+
+void dspd_pcm_chmap_read_buf_simple(const struct dspd_pcm_chmap * __restrict map, 
+				    const float                 * __restrict inbuf,
+				    float                       * __restrict outbuf,
+				    size_t                                   frames,
+				    float                                    volume)
+{
+  size_t i, j;
+  for ( i = 0; i < frames; i++ )
+    {
+      for ( j = 0; j < map->count; j++ )
+	outbuf[j] += (inbuf[j] * volume);
+      inbuf = &inbuf[map->ichan];
+      outbuf = &outbuf[map->ochan];
+    }
 }

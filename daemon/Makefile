@@ -10,7 +10,7 @@ latency:
 	$(CC) $(LIBS) -ldspdc -Wl,-rpath=../libs$(LIBSUFFIX) $(CFLAGS) latency.c -o dspd-latency-monitor
 
 clean:
-	-rm -f dspd *.o
+	-rm -f dspd *.o dspd-latency-monitor
 
 distclean:
 	-rm -f *.o *~ \#*

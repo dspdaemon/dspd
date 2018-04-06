@@ -351,6 +351,7 @@ int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli,
   
   if ( s & DSPD_PCM_SBIT_PLAYBACK )
     {
+      
       p = *hwp->playback_params;
       p.stream = DSPD_PCM_SBIT_PLAYBACK;
       p.flags |= DSPD_CLI_FLAG_RESERVED;
@@ -389,8 +390,8 @@ int32_t dspd_rclient_set_hw_params(struct dspd_rclient *cli,
 
 int32_t dspd_rclient_connect(struct dspd_rclient *client, 
 			     const struct dspd_cli_params *params, //required, may be full duplex
-			     const struct dspd_chmap *playback_map, //optional
-			     const struct dspd_chmap *capture_map, //optional
+			     const struct dspd_pcm_chmap *playback_map, //optional
+			     const struct dspd_pcm_chmap *capture_map, //optional
 			     void *context, //connection or dspd_dctx
 			     int32_t stream, //client stream
 			     int32_t device)
@@ -454,10 +455,9 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
       sbits = params->stream;
       p = *params;
     }
-  
-
   if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
     {
+      
       if ( ! preset_params )
 	{
 	  p.stream = DSPD_PCM_SBIT_PLAYBACK;
@@ -475,14 +475,14 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	  pp = client->playback.params;
 	  
 	}
-
+      
 	
       if ( playback_map )
 	{
 	  ret = dspd_rclient_ctl(client,
 				 DSPD_SCTL_CLIENT_SETCHANNELMAP,
 				 playback_map,
-				 dspd_chmap_sizeof(playback_map),
+				 dspd_pcm_chmap_sizeof(playback_map->count, playback_map->flags),
 				 NULL,
 				 0,
 				 &br);
@@ -513,7 +513,7 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	  ret = dspd_rclient_ctl(client,
 				DSPD_SCTL_CLIENT_SETCHANNELMAP,
 				capture_map,
-				dspd_chmap_sizeof(capture_map),
+				 dspd_pcm_chmap_sizeof(capture_map->count, capture_map->flags),
 				NULL,
 				0,
 				&br);
@@ -521,7 +521,6 @@ int32_t dspd_rclient_connect(struct dspd_rclient *client,
 	    return ret;
 	}
     }
-
   ret = dspd_rclient_ctl(client,
 			DSPD_SCTL_CLIENT_CONNECT,
 			&device,

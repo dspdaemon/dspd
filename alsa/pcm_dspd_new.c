@@ -87,6 +87,7 @@ typedef struct _snd_pcm_dspd {
   uint32_t            alsa_max_ptime;
   uint32_t            alsa_min_ptime;
 
+  int32_t             current_channels;
 } snd_pcm_dspd_t;
 static const char *default_plugin_name = "ALSA <-> DSPD PCM I/O Plugin";
 static int check_stream(snd_pcm_dspd_t *dspd)
@@ -373,6 +374,8 @@ int dspd_alsa_hw_params(snd_pcm_ioplug_t *io,
 	    }
 	}
     }
+  if ( ret == 0 )
+    dspd->current_channels = channels;
   return ret;
 }
 
@@ -535,39 +538,154 @@ struct dspd_alsa_chmap {
 static snd_pcm_chmap_t *dspd_alsa_get_chmap(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
-  struct dspd_alsa_chmap *map = calloc(1, sizeof(struct dspd_alsa_chmap));
-  int ret;
-  struct dspd_fchmap m;
+  struct dspd_pcm_chmap_container map;
+  struct dspd_alsa_chmap *result = NULL;
+  int32_t ret;
+  size_t br;
   size_t i;
-  if ( map )
+  if ( dspd->current_channels > 0 )
     {
-      ret = dspd_pcmcli_set_channelmap(dspd->client, &m.map, sizeof(m), NULL, NULL);
-      if ( ret == 0 )
+      ret = dspd_pcmcli_ctl(dspd->client,
+			    dspd_pcmcli_get_client_index(dspd->client, dspd->stream),
+			    DSPD_SCTL_CLIENT_GETCHANNELMAP,
+			    &dspd->stream,
+			    sizeof(dspd->stream),
+			    &map,
+			    sizeof(map),
+			    &br);
+    } else
+    {
+      ret = dspd_pcmcli_ctl(dspd->client,
+			    dspd_pcmcli_get_device_index(dspd->client, dspd->stream),
+			    DSPD_SCTL_SERVER_GETCHANNELMAP,
+			    &dspd->stream,
+			    sizeof(dspd->stream),
+			    &map,
+			    sizeof(map),
+			    &br);
+    }
+  if ( ret == 0 )
+    {
+      if ( br > sizeof(map.map) && (map.map.flags & DSPD_CHMAP_MATRIX) == 0 )
 	{
-	  for ( i = 0; i < m.map.channels; i++ )
-	    map->map.pos[i] = m.map.pos[i];
-	  map->map.channels = m.map.channels;
+	  result = calloc(1, sizeof(struct dspd_alsa_chmap));
+	  if ( result )
+	    {
+	      result->map.channels = map.map.count;
+	      for ( i = 0; i < map.map.count; i++ )
+		{
+		  result->map.pos[i] = map.map.pos[i]& DSPD_CHMAP_POSITION_MASK;
+		  if ( map.map.pos[i] & DSPD_CHMAP_PHASE_INVERSE )
+		    result->map.pos[i] |= SND_CHMAP_PHASE_INVERSE;
+		  if ( map.map.pos[i] & DSPD_CHMAP_DRIVER_SPEC )
+		    result->map.pos[i] |= SND_CHMAP_DRIVER_SPEC;
+		}
+	    }
 	} else
 	{
-	  free(map);
-	  errno = ret * -1;
+	  errno = EPROTO;
 	}
     }
-  return (snd_pcm_chmap_t*)map;
+  return &result->map;
+}
+
+
+static snd_pcm_chmap_query_t **dspd_alsa_query_chmaps(snd_pcm_ioplug_t *io)
+{
+  snd_pcm_dspd_t *dspd = io->private_data;
+  const struct dspd_device_stat *info = dspd_pcmcli_device_info(dspd->client, dspd->stream);
+  const struct dspd_cli_params *params;
+  snd_pcm_chmap_query_t **query = NULL;
+  struct dspd_pcm_chmap_container map;
+  int32_t ret;
+  size_t i, o, n, br, j;
+  if ( ! info )
+    return NULL; //Should not happen
+  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+    params = &info->playback;
+  else
+    params = &info->capture;
+  if ( params->channels == 1 )
+    n = 2U;
+  else
+    n = params->channels;
+  query = calloc(n+1UL, sizeof(*query));
+  if ( query )
+    {
+      for ( i = 1, o = 0; i <= n; i++ )
+	{
+	  ret = dspd_pcmcli_ctl(dspd->client,
+				dspd_pcmcli_get_device_index(dspd->client, dspd->stream),
+				DSPD_SCTL_SERVER_GETCHANNELMAP,
+				&dspd->stream,
+				sizeof(dspd->stream),
+				&map,
+				sizeof(map),
+				&br);
+	  if ( ret == 0 && br > sizeof(map.map) )
+	    {
+	      query[o] = calloc(1, sizeof(snd_pcm_chmap_query_t));
+	      if ( ! query[o] )
+		{
+		  for ( j = 0; j < o; i++ )
+		    {
+		      free(query[j]);
+		      query[j] = NULL;
+		    }
+		  break;
+		}
+	      for ( j = 0; j < map.map.count; j++ )
+		{
+		  query[o]->map.pos[j] = map.map.pos[j] & DSPD_CHMAP_POSITION_MASK;
+		  if ( map.map.pos[j] & DSPD_CHMAP_PHASE_INVERSE )
+		    query[o]->map.pos[j] |= SND_CHMAP_PHASE_INVERSE;
+		  if ( map.map.pos[j] & DSPD_CHMAP_DRIVER_SPEC )
+		    query[o]->map.pos[j] |= SND_CHMAP_DRIVER_SPEC;
+		}
+	      query[o]->type = SND_CHMAP_TYPE_VAR;
+	    }
+	}
+      if ( query[0] == NULL )
+	{
+	  free(query);
+	  query = NULL;
+	}
+    }
+  return query;
 }
 
 static int dspd_alsa_set_chmap(snd_pcm_ioplug_t *io, const snd_pcm_chmap_t *map)
 {
+  struct dspd_pcm_chmap_container m;
   snd_pcm_dspd_t *dspd = io->private_data;
-  struct dspd_fchmap m;
   size_t i;
+  size_t br;
+  int32_t ret;
   memset(&m, 0, sizeof(m));
+  m.map.flags = dspd->stream;
+  m.map.count = map->channels;
   for ( i = 0; i < map->channels; i++ )
-    m.map.pos[i] = map->pos[i];
-  m.map.channels = map->channels;
-  m.map.stream = dspd->stream;
-  return dspd_pcmcli_set_channelmap(dspd->client, &m.map, true, NULL, NULL);
+    {
+      m.map.pos[i] = map->pos[i] & DSPD_CHMAP_POSITION_MASK;
+      if ( map->pos[i] & SND_CHMAP_PHASE_INVERSE )
+	m.map.pos[i] |= DSPD_CHMAP_PHASE_INVERSE;
+      if ( map->pos[i] & SND_CHMAP_DRIVER_SPEC )
+	m.map.pos[i] |= DSPD_CHMAP_DRIVER_SPEC;
+    }
+  ret = dspd_pcmcli_ctl(dspd->client,
+			dspd_pcmcli_get_client_index(dspd->client, dspd->stream),
+			DSPD_SCTL_CLIENT_SETCHANNELMAP,
+			&m,
+			sizeof(m),
+			NULL,
+			0,
+			&br);
+  if ( ret == 0 && dspd->current_channels == 0 )
+    dspd->current_channels = m.map.count;
+  return ret;
 }
+
+
 
 static const snd_pcm_ioplug_callback_t dspd_playback_callback = {
   .start = dspd_alsa_start,
@@ -587,6 +705,7 @@ static const snd_pcm_ioplug_callback_t dspd_playback_callback = {
   .poll_descriptors = dspd_alsa_poll_descriptors,
   .get_chmap = dspd_alsa_get_chmap,
   .set_chmap = dspd_alsa_set_chmap,
+  .query_chmaps = dspd_alsa_query_chmaps
 };
 
 static const snd_pcm_ioplug_callback_t dspd_capture_callback = {
@@ -607,6 +726,7 @@ static const snd_pcm_ioplug_callback_t dspd_capture_callback = {
   .poll_descriptors = dspd_alsa_poll_descriptors,
   .get_chmap = dspd_alsa_get_chmap,
   .set_chmap = dspd_alsa_set_chmap,
+  .query_chmaps = dspd_alsa_query_chmaps
 };
 
 
@@ -981,7 +1101,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 	    {
 	      dspd->raw_formats = ret;
 	    }
-	} else if ( strcmp(key, "card") == 0 || strcmp(key, "card") == 0 )
+	} else if ( strcmp(key, "card") == 0 || strcmp(key, "device") == 0 )
 	{
 	  ret = snd_config_get_integer(n, &ival);
 	  if ( ret < 0 )

@@ -1,5 +1,6 @@
 #ifndef _DSPD_CHMAP_H_
 #define _DSPD_CHMAP_H_
+#include <sys/types.h>
 
 enum dspd_pcm_chmap_positions {
   	DSPD_CHMAP_UNKNOWN = 0,	/**< unspecified */
@@ -77,32 +78,84 @@ struct dspd_fchmap {
 #define DSPD_CHMAP_MAXSIZE sizeof(struct dspd_fchmap)
 #define DSPD_CHMAP_MAXCHAN (DSPD_CHMAP_LAST-DSPD_CHMAP_FL+1)
 
-int32_t dspd_chmap_index(const struct dspd_chmap *map, 
-			 uint32_t pos);
-bool dspd_chmap_getconv(const struct dspd_chmap *from,
-			const struct dspd_chmap *to,
-			struct dspd_chmap *cmap);
 
-
-void dspd_chmap_getdefault(struct dspd_chmap *map, unsigned int channels);
-void dspd_chmap_add_route(struct dspd_chmap *map, uint32_t in, uint32_t out);
-int dspd_chmap_create_generic(const struct dspd_chmap *devmap, 
-			      struct dspd_chmap *climap);
-
-bool dspd_chmap_test(const struct dspd_chmap *out,
-		     const struct dspd_chmap *in,
-		     uint32_t actual_channels);
-
-void dspd_chmap_dump(const struct dspd_chmap *map);
-
-//The stream can be 0 for standard (not multi) channel maps
-size_t dspd_chmap_bufsize(uint8_t channels, uint8_t stream);
-size_t dspd_chmap_sizeof(const struct dspd_chmap *map);
-size_t dspd_fchmap_sizeof(const struct dspd_fchmap *map);
-int32_t dspd_fchmap_parse(const char *str, struct dspd_fchmap *map);
+//Map is a matrix (each position is an index, not an enumerated position)
+#define DSPD_CHMAP_MATRIX (1U<<6U)
+#define DSPD_CHMAP_SIMPLE (1U<<5U)
+#define DSPD_CHMAP_POSITION_MASK 0xFFFFU
+#define DSPD_CHMAP_DRIVER_SPEC (1U << 8U)
+#define DSPD_CHMAP_PHASE_INVERSE (1U << 9U)
 
 
 
+//standard channel map
+struct dspd_pcm_chmap {
+  uint16_t ichan; //Input channels (matrix)
+  uint16_t ochan; //Output channels (matrix)
+  uint16_t count; //size of pos[]
+  uint16_t flags;
+  uint32_t pos[0];
+};
+
+
+struct dspd_pcm_chmap_container {
+  struct dspd_pcm_chmap map;
+  uint32_t              pos[(DSPD_CHMAP_LAST+1UL)*2UL];
+};
+//Get one of the default channel maps
+const struct dspd_pcm_chmap *dspd_pcm_chmap_get_default(size_t channels);
+
+//Create a translation between 2 channel maps
+//Should be channel (right, left, etc) values in each map.
+//The result is an output map with indexes.
+//There are going to be two hard coded maps: 2=>1 and 1=>2
+//It will support stereo<>mono conversion
+int32_t dspd_pcm_chmap_translate(const struct dspd_pcm_chmap *in, 
+				 const struct dspd_pcm_chmap *out,
+				 struct dspd_pcm_chmap *map);
+
+int32_t dspd_pcm_chmap_test(const struct dspd_pcm_chmap *in,  
+			    const struct dspd_pcm_chmap *out);
+int32_t dspd_pcm_chmap_test_channels(const struct dspd_pcm_chmap *map, size_t channels_in, size_t channels_out);
+
+size_t dspd_pcm_chmap_sizeof(size_t count, int32_t flags);
+const char *dspd_pcm_chmap_channel_name(size_t channel, bool abbrev);
+ssize_t dspd_pcm_chmap_index(const char *name);
+int32_t dspd_pcm_chmap_from_string(const char *str, struct dspd_pcm_chmap_container *map);
+ssize_t dspd_pcm_chmap_to_string(const struct dspd_pcm_chmap *map, char *buf, size_t len);
+
+void dspd_pcm_chmap_write_buf(const struct dspd_pcm_chmap * __restrict map, 
+			      const float                 * __restrict inbuf,
+			      double                      * __restrict outbuf,
+			      size_t                                   frames,
+			      double                                   volume);
+void dspd_pcm_chmap_write_buf_multi(const struct dspd_pcm_chmap * __restrict map, 
+				    const float                 * __restrict inbuf,
+				    double                      * __restrict outbuf,
+				    size_t                                   frames,
+				    double                                   volume);
+void dspd_pcm_chmap_write_buf_simple(const struct dspd_pcm_chmap * __restrict map, 
+				     const float                 * __restrict inbuf,
+				     double                      * __restrict outbuf,
+				     size_t                                   frames,
+				     double                                   volume);
+void dspd_pcm_chmap_read_buf(const struct dspd_pcm_chmap * __restrict map, 
+			     const float                 * __restrict inbuf,
+			     float                       * __restrict outbuf,
+			     size_t                                   frames,
+			     float                                    volume);
+void dspd_pcm_chmap_read_buf_multi(const struct dspd_pcm_chmap * __restrict map, 
+				   const float                 * __restrict inbuf,
+				   float                       * __restrict outbuf,
+				   size_t                                   frames,
+				   float                                    volume);
+void dspd_pcm_chmap_read_buf_simple(const struct dspd_pcm_chmap * __restrict map, 
+				    const float                 * __restrict inbuf,
+				    float                       * __restrict outbuf,
+				    size_t                                   frames,
+				    float                                    volume);
+
+int32_t dspd_pcm_chmap_any(const struct dspd_pcm_chmap *map, struct dspd_pcm_chmap *result);
 #endif
 
 

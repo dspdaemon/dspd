@@ -1919,10 +1919,10 @@ static void set_stream_index(void *handle, int32_t idx)
   hdl->stream_index = idx;
 }
 
-static int32_t alsahw_get_chmap(void *handle, struct dspd_chmap *map)
+static int32_t alsahw_get_chmap(void *handle, struct dspd_pcm_chmap *map)
 {
   struct alsahw_handle *hdl = handle;
-  memcpy(map, hdl->channel_map, dspd_chmap_sizeof(hdl->channel_map));
+  memcpy(map, hdl->channel_map, dspd_pcm_chmap_sizeof(hdl->channel_map->count, hdl->channel_map->flags));
   return 0;
 }
 
@@ -2319,34 +2319,38 @@ int alsahw_open(const struct dspd_drv_params *params,
   chmap = snd_pcm_get_chmap(hbuf->handle);
   if ( chmap )
     {
-      hbuf->channel_map = calloc(1, dspd_chmap_bufsize(chmap->channels, 0));
+      hbuf->channel_map = calloc(1, dspd_pcm_chmap_sizeof(chmap->channels, 0));
       if ( ! hbuf->channel_map )
 	goto out;
       for ( i = 0; i < chmap->channels; i++ )
-	hbuf->channel_map->pos[i] = chmap->pos[i];
-      hbuf->channel_map->channels = chmap->channels;
+	{
+	  hbuf->channel_map->pos[i] = chmap->pos[i] & SND_CHMAP_POSITION_MASK;
+	  if ( hbuf->channel_map->pos[i] > DSPD_CHMAP_LAST )
+	    {
+	      ret = -EINVAL;
+	      goto out;
+	    }
+	  if ( chmap->pos[i] & SND_CHMAP_PHASE_INVERSE )
+	    hbuf->channel_map->pos[i] |= DSPD_CHMAP_PHASE_INVERSE;
+	  if ( chmap->pos[i] & SND_CHMAP_DRIVER_SPEC )
+	    hbuf->channel_map->pos[i] |= DSPD_CHMAP_DRIVER_SPEC;
+	}
+      hbuf->channel_map->count = chmap->channels;
     } else
     {
       //Make a default channel map
-      hbuf->channel_map = calloc(1, dspd_chmap_bufsize(hbuf->params.channels, 0));
+      hbuf->channel_map = calloc(1, dspd_pcm_chmap_sizeof(hbuf->params.channels, 0));
       if ( ! hbuf->channel_map )
 	goto out;
-      hbuf->channel_map->channels = hbuf->params.channels;
-      if ( hbuf->channel_map->channels == 1 )
-	{
-	  hbuf->channel_map->pos[0] = DSPD_CHMAP_MONO;
-	} else
-	{
-	  for ( i = 0; i < hbuf->channel_map->channels; i++ )
-	    {
-	      hbuf->channel_map->pos[i] = i + DSPD_CHMAP_FL;
-	    }
-	}
+      hbuf->channel_map->count = hbuf->params.channels;
+      ret = dspd_pcm_chmap_any(NULL, hbuf->channel_map);
+      if ( ret < 0 )
+	goto out;
     }
   if ( params->stream == SND_PCM_STREAM_PLAYBACK )
-    hbuf->channel_map->stream = DSPD_PCM_SBIT_PLAYBACK;
+    hbuf->channel_map->flags |= DSPD_PCM_SBIT_PLAYBACK;
   else
-    hbuf->channel_map->stream = DSPD_PCM_SBIT_CAPTURE;
+    hbuf->channel_map->flags |= DSPD_PCM_SBIT_CAPTURE;
 
   dspd_log(0, "Parameters for device %s: channels=%d bufsize=%d fragsize=%d rate=%d",
 	   params->name, params->channels, params->bufsize, params->fragsize, params->rate);

@@ -780,80 +780,6 @@ static int dspd_poll_descriptors_count(snd_pcm_ioplug_t *io)
   return dspd_rclient_pollfd_count(dspd->client);
 }
 
-static snd_pcm_chmap_t *dspd_get_chmap(snd_pcm_ioplug_t *io)
-{
-  snd_pcm_dspd_t *dspd = io->private_data;
-  size_t br;
-  int32_t ret;
-  unsigned int i;
-  struct dspd_fchmap map;
-  snd_pcm_chmap_t *m;
-  int32_t stream, req;
-
-  if ( dspd->channels == 0 )
-    {
-      stream = dspd->device;
-      req = DSPD_SCTL_SERVER_GETCHANNELMAP;
-    } else
-    {
-      stream = dspd->client_stream;
-      req = DSPD_SCTL_CLIENT_GETCHANNELMAP;
-    }
-  ret = dspd_stream_ctl(dspd->conn,
-			stream,
-			req,
-			&dspd->stream,
-			sizeof(dspd->stream),
-			&map,
-			sizeof(map),
-			&br);
-  if ( ret == 0 )
-    {
-      for ( i = 0; i < map.map.channels; i++ )
-	dspd->chmap.map.pos[i] = map.map.pos[i];
-      dspd->chmap.map.channels = map.map.channels;
-      m = dspd_memdup(&dspd->chmap, sizeof(dspd->chmap));
-    } else
-    {
-      errno = ret * -1;
-      m = NULL;
-    }
-  return m;
-}
-
-static int dspd_set_chmap(snd_pcm_ioplug_t *io, const snd_pcm_chmap_t *map)
-{
-  snd_pcm_dspd_t *dspd = io->private_data;
-  struct dspd_fchmap fmap;
-  unsigned int i, ret;
-  uint32_t channels;
-  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
-    channels = dspd->devinfo.playback.channels;
-  else
-    channels = dspd->devinfo.capture.channels;
-  if ( (map->channels > 2 && map->channels > channels) || map->channels == 0 )
-    {
-      ret = -EINVAL;
-    } else
-    {
-      memset(&fmap, 0, sizeof(fmap));
-      for ( i = 0; i < map->channels; i++ )
-	fmap.map.pos[i] = map->pos[i];
-      fmap.map.channels = map->channels;
-      fmap.map.stream = dspd->stream;
-      ret = dspd_stream_ctl(dspd->conn,
-			    dspd->client_stream,
-			    DSPD_SCTL_CLIENT_SETCHANNELMAP,
-			    &fmap,
-			    sizeof(fmap),
-			    NULL,
-			    0,
-			    NULL);
-      if ( ret > 0 )
-	ret *= -1;
-    }
-  return ret;
-}
 
 const snd_pcm_ioplug_callback_t dspd_playback_callback = {
   .start = dspd_alsa_start,
@@ -871,8 +797,6 @@ const snd_pcm_ioplug_callback_t dspd_playback_callback = {
   .poll_revents = dspd_poll_revents,
   .poll_descriptors_count = dspd_poll_descriptors_count,
   .poll_descriptors = dspd_poll_descriptors,
-  .get_chmap = dspd_get_chmap,
-  .set_chmap = dspd_set_chmap,
 };
 
 const snd_pcm_ioplug_callback_t dspd_capture_callback = {
@@ -891,8 +815,6 @@ const snd_pcm_ioplug_callback_t dspd_capture_callback = {
   .poll_revents = dspd_poll_revents,
   .poll_descriptors_count = dspd_poll_descriptors_count,
   .poll_descriptors = dspd_poll_descriptors,
-  .get_chmap = dspd_get_chmap,
-  .set_chmap = dspd_set_chmap,
 };
 
 #define MAXBUF         (1024*1024)

@@ -44,6 +44,27 @@ struct dspd_client {
   struct dspd_slist            *list;
   int                           err;
 
+  
+  
+
+  struct dspd_pcm_chmap_container playback_usermap;
+  struct dspd_pcm_chmap_container capture_usermap;
+
+  struct dspd_pcm_chmap_container playback_mixmap;
+  void (*playback_write)(const struct dspd_pcm_chmap * __restrict map, 
+			 const float                 * __restrict inbuf,
+			 double                      * __restrict outbuf,
+			 size_t                                   frames,
+			 double                                   volume);
+  struct dspd_pcm_chmap_container capture_mixmap;
+  void (*capture_read)(const struct dspd_pcm_chmap * __restrict map, 
+		       const float                 * __restrict inbuf,
+		       float                       * __restrict outbuf,
+		       size_t                                   frames,
+		       float                                    volume);
+
+  
+
   struct dspd_fchmap             playback_cmap;
   struct dspd_fchmap             capture_cmap;
   struct dspd_pcmdev_ops        *server_ops;
@@ -51,7 +72,7 @@ struct dspd_client {
 
 
   struct dspd_fchmap            playback_inmap, capture_inmap;
-  size_t                        playback_schan, capture_schan; 
+  
 
   struct dspd_client_src        playback_src;
   struct dspd_client_src        capture_src;
@@ -477,7 +498,7 @@ static int32_t dspd_stream_setsrc(struct dspd_client *cli, bool always_realloc)
       newcount = dspd_src_get_frame_count(cli->capture.params.rate,
 					  cli->capture_src.rate,
 					  cli->capture.params.fragsize * 2);
-      newsize = newcount * MAX(cli->capture.params.channels, cli->capture_schan);
+      newsize = newcount * MAX(cli->capture.params.channels, cli->capture_mixmap.map.ichan);
       if ( always_realloc )
 	{
 	  if ( newsize != cli->capture_src.nsamples )
@@ -519,126 +540,277 @@ static int32_t dspd_stream_setsrc(struct dspd_client *cli, bool always_realloc)
   return 0;
 }
 
-static int32_t dspd_stream_setchannelmap(struct dspd_client *cli,
-					 const struct dspd_chmap *chmap,
-					 int32_t sbit)
+
+static int32_t set_matrix(struct dspd_client *cli,
+			  struct dspd_client_stream *stream,
+			  struct dspd_pcm_chmap *usermap,
+			  struct dspd_pcm_chmap *mixmap,
+			  const struct dspd_pcm_chmap *map)
+{
+  int32_t ret = 0;
+  size_t br = 0;
+  struct dspd_pcm_chmap_container tmp;
+  uint32_t f;
+  if ( cli->device < 0 )
+    {
+      //The stream is not connected.  Validate the channel map with known info.
+      if ( stream->params.channels )
+	{
+	  if ( map->flags & DSPD_PCM_SBIT_PLAYBACK )
+	    ret = dspd_pcm_chmap_test_channels(map, stream->params.channels, 0);
+	  else
+	    ret = dspd_pcm_chmap_test_channels(map, 0, stream->params.channels);
+	}
+      if ( ret == 0 )
+	{
+	  memmove(usermap, map, dspd_pcm_chmap_sizeof(map->count, map->flags));
+	  mixmap->flags = DSPD_CHMAP_SIMPLE;
+	  mixmap->ichan = map->count;
+	  mixmap->ochan = map->count;
+	  mixmap->count = map->count;
+	}
+      return ret;
+    }
+  if ( stream->params.channels != 0 )
+    {
+      //Client channels must match otherwise the xfer size will be wrong.
+      if ( ((map->flags & DSPD_PCM_SBIT_PLAYBACK) && map->ichan != stream->params.channels) ||
+	   ((map->flags & DSPD_PCM_SBIT_CAPTURE) && map->ochan != stream->params.channels))
+	return -EINVAL;
+    }
+
+  //Get the full channel map from the device
+  f = map->flags & DSPD_PCM_SBIT_FULLDUPLEX;
+  ret = dspd_stream_ctl(&dspd_dctx,
+			cli->device,
+			DSPD_SCTL_SERVER_GETCHANNELMAP,
+			&f,
+			sizeof(f),
+			&tmp,
+			sizeof(tmp),
+			&br);
+  if ( ret == 0 )
+    {
+      if ( br < sizeof(tmp.map) || br < dspd_pcm_chmap_sizeof(tmp.map.count, tmp.map.flags) )
+	{
+	  ret = -EPROTO;
+	} else
+	{
+	  ret = dspd_pcm_chmap_test(map, &tmp.map);
+	  if ( ret == 0 )
+	    {
+	      if ( ((map->flags & DSPD_PCM_SBIT_PLAYBACK) && (map->ochan != tmp.map.count)) ||
+		   ((map->flags & DSPD_PCM_SBIT_CAPTURE) && (map->ichan != tmp.map.count)) )
+		{
+		  ret = -EINVAL;
+		} else
+		{
+		  memmove(mixmap, map, dspd_pcm_chmap_sizeof(map->count, map->flags));
+		  //The usermap is not valid because the caller only specified a matrix.
+		  memset(usermap, 0, sizeof(*usermap));
+		}
+	    } else if ( ret == 1 )
+	    {
+	       memmove(mixmap, map, dspd_pcm_chmap_sizeof(map->count, map->flags));
+	       //The usermap is not valid because the caller only specified a matrix.
+	       memset(usermap, 0, sizeof(*usermap));
+	       mixmap->flags &= DSPD_PCM_SBIT_FULLDUPLEX;
+	       mixmap->flags |= DSPD_CHMAP_SIMPLE;
+	       if ( mixmap->flags & DSPD_PCM_SBIT_PLAYBACK )
+		 mixmap->count = mixmap->ichan;
+	       else
+		 mixmap->count = mixmap->ochan;
+	       ret = 0;
+	    }
+	}
+    }
+  return ret;
+}
+static int32_t set_enum(struct dspd_client *cli,
+			struct dspd_client_stream *stream,
+			struct dspd_pcm_chmap *usermap,
+			struct dspd_pcm_chmap *mixmap,
+			const struct dspd_pcm_chmap *map)
+{
+  int32_t ret = 0;
+  struct dspd_pcm_chmap_container tmp;
+  size_t br = 0;
+  if ( cli->device < 0 )
+    {
+      //The stream is not connected.  Validate the channel map with known info.
+      if ( stream->params.channels )
+	{
+	  if ( map->flags & DSPD_PCM_SBIT_PLAYBACK )
+	    ret = dspd_pcm_chmap_test_channels(map, stream->params.channels, 0);
+	  else
+	    ret = dspd_pcm_chmap_test_channels(map, 0, stream->params.channels);
+	}
+      if ( ret == 0 )
+	{
+	  memmove(usermap, map, dspd_pcm_chmap_sizeof(map->count, map->flags));
+	  mixmap->flags = DSPD_CHMAP_SIMPLE;
+	  mixmap->ichan = map->count;
+	  mixmap->ochan = map->count;
+	  mixmap->count = map->count;
+	}
+      return ret;
+    }
+  ret = dspd_stream_ctl(&dspd_dctx,
+			cli->device,
+			DSPD_SCTL_SERVER_CONVERT_CHMAP,
+			map,
+			dspd_pcm_chmap_sizeof(map->count, map->flags),
+			&tmp,
+			sizeof(tmp),
+			&br);
+
+  if ( ret == 0 )
+    {
+      if ( br < sizeof(tmp.map) || br < dspd_pcm_chmap_sizeof(tmp.map.count, tmp.map.flags) )
+	{
+	  ret = -EPROTO;
+	} else
+	{
+	  memmove(mixmap, &tmp, br);
+	  memmove(usermap, map, dspd_pcm_chmap_sizeof(tmp.map.count, tmp.map.flags));
+	}
+    }
+  return ret;
+}
+
+
+static int32_t set_chmap(struct dspd_client *cli, const struct dspd_pcm_chmap *map)
 {
   struct dspd_client_stream *stream;
-  struct dspd_chmap *imap, *cmap;
-  const struct dspd_chmap *p;
-  struct dspd_fchmap stmp, ctmp;
-  size_t *schan;
-  size_t br;
+  struct dspd_pcm_chmap *usermap;
+  struct dspd_pcm_chmap *mixmap;
   int32_t ret;
-  uint64_t s;
-  const struct dspd_cli_params *params;
-
-  sbit &= (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE);
-  if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+  if ( map->flags & DSPD_PCM_SBIT_PLAYBACK )
     {
       stream = &cli->playback;
-      imap = &cli->playback_inmap.map;
-      cmap = &cli->playback_cmap.map;
-      schan = &cli->playback_schan;
-      params = &cli->playback.params;
-    } else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+      usermap = &cli->playback_usermap.map;
+      mixmap = &cli->playback_mixmap.map;
+    } else if ( map->flags & DSPD_PCM_SBIT_CAPTURE )
     {
       stream = &cli->capture;
-      imap = &cli->capture_inmap.map;
-      cmap = &cli->capture_cmap.map;
-      schan = &cli->capture_schan;
-      params = &cli->capture.params;
+      usermap = &cli->capture_usermap.map;
+      mixmap = &cli->capture_mixmap.map;
     } else
     {
       return -EINVAL;
     }
-  *schan = 0;
-  if ( cli->device >= 0 )
+  if ( map->flags & DSPD_CHMAP_MATRIX )
+    ret = set_matrix(cli, stream, usermap, mixmap, map);
+  else
+    ret = set_enum(cli, stream, usermap, mixmap, map);
+  return ret;
+}
+
+static int32_t refresh_chmap(struct dspd_client *cli, int32_t sbit)
+{
+  int32_t ret = -EINVAL;
+  struct dspd_pcm_chmap_container *result = NULL, *usermap = NULL, *mixmap = NULL, *tmp;
+  struct dspd_client_stream *stream = NULL; 
+  if ( sbit == DSPD_PCM_SBIT_FULLDUPLEX )
     {
-
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    cli->device,
-			    DSPD_SCTL_SERVER_GETCHANNELMAP,
-			    &sbit,
-			    sizeof(sbit),
-			    &stmp,
-			    sizeof(stmp),
-			    &br);
-      if ( ret )
-	return ret;
-      
-      if ( chmap )
-	p = chmap;
-      else
-	p = imap;
-
-       //This line means that a client could reset to the default channel map explicitly
-       //by sending a channel map with 0 channels.
-      if ( p->channels > 0 )
-	{
-
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				cli->device,
-				DSPD_SCTL_SERVER_CONVERT_CHMAP,
-				p,
-				dspd_chmap_sizeof(p),
-				&ctmp,
-				sizeof(ctmp),
-				&br);
-	} else
-	{
-	  s = params->channels;
-	  s <<= 32U;
-	  s |= sbit;
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				cli->device,
-				DSPD_SCTL_SERVER_GETCHANNELMAP,
-				&s,
-				sizeof(s),
-				&ctmp,
-				sizeof(ctmp),
-				&br);
-	}
-      
+      ret = refresh_chmap(cli, DSPD_PCM_SBIT_PLAYBACK);
       if ( ret == 0 )
-	{
-	  ret = 0;
-	  *schan = stmp.map.channels;
-	  assert(*schan);
-	  memmove(imap, p, dspd_chmap_sizeof(p));
-	  imap->stream |= sbit;
-	  memcpy(cmap, &ctmp, dspd_fchmap_sizeof(&ctmp));
-	} else
-	{
-	  if ( chmap == NULL )
-	    cmap->channels = 0;
-	  ret = -EINVAL;
-	}
-
-    } else
+	ret = refresh_chmap(cli, DSPD_PCM_SBIT_CAPTURE);
+      return ret;
+    }
+  if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
     {
-      if ( chmap )
+      stream = &cli->playback;
+      usermap = &cli->playback_usermap;
+      mixmap = &cli->playback_mixmap;
+    } else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+    {
+      stream = &cli->capture;
+      usermap = &cli->capture_usermap;
+      mixmap = &cli->capture_mixmap;
+    }
+  if ( stream )
+    {
+      if ( stream->params.channels )
 	{
-	  if ( chmap->channels > stream->params.channels )
+	  if ( usermap->map.count )
 	    {
-	      ret = -EINVAL;
-	    } else
+	      ret = set_chmap(cli, &usermap->map);
+	    } else if ( mixmap->map.count )
 	    {
-	      memcpy(imap, chmap, dspd_chmap_sizeof(chmap));
-	      ret = 0;
+	      ret = set_chmap(cli, &mixmap->map);
+	    }
+	  if ( ret < 0 )
+	    {
+	      uint32_t val;
+	      size_t br;	 
+	      result = alloca(sizeof(*result));
+	      memset(result, 0, sizeof(*result));
+	      result->map.count = stream->params.channels;
+	      if ( cli->device < 0 )
+		{
+		  ret = dspd_pcm_chmap_any(NULL, &result->map);
+		  if ( ret == 0 )
+		    {
+		      memcpy(usermap, result, dspd_pcm_chmap_sizeof(result->map.count, result->map.flags));
+		      memset(mixmap, 0, sizeof(*mixmap));
+		    }
+		} else
+		{
+		  val = sbit;
+		  ret = dspd_stream_ctl(&dspd_dctx,
+					cli->device,
+					DSPD_SCTL_SERVER_GETCHANNELMAP,
+					&val,
+					sizeof(val),
+					result,
+					sizeof(*result),
+					&br);
+		  if ( ret == 0 && (br >= sizeof(result->map) && br >= dspd_pcm_chmap_sizeof(result->map.count, result->map.flags)) )
+		    {
+		      tmp = alloca(sizeof(*tmp));
+		      memset(tmp, 0, sizeof(*tmp));
+		      tmp->map.count = stream->params.channels;
+		      tmp->map.flags = sbit;
+		      ret = dspd_pcm_chmap_any(&result->map, &tmp->map);
+		      if ( ret == 0 )
+			ret = set_chmap(cli, &tmp->map);
+		    } else if ( ret == 0 )
+		    {
+		      ret = -EPROTO;
+		    }
+		}
 	    }
 	} else
 	{
 	  ret = 0;
 	}
-      if ( ret == 0 )
+    }
+  if ( ret == 0 )
+    {
+      if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  //Disabled because there is no input
-	  cmap->channels = 0;
+	  if ( mixmap->map.flags & DSPD_CHMAP_SIMPLE )
+	    cli->playback_write = dspd_pcm_chmap_write_buf_simple;
+	  else if ( mixmap->map.flags & DSPD_CHMAP_MULTI )
+	    cli->playback_write = dspd_pcm_chmap_write_buf_multi;
+	  else
+	    cli->playback_write = dspd_pcm_chmap_write_buf;
+	} else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+	{
+	  if ( mixmap->map.flags & DSPD_CHMAP_SIMPLE )
+	    cli->capture_read = dspd_pcm_chmap_read_buf_simple;
+	  else if ( mixmap->map.flags & DSPD_CHMAP_MULTI )
+	    cli->capture_read = dspd_pcm_chmap_read_buf_multi;
+	  else
+	    cli->capture_read = dspd_pcm_chmap_read_buf;
 	}
     }
   return ret;
 }
+
+
+
 
 
 static int32_t dspd_stream_setparams(struct dspd_client_stream *stream,
@@ -952,13 +1124,12 @@ static void playback_xfer(void                            *dev,
 {
   struct dspd_client *cli = client;
   uintptr_t offset = 0;
-  float *ptr, *infr;
-  double *out, *outfr;
+  float *ptr;
+  double *out;
   int32_t ret;
   uint32_t count, commit_size;
   struct dspd_pcm_status *cs;
-  struct dspd_chmap *map;
-  size_t i, c, j, n;
+  size_t c, n;
   float volume = dspd_load_float32(&cli->playback.volume);
   uint32_t client_hwptr;
   uint64_t optr = status->appl_ptr;
@@ -975,7 +1146,7 @@ static void playback_xfer(void                            *dev,
 
   cli->playback.start_count = start_count;
   cli->playback.dev_appl_ptr = status->appl_ptr;
-  map = &cli->playback_cmap.map;
+
  
   while ( offset < frames && rem > 0 )
     {
@@ -1016,45 +1187,13 @@ static void playback_xfer(void                            *dev,
 	{
 	  
 	  //Pointer to this block of output
-	  out = &buf[cli->playback_schan*offset];
+	  out = &buf[cli->playback_mixmap.map.ochan*offset];
 
-	  if ( ! (map->stream & DSPD_CHMAP_MULTI) )
-	    {
-	      //Iterate over all frames
-	      for ( i = 0; i < count; i++ )
-		{
-
-		  //Pointer to device frame
-		  outfr = &out[i*cli->playback_schan];
-		  //Pointer to client frame
-		  infr = &ptr[i*cli->playback.params.channels];
-
-		  //Mix this frame with a possibly truncated or
-		  //enlarged channel map.  Technically
-		  //it should be possible to set pos[0]=pos[1]=0
-		  //and emulate 2ch stereo on a mono device.
-		  for ( j = 0; j < map->channels; j++ )
-		    outfr[map->pos[j]] += (infr[j] * volume);
-
-		}
-	    } else
-	    {
-	      //Iterate over all frames
-	      for ( i = 0; i < count; i++ )
-		{
-
-		  //Pointer to device frame
-		  outfr = &out[i*cli->playback_schan];
-		  //Pointer to client frame
-		  infr = &ptr[i*cli->playback.params.channels];
-
-		  //Multi map has possibly discontiguous channels interleaved (in,out,...)
-		  n = map->channels * 2;
-		  for ( j = 0; j < n; j += 2 )
-		    outfr[map->pos[j+1]] += (infr[map->pos[j]] * volume);
-
-		}
-	    }
+	  cli->playback_write(&cli->playback_mixmap.map,
+			      ptr,
+			      out,
+			      count,
+			      volume);
 	  offset += count;
 	} else
 	{
@@ -1480,13 +1619,11 @@ static void capture_xfer(void                            *dev,
   struct dspd_client *cli = client;
   uintptr_t offset = 0;
   int32_t ret;
-  float *ptr, *outfr;
+  float *ptr;
   const float *in;
   uint32_t count = 0;
   struct dspd_pcm_status *cs;
-  const float *infr;
-  volatile size_t i, c, j;
-  struct dspd_chmap *map = &cli->capture_cmap.map;
+  volatile size_t c;
   float volume = dspd_load_float32(&cli->capture.volume);
   uint32_t client_hwptr, client_aptr;
   bool do_src = cli->capture.params.rate != cli->capture_src.rate;
@@ -1517,7 +1654,7 @@ static void capture_xfer(void                            *dev,
       
       if ( do_src )
 	{
-	  count = cli->capture_src.nsamples / cli->capture_schan;
+	  count = cli->capture_src.nsamples / cli->capture_mixmap.map.ichan;
 	  ptr = cli->capture_src.buf;
 	  ret = 0;
 	} else
@@ -1533,7 +1670,7 @@ static void capture_xfer(void                            *dev,
 	  c = frames - offset;
 	  if ( count > c )
 	    count = c;
-	  c = count * cli->capture_schan;
+	  c = count * cli->capture_mixmap.map.ichan;
 
 	  //Clear out the memory so the channel map
 	  //can be mixed correctly.  I don't think it is likely
@@ -1543,27 +1680,13 @@ static void capture_xfer(void                            *dev,
 
 	  
 	  
-	  in = &buf[cli->capture_schan * offset];
-	  if ( ! (map->stream & DSPD_CHMAP_MULTI) )
-	    {
-	      for ( i = 0; i < count; i++ )
-		{
-		  infr = &in[i*cli->capture_schan];
-		  outfr = &ptr[i*cli->capture.params.channels];
-		  for ( j = 0; j < map->channels; j++ )
-		    outfr[j] += (infr[map->pos[j]] * volume);
-		}
-	    } else
-	    {
-	      for ( i = 0; i < count; i++ )
-		{
-		  infr = &in[i*cli->capture_schan];
-		  outfr = &ptr[i*cli->capture.params.channels];
-		  n = map->channels * 2;
-		  for ( j = 0; j < n; j += 2 )
-		    outfr[map->pos[j+1]] += (infr[map->pos[j]] * volume);
-		}
-	    }
+	  in = &buf[cli->capture_mixmap.map.ichan * offset];
+
+	  cli->capture_read(&cli->capture_mixmap.map, 
+			    in,
+			    ptr,
+			    count,
+			    volume);
 	  offset += count;
 	  cli->capture.dev_appl_ptr += count;
 	  if ( do_src )
@@ -1729,6 +1852,7 @@ static int32_t client_setparams(struct dspd_rctx *context,
   struct dspd_cli_params *oparams;
   struct dspd_client *cli = dspd_req_userdata(context);
 
+
   if ( params->rate < 1000 || params->rate > 384000 )
     return dspd_req_reply_err(context, 0, EINVAL);
 
@@ -1778,8 +1902,10 @@ static int32_t client_setparams(struct dspd_rctx *context,
 	  else
 	    cli->playback_inmap.map.channels = 0;
 	}
-      dspd_stream_setchannelmap(cli, NULL, params->stream);
     }
+  if ( err == 0 )
+    err = refresh_chmap(cli, DSPD_PCM_SBIT_FULLDUPLEX);
+
 
 
   if ( err )
@@ -1845,8 +1971,11 @@ static int32_t client_connect(struct dspd_rctx *context,
   size_t br;
   struct dspd_cli_params params;
   uint32_t playback_rate = 0, capture_rate = 0, latency;
+
   dspd_slist_entry_wrlock(cli->list, cli->index);
   dspd_slist_entry_srvlock(cli->list, cli->index);
+
+
 
   //Reconnecting is ok
   if ( cli->device >= 0 )
@@ -1971,13 +2100,35 @@ static int32_t client_connect(struct dspd_rctx *context,
 	  cli->device = idx;
 	  cli->server_ops = server_ops;
 	  cli->server = data;
-	  if ( cli->playback.params.rate )
-	    dspd_stream_setchannelmap(cli, NULL, DSPD_PCM_SBIT_PLAYBACK);
-	  if ( cli->capture.params.rate )
-	    dspd_stream_setchannelmap(cli, NULL, DSPD_PCM_SBIT_CAPTURE);
 	  dspd_stream_setsrc(cli, false);
 	  dspd_slist_entry_set_key(cli->list, cli->index, idx);
 	  cli->device_reserved = 0;
+	}
+      if ( err == 0 )
+	{
+	  if ( cli->playback.params.channels > 0 )
+	    {
+	      if ( cli->playback.params.channels != cli->playback_usermap.map.count )
+		{
+		  memset(&cli->playback_usermap, 0, sizeof(cli->playback_usermap));
+		  memset(&cli->playback_mixmap, 0, sizeof(cli->playback_mixmap));
+		} else if ( cli->playback.params.channels != cli->playback_mixmap.map.ichan )
+		{
+		  memset(&cli->playback_mixmap, 0, sizeof(cli->playback_mixmap));
+		}
+	    }
+	  if ( cli->capture.params.channels > 0 )
+	    {
+	      if ( cli->capture.params.channels != cli->capture_usermap.map.count )
+		{
+		  memset(&cli->capture_usermap, 0, sizeof(cli->capture_usermap));
+		  memset(&cli->capture_mixmap, 0, sizeof(cli->capture_mixmap));
+		} else if ( cli->capture.params.channels != cli->capture_mixmap.map.ichan )
+		{
+		  memset(&cli->capture_mixmap, 0, sizeof(cli->capture_mixmap));
+		}
+	    }
+	  err = refresh_chmap(cli, DSPD_PCM_SBIT_FULLDUPLEX);
 	}
     }
 
@@ -2137,6 +2288,7 @@ static int32_t client_mapbuf(struct dspd_rctx *context,
   return ret;
 }
 
+
 static int32_t client_getchannelmap(struct dspd_rctx *context,
 				    uint32_t      req,
 				    const void   *inbuf,
@@ -2144,44 +2296,44 @@ static int32_t client_getchannelmap(struct dspd_rctx *context,
 				    void         *outbuf,
 				    size_t        outbufsize)
 {
-  struct dspd_chmap *omap = outbuf, *imap;
+  const struct dspd_pcm_chmap_container *usermap = NULL, *mixmap = NULL, *map = NULL;
   int32_t stream = *(int32_t*)inbuf;
-  int32_t err, ret;
-  size_t len;
   struct dspd_client *cli = dspd_req_userdata(context);
+  size_t len = 0;
+  int32_t ret;
   dspd_client_lock(cli, false);
   if ( stream == DSPD_PCM_SBIT_PLAYBACK )
     {
-      imap = &cli->playback_inmap.map;
+      usermap = &cli->playback_usermap;
+      mixmap = &cli->playback_mixmap;
     } else if ( stream == DSPD_PCM_SBIT_CAPTURE )
     {
-      imap = &cli->capture_inmap.map;
-    } else
-    {
-      imap = NULL;
+      usermap = &cli->capture_usermap;
+      mixmap = &cli->capture_mixmap;
     }
-  if ( imap )
+  if ( usermap && mixmap )
     {
-      len = dspd_chmap_sizeof(imap);
-      if ( len <= outbufsize )
+      if ( usermap->map.count > 0 )
 	{
-	  memcpy(omap, imap, len);
-	  err = 0;
-	} else
+	  //A enumerated map was specified.  The matrix map is automatically generated.
+	  map = usermap;
+	  len = dspd_pcm_chmap_sizeof(map->map.count, map->map.flags);
+	} else if ( mixmap->map.count > 0 )
 	{
-	  err = ENOBUFS;
+	  //Only a matrix map was specified
+	  map = mixmap;
+	  len = dspd_pcm_chmap_sizeof(map->map.count, map->map.flags);
 	}
-    } else
-    {
-      err = -EINVAL;
     }
   dspd_client_unlock(cli);
-  if ( err == 0 )
-    ret = dspd_req_reply_buf(context, 0, omap, len);
+  if ( map != NULL && len <= outbufsize )
+    ret = dspd_req_reply_buf(context, 0, map, len);
   else
-    ret = dspd_req_reply_err(context, 0, err);
+    ret = dspd_req_reply_err(context, 0, EINVAL);
   return ret;
 }
+
+
 
 static int32_t client_setchannelmap(struct dspd_rctx *context,
 				    uint32_t      req,
@@ -2190,24 +2342,24 @@ static int32_t client_setchannelmap(struct dspd_rctx *context,
 				    void         *outbuf,
 				    size_t        outbufsize)
 {
-  const struct dspd_chmap *pkt = inbuf;
-  int32_t err;
+  const struct dspd_pcm_chmap *map = inbuf;
   struct dspd_client *cli = dspd_req_userdata(context);
-
-  if ( dspd_chmap_sizeof(pkt) <= inbufsize )
+  int32_t err;
+  if ( dspd_pcm_chmap_sizeof(map->count, map->flags) <= inbufsize )
     {
       dspd_client_lock(cli, true);
       dspd_client_srvlock(cli);
-      err = dspd_stream_setchannelmap(cli, pkt, pkt->stream);
+      err = set_chmap(cli, map);
       dspd_client_srvunlock(cli);
       dspd_client_unlock(cli);
     } else
     {
-      err = E2BIG;
+      err = -E2BIG;
     }
   return dspd_req_reply_err(context, 0, err);
-  
 }
+
+
 static int32_t client_setcb(struct dspd_rctx *context,
 			    uint32_t      req,
 			    const void   *inbuf,

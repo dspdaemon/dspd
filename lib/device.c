@@ -3470,120 +3470,7 @@ static int32_t server_irqinfo(struct dspd_rctx *context,
   return ret;
 }
 
-static int32_t create_channelmap_generic(const struct dspd_fchmap *smap, struct dspd_fchmap *cmap, int32_t channels)
-{
-  int32_t ret = EINVAL, i;
-  struct dspd_fchmap tmp;
-  if ( channels == 1 || (channels == 2 && channels > smap->map.channels) )
-    {
-      memset(cmap, 0, sizeof(*cmap));
-      cmap->map.channels = channels;
-      ret = dspd_chmap_create_generic((const struct dspd_chmap*)smap, (struct dspd_chmap*)cmap);
-      ret *= -1;
-    } else if ( channels <= smap->map.channels )
-    {
-      memset(&tmp, 0, sizeof(tmp));
-      tmp.map.channels = channels;
-      switch(channels)
-	{
-	case 2:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  break;
-	case 3:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  if ( dspd_chmap_index((struct dspd_chmap*)smap, DSPD_CHMAP_FC) >= 0 )
-	    tmp.map.pos[2] = DSPD_CHMAP_FC;
-	  else
-	    tmp.map.pos[2] = DSPD_CHMAP_LFE;
-	  break;
-	case 4:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  if ( dspd_chmap_index((struct dspd_chmap*)smap, DSPD_CHMAP_RL) >= 0 &&
-	       dspd_chmap_index((struct dspd_chmap*)smap, DSPD_CHMAP_RR) >= 0 )
-	    {
-	      tmp.map.pos[2] = DSPD_CHMAP_RL;
-	      tmp.map.pos[3] = DSPD_CHMAP_RR;
-	    } else
-	    {
-	      tmp.map.pos[2] = DSPD_CHMAP_FC;
-	      tmp.map.pos[3] = DSPD_CHMAP_LFE;
-	    }
-	  break;
-	case 5:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  tmp.map.pos[2] = DSPD_CHMAP_RL;
-	  tmp.map.pos[3] = DSPD_CHMAP_RR;
-	  if ( dspd_chmap_index((struct dspd_chmap*)smap, DSPD_CHMAP_LFE) >= 0 )
-	    tmp.map.pos[4] = DSPD_CHMAP_LFE;
-	  else
-	    tmp.map.pos[4] = DSPD_CHMAP_FC;
-	  break;
-	case 6:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  tmp.map.pos[2] = DSPD_CHMAP_RL;
-	  tmp.map.pos[3] = DSPD_CHMAP_RR;
-	  tmp.map.pos[4] = DSPD_CHMAP_FC;
-	  tmp.map.pos[5] = DSPD_CHMAP_LFE;
-	  break;
-	case 7:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  tmp.map.pos[2] = DSPD_CHMAP_RL;
-	  tmp.map.pos[3] = DSPD_CHMAP_RR;
-	  tmp.map.pos[4] = DSPD_CHMAP_FC;
-	  tmp.map.pos[5] = DSPD_CHMAP_LFE;
-	  tmp.map.pos[6] = DSPD_CHMAP_RC;
-	  break;
-	case 8:
-	  tmp.map.pos[0] = DSPD_CHMAP_FL;
-	  tmp.map.pos[1] = DSPD_CHMAP_FR;
-	  tmp.map.pos[2] = DSPD_CHMAP_RL;
-	  tmp.map.pos[3] = DSPD_CHMAP_RR;
-	  tmp.map.pos[4] = DSPD_CHMAP_FC;
-	  tmp.map.pos[5] = DSPD_CHMAP_LFE;
-	  tmp.map.pos[6] = DSPD_CHMAP_SL;
-	  tmp.map.pos[7] = DSPD_CHMAP_SR;
-	  break;
-	default:
-	  memcpy(&tmp, smap, dspd_fchmap_sizeof(smap));
-	  break;
-	}
-      ret = dspd_chmap_getconv((const struct dspd_chmap*)&tmp, 
-			       (const struct dspd_chmap*)smap, 
-			       (struct dspd_chmap*)cmap);
-      if ( ! ret )
-	{
-	  tmp.map.channels = channels;
-	  for ( i = 0; i < channels; i++ )
-	    tmp.map.pos[i] = cmap->map.pos[i];
-	  if ( dspd_chmap_getconv((const struct dspd_chmap*)&tmp, 
-				  (const struct dspd_chmap*)smap, 
-				  (struct dspd_chmap*)cmap) )
-	    ret = 0;
-	  else
-	    ret = EINVAL;
-	} else
-	{
-	  ret = 0;
-	}
-    }
-  if ( ret == 0 )
-    {
-      if ( ! dspd_chmap_test((const struct dspd_chmap*)smap,
-			     (const struct dspd_chmap*)cmap,
-			     channels) )
-	ret = EINVAL;
-      else
-	ret = 0;
-    }
-	 
-  return ret;
-}
+
 
 static int32_t server_getchannelmap(struct dspd_rctx *context,
 				    uint32_t      req,
@@ -3596,68 +3483,51 @@ static int32_t server_getchannelmap(struct dspd_rctx *context,
   uint64_t val;
   uint32_t stream;
   uint32_t channels;
-  struct dspd_fchmap chmap, map2;
-  struct dspd_pcmdev_stream *s;
-  int32_t ret;
+  int32_t ret = -EINVAL;
+  struct dspd_pcmdev_stream *s = NULL;
+  struct dspd_pcm_chmap_container inmap, outmap;
+  size_t buflen;
   if ( inbufsize == sizeof(val) )
     val = *(uint64_t*)inbuf;
   else
     val = *(uint32_t*)inbuf;
   stream = val & 0xFFFFFFFF;
   channels = val >> 32U;
-  if ( channels > DSPD_CHMAP_MAXCHAN )
-    return dspd_req_reply_err(context, 0, EINVAL);
-  memset(&map2, 0, sizeof(map2));
   if ( stream == DSPD_PCM_SBIT_PLAYBACK && dev->playback.ops )
+    s = &dev->playback;
+  else if ( stream == DSPD_PCM_SBIT_CAPTURE && dev->capture.ops )
+    s = &dev->capture;
+  if ( channels <= DSPD_CHMAP_MAXCHAN && s != NULL && s->ops->get_chmap != NULL )
     {
-      s = &dev->playback;
-    } else if ( stream == DSPD_PCM_SBIT_CAPTURE && dev->capture.ops )
-    {
-      s = &dev->capture;
-    } else
-    {
-      return dspd_req_reply_err(context, 0, EINVAL);
-    }
-
-  if ( s->ops->get_chmap )
-    {
+      memset(&outmap, 0, sizeof(outmap));
       if ( channels == 0 )
 	{
-	  //Get the device channel map (channel ids)
-	  ret = s->ops->get_chmap(s->handle, (struct dspd_chmap*)&chmap);
-	  if ( ret == 0 )
-	    {
-	      if ( outbufsize < dspd_fchmap_sizeof(&chmap) )
-		ret = dspd_req_reply_err(context, 0, ENOSPC);
-	      else
-		ret = dspd_req_reply_buf(context, 0, &chmap, dspd_fchmap_sizeof(&chmap));
-	    } else
-	    {
-	      ret = dspd_req_reply_err(context, 0, ret);
-	    }
+	  //Raw device map
+	  ret = s->ops->get_chmap(s->handle, &outmap.map);
 	} else if ( s->ops->create_chmap )
 	{ 
 	  //Create channel map with specified number of channels using the driver
-	  ret = s->ops->create_chmap(s->handle, channels, (struct dspd_chmap*)&chmap);
-	  if ( ret == 0 )
-	    ret = dspd_req_reply_buf(context, 0, &chmap, dspd_fchmap_sizeof(&chmap));
-	  else
-	    ret = dspd_req_reply_err(context, 0, ret);
+	  ret = s->ops->create_chmap(s->handle, channels, &outmap.map);
 	} else
 	{
-	  //Try to create a channel map using generic routines
-	  ret = s->ops->get_chmap(s->handle, (struct dspd_chmap*)&chmap);
+	  //Create a generic channel map based on the driver map
+	  ret = s->ops->get_chmap(s->handle, &inmap.map);
 	  if ( ret == 0 )
-	    ret = create_channelmap_generic(&chmap, &map2, channels);
-	  if ( ret == 0 )
-	    ret = dspd_req_reply_buf(context, 0, &map2, dspd_fchmap_sizeof(&map2));
-	  else
-	    ret = dspd_req_reply_err(context, 0, ret);
+	    {
+	      outmap.map.count = channels;
+	      ret = dspd_pcm_chmap_any(&inmap.map, &outmap.map);
+	    }
 	}
-    } else
-    {
-      ret = dspd_req_reply_err(context, 0, EINVAL);
+      buflen = dspd_pcm_chmap_sizeof(outmap.map.count, outmap.map.flags);
+      if ( ret == 0 && outbufsize < buflen )
+	ret = -ENOBUFS;
+      else
+	outbufsize = buflen;
     }
+  if ( ret == 0 )
+    ret = dspd_req_reply_buf(context, 0, &outmap, outbufsize);
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
   return ret;
 }
 
@@ -3668,60 +3538,64 @@ static int32_t server_convert_chmap(struct dspd_rctx *context,
 				    void         *outbuf,
 				    size_t        outbufsize)
 {
-  
-  const struct dspd_chmap *in = inbuf;
-  struct dspd_fchmap tmp, out;
-  int32_t ret;
   struct dspd_pcm_device *dev = dspd_req_userdata(context);
-  struct dspd_pcmdev_stream *s;
-  if ( inbufsize < dspd_chmap_sizeof(in) || in->channels > DSPD_CHMAP_MAXCHAN )
+  int32_t ret = -EINVAL;
+  const struct dspd_pcm_chmap *in = inbuf;
+  struct dspd_pcm_chmap_container out, tmp;
+  struct dspd_pcmdev_stream *s = NULL;
+  int32_t sbit;
+  if ( inbufsize >= dspd_pcm_chmap_sizeof(in->count, in->flags) )
     {
-      ret = dspd_req_reply_err(context, 0, EINVAL);
-    } else
-    {
-      if ( (in->stream & DSPD_PCM_SBIT_PLAYBACK) && dev->playback.ops )
+      sbit = in->flags & DSPD_PCM_SBIT_FULLDUPLEX;
+      if ( sbit == DSPD_PCM_SBIT_PLAYBACK && dev->playback.ops )
+	s = &dev->playback;
+      else if ( sbit == DSPD_PCM_SBIT_CAPTURE && dev->capture.ops )
+	s = &dev->capture;
+      if ( s )
 	{
-	  s = &dev->playback;
-	} else if ( (in->stream & DSPD_PCM_SBIT_CAPTURE) && dev->capture.ops )
-	{
-	  s = &dev->capture;
-	} else
-	{
-	  return dspd_req_reply_err(context, 0, EINVAL);
-	}
-      if ( s->ops->translate_chmap )
-	{
-	  ret = s->ops->translate_chmap(s->handle, in, (struct dspd_chmap*)&out);
-	} else if ( s->ops->get_chmap )
-	{
-	  ret = s->ops->get_chmap(s->handle, (struct dspd_chmap*)&tmp);
-	  if ( ret == 0 )
+	  memset(&out, 0, sizeof(out));
+	  if ( s->ops->translate_chmap )
 	    {
-	      if ( dspd_chmap_getconv(in, 
-				      (const struct dspd_chmap*)&tmp, 
-				      (struct dspd_chmap*)&out) &&
-		   dspd_chmap_test((const struct dspd_chmap*)&tmp,
-				   (const struct dspd_chmap*)&out,
-				   in->channels) &&
-		   dspd_fchmap_sizeof(&out) <= outbufsize )
+	      ret = s->ops->translate_chmap(s->handle, in, &out.map);
+	    } else if ( s->ops->get_chmap )
+	    {
+	      ret = s->ops->get_chmap(s->handle, &tmp.map);
+	      if ( ret == 0 )
 		{
-		  ret = 0;
-		} else
-		{
-		  ret = EINVAL;
+		  ret = dspd_pcm_chmap_test(in, &tmp.map);
+		  if ( ret == 0 )
+		    {
+		      out.map.flags = DSPD_CHMAP_SIMPLE;
+		      if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+			{
+			  out.map.ichan = in->count;
+			  out.map.ochan = tmp.map.count;
+			  out.map.count = out.map.ichan;
+			} else
+			{
+			  out.map.ichan = tmp.map.count;
+			  out.map.ochan = in->count;
+			  out.map.count = in->count;
+			}
+		    } else
+		    {
+		      if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+			ret = dspd_pcm_chmap_translate(in, &tmp.map, &out.map);
+		      else
+			ret = dspd_pcm_chmap_translate(&tmp.map, in, &out.map);
+		    }
 		}
 	    }
-	} else
-	{
-	  ret = EINVAL;
 	}
-      if ( ret == 0 )
-	ret = dspd_req_reply_buf(context, 0, &out, dspd_fchmap_sizeof(&out));
-      else
-	ret = dspd_req_reply_err(context, 0, ret);
     }
+  if ( ret == 0 )
+    ret = dspd_req_reply_buf(context, 0, &out, dspd_pcm_chmap_sizeof(out.map.count, out.map.flags));
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
   return ret;
 }
+
+
 
 static int32_t server_lock(struct dspd_rctx *context,
 			   uint32_t      req,

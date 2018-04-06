@@ -2,6 +2,14 @@ include ../config.makefile
 include ../rules.makefile
 
 
+
+MAKEBIN=$(CC) $(LIBS) $(CFLAGS) -L. -ldspds -ldspdc -Wl,-rpath=./
+
+%.bin: %.c
+	$(MAKEBIN) -o $@ $<
+
+TESTPROGS=test_chmap.bin
+
 OBJECTS=modules.o util.o cfgread.o objlist.o mbx.o shm.o fifo.o \
 	pcm.o scheduler.o device.o client.o dspd_time.o log.o req.o \
 	daemon.o rclient.o cbpoll.o socket.o ssclient.o chmap.o src.o \
@@ -22,14 +30,22 @@ dspdc:
 dspds:
 	$(CC) $(LIBS) $(CFLAGS) -L. -ldspdc -shared -o libdspds.so $(DSPDS_OBJ)
 
+runtest:
+	$(foreach f, $(TESTPROGS), ./$(f) )
+
+testobj: $(TESTPROGS)
+
+test: testobj runtest
+
+
 solib: dspdc dspds
 #	$(CC) $(LIBS) $(OBJECTS) $(CFLAGS) -shared -o libsoundserver.so
 
 clean:
-	-rm -f *.so *.o
+	-rm -f *.so *.o *.bin
 
 distclean:
-	-rm -f *.so *.o *~ \#*
+	-rm -f *.so *.o *~ \#* *.bin
 
 install:
 	mkdir -p $(REAL_LIBDIR)

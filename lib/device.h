@@ -195,13 +195,13 @@ struct dspd_pcmdrv_ops {
 
 
   
-  int32_t (*get_chmap)(void *handle, struct dspd_chmap *map);
+  int32_t (*get_chmap)(void *handle, struct dspd_pcm_chmap *map);
   int32_t (*translate_chmap)(void *handle, 
-			     const struct dspd_chmap *map_in, 
-			     struct dspd_chmap *map_out);
+			     const struct dspd_pcm_chmap *map_in, 
+			     struct dspd_pcm_chmap *map_out);
   int32_t (*create_chmap)(void *handle,
 			  int32_t channels,
-			  struct dspd_chmap *map_out);
+			  struct dspd_pcm_chmap *map_out);
   
   /*
     Perform fast pointer adjustments.  This function should be

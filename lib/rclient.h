@@ -14,10 +14,10 @@ struct dspd_rclient_swparams {
 };
 
 struct dspd_rclient_hwparams {
-  const struct dspd_cli_params *playback_params;
-  const struct dspd_chmap      *playback_chmap;
-  const struct dspd_cli_params *capture_params;
-  const struct dspd_chmap      *capture_chmap;
+  const struct dspd_cli_params     *playback_params;
+  const struct dspd_pcm_chmap      *playback_chmap;
+  const struct dspd_cli_params     *capture_params;
+  const struct dspd_pcm_chmap      *capture_chmap;
   void    *context;
   int32_t  stream;
   int32_t  device;
@@ -115,8 +115,8 @@ int32_t dspd_rclient_get_streams(struct dspd_rclient *client);
 
 int32_t dspd_rclient_connect(struct dspd_rclient *client, 
 			     const struct dspd_cli_params *params, //required, may be full duplex
-			     const struct dspd_chmap *playback_map, //optional
-			     const struct dspd_chmap *capture_map, //optional
+			     const struct dspd_pcm_chmap *playback_map, //optional
+			     const struct dspd_pcm_chmap *capture_map, //optional
 			     void *context, //connection or dspd_dctx
 			     int32_t stream, //client stream
 			     int32_t device);

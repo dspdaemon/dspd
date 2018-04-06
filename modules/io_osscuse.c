@@ -39,7 +39,7 @@ struct dspd_ioctl_info {
 static const struct dspd_ioctl_info *get_ioctl_handlers(int request);
 static int first_bit(int mask);
 
-static int dspd_chmap_to_oss(const struct dspd_chmap *dspd,
+static int dspd_chmap_to_oss(const struct dspd_pcm_chmap *dspd,
 			     unsigned long long *oss);
 
 static int check_policy(struct dsp_data *dsp, unsigned int policy, int32_t *fragsize, int32_t *bufsize);
@@ -94,7 +94,7 @@ static int32_t dsp_commit_params(struct oss_cdev_client *cli)
   size_t fr, br;
   struct dspd_cli_params devparams, cliparams;
   size_t maxio;
-  struct dspd_fchmap map;
+  struct dspd_pcm_chmap_container map;
   struct dspd_rclient_swparams swp = { 0 };
   if ( cli->dsp.params_set )
     return 0;
@@ -648,7 +648,7 @@ static int32_t dsp_req_channels(struct dspd_rctx *context,
   struct oss_cdev_client *cli = dspd_req_userdata(context);
   struct dsp_data *dsp = &cli->dsp;
   int maxchan;
-  struct dspd_fchmap map;
+  struct dspd_pcm_chmap_container map;
   int32_t ret;
   size_t br;
   if ( ! dsp->params_set )
@@ -680,15 +680,15 @@ static int32_t dsp_req_channels(struct dspd_rctx *context,
 	  if ( ret == 0 )
 	    {
 	      //If the channel map doesn't match then it must be reset
-	      if ( map.map.channels != dsp->params.channels )
+	      if ( map.map.count != dsp->params.channels )
 		{
 		  //Request the default channel map
-		  map.map.channels = 0;
+		  map.map.count = 0;
 		  ret = dspd_stream_ctl(&dspd_dctx,
 					cli->client_index,
 					DSPD_SCTL_CLIENT_SETCHANNELMAP,
 					&map.map,
-					dspd_chmap_sizeof(&map.map),
+					sizeof(map),
 					NULL,
 					0,
 					&br);
@@ -1669,7 +1669,7 @@ static int32_t find_dspd_channel(uint8_t channel)
 }
 
 
-static int dspd_chmap_to_oss(const struct dspd_chmap *dspd,
+static int dspd_chmap_to_oss(const struct dspd_pcm_chmap *dspd,
 			     unsigned long long *oss)
 {
   size_t i;
@@ -1677,7 +1677,7 @@ static int dspd_chmap_to_oss(const struct dspd_chmap *dspd,
   uint32_t count = 0;
   unsigned long long val;
   *oss = 0ULL;
-  for ( i = 0; i < dspd->channels; i++ )
+  for ( i = 0; i < dspd->count; i++ )
     {
       ch = find_oss_channel(dspd->pos[i]);
       if ( ch > CHID_UNDEF )
@@ -1693,7 +1693,7 @@ static int dspd_chmap_to_oss(const struct dspd_chmap *dspd,
 
 
 static int oss_chmap_to_dspd(unsigned long long oss,
-			     struct dspd_chmap *dspd)
+			     struct dspd_pcm_chmap *dspd)
 {
   size_t i, count = 0;
   uint32_t val;
@@ -1706,7 +1706,7 @@ static int oss_chmap_to_dspd(unsigned long long oss,
 	  count++;
 	}
     }
-  dspd->channels = count;
+  dspd->count = count;
   return count;
 }
 
@@ -1721,7 +1721,7 @@ static int32_t dsp_req_get_chnorder(struct dspd_rctx *context,
 {
   struct oss_cdev_client *cli = dspd_req_userdata(context);
   unsigned long long result = 0;
-  struct dspd_fchmap chmap;
+  struct dspd_pcm_chmap_container chmap;
   size_t br;
   int32_t ret = 0;
   memset(&chmap, 0, sizeof(chmap));
@@ -1760,7 +1760,7 @@ static int32_t dsp_req_set_chnorder(struct dspd_rctx *context,
 {
   struct oss_cdev_client *cli = dspd_req_userdata(context);
   unsigned long long ossmap = *(unsigned long long*)inbuf;
-  struct dspd_fchmap dspdmap;
+  struct dspd_pcm_chmap_container dspdmap;
   int32_t ret;
   size_t br;
   if ( (cli->dsp.params.stream & DSPD_PCM_SBIT_FULLDUPLEX) != DSPD_PCM_SBIT_FULLDUPLEX )
@@ -1770,6 +1770,7 @@ static int32_t dsp_req_set_chnorder(struct dspd_rctx *context,
       ret = oss_chmap_to_dspd(ossmap, &dspdmap.map);
       if ( ret > 0 )
 	{
+	  dspdmap.map.flags = cli->dsp.params.stream;
 	  ret = dspd_stream_ctl(&dspd_dctx,
 				cli->client_index,
 				DSPD_SCTL_CLIENT_SETCHANNELMAP,
