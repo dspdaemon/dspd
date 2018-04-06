@@ -32,9 +32,9 @@ pcm_dspd:
 	pcm_dspd.o
 
 
-pcm_dspd_new:
-	$(MAKEOBJ) pcm_dspd_new.c
-	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so pcm_dspd_new.o
+pcm_dspd_old:
+	$(MAKEOBJ) pcm_dspd_old.c
+	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so pcm_dspd_old.o
 
 install:
 	mkdir -p $(REAL_LIBDIR)/alsa-lib

@@ -48,19 +48,6 @@ enum dspd_pcm_chmap_positions {
 
 #define DSPD_CHMAP_MULTI (1<<7)
 
-/*
-  A channel map can really have 3 meanings:
-
-  STANDARD: Each position (pos[]) is an index into the input stream and the integer
-            in that position is the output index.
-  MULTI: Interleaved IN,OUT,IN,OUT,... (map input channel to an output channel, possibly
-         more than once per channel)
-  DEVICE MAP: Each position index represents an index in a device PCM frame.  The
-              integer in that index is the actual channel (DSPD_CHMAP_xxx)
-  
-  
-
- */
 
 struct dspd_chmap {
   uint8_t channels;
@@ -81,6 +68,7 @@ struct dspd_fchmap {
 
 //Map is a matrix (each position is an index, not an enumerated position)
 #define DSPD_CHMAP_MATRIX (1U<<6U)
+//Simple matrix map (no positions used, ichan <= ochan)
 #define DSPD_CHMAP_SIMPLE (1U<<5U)
 #define DSPD_CHMAP_POSITION_MASK 0xFFFFU
 #define DSPD_CHMAP_DRIVER_SPEC (1U << 8U)
