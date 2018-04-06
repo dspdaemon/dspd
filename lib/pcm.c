@@ -118,13 +118,13 @@ static inline int32_t int24p_to_int32(const char *val)
       f = val / (umax / 2.0); out[i] = f - 1.0; } }
 
 #define unsigned_to_float(itype, otype, umax)				\
-  void u##itype##ne_to_##otype##_array(const itype##_t *in, otype *out, size_t len) { \
-    size_t i; otype f;							\
+  void u##itype##ne_to_##otype##_array(const u##itype##_t *in, otype *out, size_t len) { \
+    size_t i; otype f; 							\
     for ( i = 0; i < len; i++ ) {					\
       f = in[i] / (umax / 2.0); out[i] = f - 1.0; } }
 
 #define oe_unsigned_to_float(itype, otype, umax, bswap)		\
-  void u##itype##oe_to_##otype##_array(const itype##_t *in, otype *out, size_t len) { \
+  void u##itype##oe_to_##otype##_array(const u##itype##_t *in, otype *out, size_t len) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = bswap(in[i]) / (umax / 2.0); out[i] = f - 1.0; } }
@@ -146,13 +146,13 @@ static inline int32_t int24p_to_int32(const char *val)
       f = val / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 
 #define unsigned_to_float_wv(itype, otype, umax)				\
-  void u##itype##ne_to_##otype##_array_wv(const itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void u##itype##ne_to_##otype##_array_wv(const u##itype##_t *in, otype *out, size_t len, float64 volume) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = in[i] / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 
 #define oe_unsigned_to_float_wv(itype, otype, umax, bswap)		\
-  void u##itype##oe_to_##otype##_array_wv(const itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void u##itype##oe_to_##otype##_array_wv(const u##itype##_t *in, otype *out, size_t len, float64 volume) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = bswap(in[i]) / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
@@ -163,7 +163,7 @@ static inline int32_t int24p_to_int32(const char *val)
       val = in[i] ^ (0x80 << ((sizeof(val)-1)*8));			\
       f = val / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 
-#define flip_sign(_val,type) ((_val) ^ (0x80 << ((sizeof(type)-1)*8)))
+#define flip_sign(_val,type) ((_val) ^ (0x80U << ((sizeof(type)-1U)*8U)))
 
 #define float_to_signed(itype, otype, umax)		\
   void itype##_to_##otype##_array(const itype *in, otype##_t *out, size_t len) { \
@@ -211,8 +211,8 @@ static inline int32_t int24p_to_int32(const char *val)
       { out[i] = 0; }							\
     else {								\
       sv *= (8.0 * 0x10000000);						\
-      o = (u##otype##_t) (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
-      out[i] = flip_sign(o,otype##_t);						\
+      o = (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
+      out[i] = flip_sign(o,otype##_t);					\
     }									\
   }}		
 
@@ -233,7 +233,7 @@ static inline int32_t int24p_to_int32(const char *val)
 
 #define float_to_unsigned_wv(itype, otype, umax)	\
   void itype##_to_u##otype##_array_wv(const itype *in, u##otype##_t *out, size_t len, float64 volume) { \
-  float64 sv; size_t i; u##otype##_t o;						\
+  float64 sv; size_t i; otype##_t o;						\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i] * volume;								\
     if ( sv >= 1.0 )							\
@@ -242,31 +242,31 @@ static inline int32_t int24p_to_int32(const char *val)
       { out[i] = 0; }							\
     else {								\
       sv *= (8.0 * 0x10000000);						\
-      o = (u##otype##_t) (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
-      out[i] = flip_sign(o,otype##_t);						\
+      o = (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
+      out[i] = flip_sign(o,otype##_t);					\
     }									\
   }}	
 
 #define float_to_unsigned_oe_wv(itype, otype, umax, bswap)			\
   void itype##_to_u##otype##oe_array_wv(const itype *in, u##otype##_t *out, size_t len, float64 volume) { \
-    float64 sv; size_t i; u##otype##_t o, val;					\
-  for ( i = 0; i < len; i++ ) {						\
-    sv = in[i] * volume;								\
-    if ( sv >= 1.0 )							\
-      { val = umax; }						\
+    float64 sv; size_t i; u##otype##_t val; otype##_t o;		\
+    for ( i = 0; i < len; i++ ) {					\
+      sv = in[i] * volume;						\
+      if ( sv >= 1.0 )							\
+	{ val = umax; }							\
     else if ( sv <= -1.0 )						\
       { val = 0; }							\
     else {								\
       sv *= (8.0 * 0x10000000);						\
-      o = (u##otype##_t) (_float2int(sv) >> (((sizeof(int32_t)-sizeof(u##otype##_t))*8))); \
-      val = flip_sign(o,u##otype##_t);					\
+      o = (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
+      val = flip_sign(o,otype##_t);					\
     }									\
-    out[i] = bswap(val);						\
-  }									\
+      out[i] = bswap(val);						\
+    }									\
   }	
 #define float_to_unsigned_oe(itype, otype, umax, bswap)			\
   void itype##_to_u##otype##oe_array(const itype *in, u##otype##_t *out, size_t len) { \
-    float64 sv; size_t i; u##otype##_t o, val;					\
+    float64 sv; size_t i; u##otype##_t val; otype##_t o;		\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i];								\
     if ( sv >= 1.0 )							\
@@ -275,10 +275,10 @@ static inline int32_t int24p_to_int32(const char *val)
       { val = 0; }							\
     else {								\
       sv *= (8.0 * 0x10000000);						\
-      o = (u##otype##_t) (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
+      o = (_float2int(sv) >> (((sizeof(int32_t)-sizeof(otype##_t))*8))); \
       val = flip_sign(o,otype##_t);					\
     }									\
-    out[i] = bswap(val);						\
+  out[i] = bswap(val);							\
   }									\
   }	
 
