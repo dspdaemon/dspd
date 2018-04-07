@@ -110,27 +110,30 @@ static inline int32_t int24p_to_int32(const char *val)
     .fromfloat64wv = (dspd_fromfloat64wv_t)float64_to_##type##_array_wv,	\
   }
 
+
+#define _r __restrict
+
 #define signed_to_float(itype, otype, umax)				\
-  void itype##ne_to_##otype##_array(const itype##_t *in, otype *out, size_t len) { \
+  void itype##ne_to_##otype##_array(const itype##_t * _r in, otype * _r out, size_t len) { \
     size_t i; otype f; u##itype##_t val;					\
     for ( i = 0; i < len; i++ ) {					\
       val = in[i] ^ (0x80 << ((sizeof(val)-1)*8));			\
       f = val / (umax / 2.0); out[i] = f - 1.0; } }
 
 #define unsigned_to_float(itype, otype, umax)				\
-  void u##itype##ne_to_##otype##_array(const u##itype##_t *in, otype *out, size_t len) { \
+  void u##itype##ne_to_##otype##_array(const u##itype##_t * _r in, otype * _r out, size_t len) { \
     size_t i; otype f; 							\
     for ( i = 0; i < len; i++ ) {					\
       f = in[i] / (umax / 2.0); out[i] = f - 1.0; } }
 
 #define oe_unsigned_to_float(itype, otype, umax, bswap)		\
-  void u##itype##oe_to_##otype##_array(const u##itype##_t *in, otype *out, size_t len) { \
+  void u##itype##oe_to_##otype##_array(const u##itype##_t * _r in, otype * _r out, size_t len) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = bswap(in[i]) / (umax / 2.0); out[i] = f - 1.0; } }
 
 #define oe_signed_to_float(itype, otype, umax, bswap)			\
-  void itype##oe_to_##otype##_array(const itype##_t *in, otype *out, size_t len) { \
+  void itype##oe_to_##otype##_array(const itype##_t * _r in, otype * _r out, size_t len) { \
     size_t i; otype f; u##itype##_t val;				\
     for ( i = 0; i < len; i++ ) {					\
       val = bswap(in[i]) ^ (0x80 << ((sizeof(val)-1)*8));		\
@@ -139,25 +142,25 @@ static inline int32_t int24p_to_int32(const char *val)
 
 
 #define signed_to_float_wv(itype, otype, umax)				\
-  void itype##ne_to_##otype##_array_wv(const itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void itype##ne_to_##otype##_array_wv(const itype##_t * _r in, otype * _r out, size_t len, float64 volume) { \
     size_t i; otype f; u##itype##_t val;					\
     for ( i = 0; i < len; i++ ) {					\
       val = in[i] ^ (0x80 << ((sizeof(val)-1)*8));			\
       f = val / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 
 #define unsigned_to_float_wv(itype, otype, umax)				\
-  void u##itype##ne_to_##otype##_array_wv(const u##itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void u##itype##ne_to_##otype##_array_wv(const u##itype##_t * _r in, otype * _r out, size_t len, float64 volume) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = in[i] / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 
 #define oe_unsigned_to_float_wv(itype, otype, umax, bswap)		\
-  void u##itype##oe_to_##otype##_array_wv(const u##itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void u##itype##oe_to_##otype##_array_wv(const u##itype##_t * _r in, otype * _r out, size_t len, float64 volume) { \
     size_t i; otype f;							\
     for ( i = 0; i < len; i++ ) {					\
       f = bswap(in[i]) / (umax / 2.0); out[i] = (f - 1.0) * volume; } }
 #define oe_signed_to_float_wv(itype, otype, umax, bswap)			\
-  void itype##oe_to_##otype##_array_wv(const itype##_t *in, otype *out, size_t len, float64 volume) { \
+  void itype##oe_to_##otype##_array_wv(const itype##_t * _r in, otype * _r out, size_t len, float64 volume) { \
     size_t i; otype f; u##itype##_t val;				\
     for ( i = 0; i < len; i++ ) {					\
       val = in[i] ^ (0x80 << ((sizeof(val)-1)*8));			\
@@ -166,7 +169,7 @@ static inline int32_t int24p_to_int32(const char *val)
 #define flip_sign(_val,type) ((_val) ^ (0x80U << ((sizeof(type)-1U)*8U)))
 
 #define float_to_signed(itype, otype, umax)		\
-  void itype##_to_##otype##_array(const itype *in, otype##_t *out, size_t len) { \
+  void itype##_to_##otype##_array(const itype * _r in, otype##_t * _r out, size_t len) { \
   float64 sv; size_t i;							\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i];								\
@@ -181,7 +184,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }									}
 
 #define float_to_signed_oe(itype, otype, umax, bswap)				\
-  void itype##_to_##otype##oe_array(const itype *in, otype##_t *out, size_t len) { \
+  void itype##_to_##otype##oe_array(const itype * _r in, otype##_t * _r out, size_t len) { \
   float64 sv; size_t i;							\
   otype##_t val;							\
   for ( i = 0; i < len; i++ ) {						\
@@ -201,7 +204,7 @@ static inline int32_t int24p_to_int32(const char *val)
 
 
 #define float_to_unsigned(itype, otype, umax)	\
-  void itype##_to_u##otype##_array(const itype *in, u##otype##_t *out, size_t len) { \
+  void itype##_to_u##otype##_array(const itype * _r in, u##otype##_t * _r out, size_t len) { \
   float64 sv; size_t i; otype##_t o;						\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i];								\
@@ -217,7 +220,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }}		
 
 #define float_to_signed_wv(itype, otype, umax)		\
-  void itype##_to_##otype##_array_wv(const itype *in, otype##_t *out, size_t len, float64 volume) { \
+  void itype##_to_##otype##_array_wv(const itype * _r in, otype##_t * _r out, size_t len, float64 volume) { \
   float64 sv; size_t i;							\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i] * volume;								\
@@ -232,7 +235,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }									}
 
 #define float_to_unsigned_wv(itype, otype, umax)	\
-  void itype##_to_u##otype##_array_wv(const itype *in, u##otype##_t *out, size_t len, float64 volume) { \
+  void itype##_to_u##otype##_array_wv(const itype * _r in, u##otype##_t * _r out, size_t len, float64 volume) { \
   float64 sv; size_t i; otype##_t o;						\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i] * volume;								\
@@ -248,7 +251,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }}	
 
 #define float_to_unsigned_oe_wv(itype, otype, umax, bswap)			\
-  void itype##_to_u##otype##oe_array_wv(const itype *in, u##otype##_t *out, size_t len, float64 volume) { \
+  void itype##_to_u##otype##oe_array_wv(const itype * _r in, u##otype##_t * _r out, size_t len, float64 volume) { \
     float64 sv; size_t i; u##otype##_t val; otype##_t o;		\
     for ( i = 0; i < len; i++ ) {					\
       sv = in[i] * volume;						\
@@ -265,7 +268,7 @@ static inline int32_t int24p_to_int32(const char *val)
     }									\
   }	
 #define float_to_unsigned_oe(itype, otype, umax, bswap)			\
-  void itype##_to_u##otype##oe_array(const itype *in, u##otype##_t *out, size_t len) { \
+  void itype##_to_u##otype##oe_array(const itype * _r in, u##otype##_t * _r out, size_t len) { \
     float64 sv; size_t i; u##otype##_t val; otype##_t o;		\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i];								\
@@ -283,7 +286,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }	
 
 #define float_to_signed_oe_wv(itype, otype, umax, bswap)		\
-  void itype##_to_##otype##oe_array_wv(const itype *in, otype##_t *out, size_t len, float64 volume) { \
+  void itype##_to_##otype##oe_array_wv(const itype * _r in, otype##_t * _r out, size_t len, float64 volume) { \
     float64 sv; size_t i; otype##_t val;					\
   for ( i = 0; i < len; i++ ) {						\
     sv = in[i] * volume;						\
@@ -299,7 +302,7 @@ static inline int32_t int24p_to_int32(const char *val)
   }									\
   }	
 
-static void int24ple_to_float32_array(const char *in, float *out, size_t len)
+static void int24ple_to_float32_array(const char * _r in, float * _r out, size_t len)
 {
   size_t i;
   len *= 3;
@@ -310,7 +313,7 @@ static void int24ple_to_float32_array(const char *in, float *out, size_t len)
     }
 }
 
-static void int24ple_to_float64_array(const char *in, float64 *out, size_t len)
+static void int24ple_to_float64_array(const char * _r in, float64 * _r out, size_t len)
 {
   size_t i;
   len *= 3;
@@ -321,7 +324,7 @@ static void int24ple_to_float64_array(const char *in, float64 *out, size_t len)
     }
 }
 
-static void int24ple_to_float64_array_wv(const char *in, float64 *out, size_t len, float64 volume)
+static void int24ple_to_float64_array_wv(const char * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   float64 sv;
@@ -334,7 +337,7 @@ static void int24ple_to_float64_array_wv(const char *in, float64 *out, size_t le
     }
 }
 
-static void int24ple_to_float32_array_wv(const char *in, float32 *out, size_t len, float64 volume)
+static void int24ple_to_float32_array_wv(const char * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   float64 sv;
@@ -348,7 +351,7 @@ static void int24ple_to_float32_array_wv(const char *in, float32 *out, size_t le
 }
 
 
-static void uint24ple_to_float32_array(const char *in, float32 *out, size_t len)
+static void uint24ple_to_float32_array(const char * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -360,7 +363,7 @@ static void uint24ple_to_float32_array(const char *in, float32 *out, size_t len)
     }
 }
 
-static void uint24ple_to_float64_array(const char *in, float64 *out, size_t len)
+static void uint24ple_to_float64_array(const char * _r in, float64 * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -373,7 +376,7 @@ static void uint24ple_to_float64_array(const char *in, float64 *out, size_t len)
 }
 
 
-static void uint24ple_to_float64_array_wv(const char *in, float64 *out, size_t len, float64 volume)
+static void uint24ple_to_float64_array_wv(const char * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -388,7 +391,7 @@ static void uint24ple_to_float64_array_wv(const char *in, float64 *out, size_t l
     }
 }
 
-static void uint24ple_to_float32_array_wv(const char *in, float32 *out, size_t len, float64 volume)
+static void uint24ple_to_float32_array_wv(const char * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -403,7 +406,7 @@ static void uint24ple_to_float32_array_wv(const char *in, float32 *out, size_t l
     }
 }
 
-static void int24pbe_to_float32_array(const char *in, float32 *out, size_t len)
+static void int24pbe_to_float32_array(const char * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   char c[3];
@@ -417,7 +420,7 @@ static void int24pbe_to_float32_array(const char *in, float32 *out, size_t len)
       
     }
 }
-static void int24pbe_to_float64_array(const char *in, float64 *out, size_t len)
+static void int24pbe_to_float64_array(const char * _r in, float64 * _r out, size_t len)
 {
   size_t i;
   char c[3];
@@ -431,7 +434,7 @@ static void int24pbe_to_float64_array(const char *in, float64 *out, size_t len)
     }
 }
 
-static void int24pbe_to_float64_array_wv(const char *in, float64 *out, size_t len, float64 volume)
+static void int24pbe_to_float64_array_wv(const char * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   char c[3];
@@ -447,7 +450,7 @@ static void int24pbe_to_float64_array_wv(const char *in, float64 *out, size_t le
       out[i/3] = sv;
     }
 }
-static void int24pbe_to_float32_array_wv(const char *in, float32 *out, size_t len, float64 volume)
+static void int24pbe_to_float32_array_wv(const char * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   char c[3];
@@ -465,7 +468,7 @@ static void int24pbe_to_float32_array_wv(const char *in, float32 *out, size_t le
 }
 
 
-static void uint24pbe_to_float32_array(const char *in, float32 *out, size_t len)
+static void uint24pbe_to_float32_array(const char * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -477,7 +480,7 @@ static void uint24pbe_to_float32_array(const char *in, float32 *out, size_t len)
     }
 }
 
-static void uint24pbe_to_float64_array(const char *in, float64 *out, size_t len)
+static void uint24pbe_to_float64_array(const char * _r in, float64 * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -490,7 +493,7 @@ static void uint24pbe_to_float64_array(const char *in, float64 *out, size_t len)
 }
 
 
-static void uint24pbe_to_float32_array_wv(const char *in, float32 *out, size_t len, float64 volume)
+static void uint24pbe_to_float32_array_wv(const char * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -505,7 +508,7 @@ static void uint24pbe_to_float32_array_wv(const char *in, float32 *out, size_t l
     }
 }
 
-static void uint24pbe_to_float64_array_wv(const char *in, float64 *out, size_t len, float64 volume)
+static void uint24pbe_to_float64_array_wv(const char * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -520,7 +523,7 @@ static void uint24pbe_to_float64_array_wv(const char *in, float64 *out, size_t l
     }
 }
 
-static void float32_to_int24ple_array(const float32 *in, char *out, size_t len)
+static void float32_to_int24ple_array(const float32 * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -543,7 +546,7 @@ static void float32_to_int24ple_array(const float32 *in, char *out, size_t len)
     }
 }
 
-static void float64_to_int24ple_array(const float64 *in, char *out, size_t len)
+static void float64_to_int24ple_array(const float64 * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -569,7 +572,7 @@ static void float64_to_int24ple_array(const float64 *in, char *out, size_t len)
 }
 
 
-static void float32_to_int24ple_array_wv(const float32 *in, char *out, size_t len, float64 volume)
+static void float32_to_int24ple_array_wv(const float32 * _r in, char * _r out, size_t len, float64 volume)
 {
   int32_t val;
   float64 sv;
@@ -594,7 +597,7 @@ static void float32_to_int24ple_array_wv(const float32 *in, char *out, size_t le
     }
 }
 
-static void float64_to_int24ple_array_wv(const float64 *in, char *out, size_t len, float64 volume)
+static void float64_to_int24ple_array_wv(const float64 * _r in, char * _r out, size_t len, float64 volume)
 {
   int32_t val;
   float64 sv;
@@ -619,7 +622,7 @@ static void float64_to_int24ple_array_wv(const float64 *in, char *out, size_t le
 
 
 
-static void float64_to_uint24ple_array(const float64 *in, char *out, size_t len)
+static void float64_to_uint24ple_array(const float64 * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -643,7 +646,7 @@ static void float64_to_uint24ple_array(const float64 *in, char *out, size_t len)
       int32_to_24(val, &out[i]);
     }
 }
-static void float32_to_uint24ple_array(const float32 *in, char *out, size_t len)
+static void float32_to_uint24ple_array(const float32 * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -668,7 +671,7 @@ static void float32_to_uint24ple_array(const float32 *in, char *out, size_t len)
     }
 }
 
-static void float32_to_int24pbe_array(const float *in, char *out, size_t len)
+static void float32_to_int24pbe_array(const float * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -696,7 +699,7 @@ static void float32_to_int24pbe_array(const float *in, char *out, size_t len)
     }
 }
 
-static void float64_to_int24pbe_array(const float *in, char *out, size_t len)
+static void float64_to_int24pbe_array(const float * _r in, char * _r out, size_t len)
 {
   int32_t val;
   float64 sv;
@@ -724,7 +727,7 @@ static void float64_to_int24pbe_array(const float *in, char *out, size_t len)
     }
 }
 
-static void int24ne_to_float32_array(const int32_t *in, float32 *out, size_t len)
+static void int24ne_to_float32_array(const int32_t * _r in, float32 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -735,7 +738,7 @@ static void int24ne_to_float32_array(const int32_t *in, float32 *out, size_t len
     }
 }
 
-static void int24ne_to_float64_array(const int32_t *in, float64 *out, size_t len)
+static void int24ne_to_float64_array(const int32_t * _r in, float64 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -746,7 +749,7 @@ static void int24ne_to_float64_array(const int32_t *in, float64 *out, size_t len
     }
 }
 
-static void int24ne_to_float64_array_wv(const int32_t *in, float64 *out, size_t len, float64 volume)
+static void int24ne_to_float64_array_wv(const int32_t * _r in, float64 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -761,7 +764,7 @@ static void int24ne_to_float64_array_wv(const int32_t *in, float64 *out, size_t 
 }
 
 
-static void int24ne_to_float32_array_wv(const int32_t *in, float32 *out, size_t len, float64 volume)
+static void int24ne_to_float32_array_wv(const int32_t * _r in, float32 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -776,7 +779,7 @@ static void int24ne_to_float32_array_wv(const int32_t *in, float32 *out, size_t 
 }
 
 
-static void int24oe_to_float32_array(const int32_t *in, float32 *out, size_t len)
+static void int24oe_to_float32_array(const int32_t * _r in, float32 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -786,7 +789,7 @@ static void int24oe_to_float32_array(const int32_t *in, float32 *out, size_t len
       out[i] = (float32)(sv / (8.0 * 0x10000000));
     }
 }
-static void int24oe_to_float64_array(const int32_t *in, float64 *out, int len)
+static void int24oe_to_float64_array(const int32_t * _r in, float64 * _r out, int len)
 {
   int32_t sv;
   size_t i;
@@ -797,7 +800,7 @@ static void int24oe_to_float64_array(const int32_t *in, float64 *out, int len)
     }
 }
 
-static void int24oe_to_float32_array_wv(const int32_t *in, float32 *out, size_t len, float64 volume)
+static void int24oe_to_float32_array_wv(const int32_t * _r in, float32 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -810,7 +813,7 @@ static void int24oe_to_float32_array_wv(const int32_t *in, float32 *out, size_t 
       out[i] = v;
     }
 }
-static void int24oe_to_float64_array_wv(const int32_t *in, float64 *out, int len, float64 volume)
+static void int24oe_to_float64_array_wv(const int32_t * _r in, float64 * _r out, int len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -826,7 +829,7 @@ static void int24oe_to_float64_array_wv(const int32_t *in, float64 *out, int len
 
 
 
-static void uint24ne_to_float32_array(const int32_t *in, float32 *out, size_t len)
+static void uint24ne_to_float32_array(const int32_t * _r in, float32 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -838,7 +841,7 @@ static void uint24ne_to_float32_array(const int32_t *in, float32 *out, size_t le
     }
 }
 
-static void uint24ne_to_float64_array(const int32_t *in, float64 *out, size_t len)
+static void uint24ne_to_float64_array(const int32_t * _r in, float64 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -851,7 +854,7 @@ static void uint24ne_to_float64_array(const int32_t *in, float64 *out, size_t le
 }
 
 
-static void uint24ne_to_float32_array_wv(const int32_t *in, float32 *out, size_t len, float64 volume)
+static void uint24ne_to_float32_array_wv(const int32_t * _r in, float32 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -866,7 +869,7 @@ static void uint24ne_to_float32_array_wv(const int32_t *in, float32 *out, size_t
     }
 }
 
-static void uint24ne_to_float64_array_wv(const int32_t *in, float64 *out, size_t len, float64 volume)
+static void uint24ne_to_float64_array_wv(const int32_t * _r in, float64 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -882,7 +885,7 @@ static void uint24ne_to_float64_array_wv(const int32_t *in, float64 *out, size_t
 }
 
 
-static void uint24oe_to_float64_array(const int32_t *in, float64 *out, size_t len)
+static void uint24oe_to_float64_array(const int32_t * _r in, float64 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -894,7 +897,7 @@ static void uint24oe_to_float64_array(const int32_t *in, float64 *out, size_t le
     }
 }
 
-static void uint24oe_to_float32_array(const int32_t *in, float32 *out, size_t len)
+static void uint24oe_to_float32_array(const int32_t * _r in, float32 * _r out, size_t len)
 {
   int32_t sv;
   size_t i;
@@ -906,7 +909,7 @@ static void uint24oe_to_float32_array(const int32_t *in, float32 *out, size_t le
     }
 }
 
-static void uint24oe_to_float64_array_wv(const int32_t *in, float64 *out, size_t len, float64 volume)
+static void uint24oe_to_float64_array_wv(const int32_t * _r in, float64 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -920,7 +923,7 @@ static void uint24oe_to_float64_array_wv(const int32_t *in, float64 *out, size_t
       out[i] = v;
     }
 }
-static void uint24oe_to_float32_array_wv(const int32_t *in, float32 *out, size_t len, float64 volume)
+static void uint24oe_to_float32_array_wv(const int32_t * _r in, float32 * _r out, size_t len, float64 volume)
 {
   int32_t sv;
   size_t i;
@@ -936,7 +939,7 @@ static void uint24oe_to_float32_array_wv(const int32_t *in, float32 *out, size_t
 }
 
 
-static void float32_to_int24ne_array(const float32 *in, int32_t *out, size_t len)
+static void float32_to_int24ne_array(const float32 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   size_t i;
@@ -956,7 +959,7 @@ static void float32_to_int24ne_array(const float32 *in, int32_t *out, size_t len
     }
 }
 
-static void float64_to_int24ne_array(const float64 *in, int32_t *out, size_t len)
+static void float64_to_int24ne_array(const float64 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   size_t i;
@@ -977,7 +980,7 @@ static void float64_to_int24ne_array(const float64 *in, int32_t *out, size_t len
 }
 
 
-static void float32_to_int24ne_array_wv(const float32 *in, int32_t *out, size_t len, float64 volume)
+static void float32_to_int24ne_array_wv(const float32 * _r in, int32_t * _r out, size_t len, float64 volume)
 {
   float64 sv;
   size_t i;
@@ -997,7 +1000,7 @@ static void float32_to_int24ne_array_wv(const float32 *in, int32_t *out, size_t 
     }
 }
 
-static void float64_to_int24ne_array_wv(const float64 *in, int32_t *out, size_t len, float64 volume)
+static void float64_to_int24ne_array_wv(const float64 * _r in, int32_t * _r out, size_t len, float64 volume)
 {
   float64 sv;
   size_t i;
@@ -1020,7 +1023,7 @@ static void float64_to_int24ne_array_wv(const float64 *in, int32_t *out, size_t 
 
 
 
-static void float64_to_int24oe_array(const float64 *in, int32_t *out, size_t len)
+static void float64_to_int24oe_array(const float64 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   int32_t o;
@@ -1043,7 +1046,7 @@ static void float64_to_int24oe_array(const float64 *in, int32_t *out, size_t len
 }
 
 
-static void float32_to_int24oe_array_wv(const float32 *in, int32_t *out, size_t len, float64 volume)
+static void float32_to_int24oe_array_wv(const float32 * _r in, int32_t * _r out, size_t len, float64 volume)
 {
   float64 sv;
   int32_t o;
@@ -1065,7 +1068,7 @@ static void float32_to_int24oe_array_wv(const float32 *in, int32_t *out, size_t 
     }
 }
 
-static void float64_to_int24oe_array_wv(const float64 *in, int32_t *out, size_t len, float64 volume)
+static void float64_to_int24oe_array_wv(const float64 * _r in, int32_t * _r out, size_t len, float64 volume)
 {
   float64 sv;
   int32_t o;
@@ -1087,7 +1090,7 @@ static void float64_to_int24oe_array_wv(const float64 *in, int32_t *out, size_t 
     }
 }
 
-static void float32_to_uint24ne_array(const float32 *in, int32_t *out, size_t len)
+static void float32_to_uint24ne_array(const float32 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   int32_t o;
@@ -1110,7 +1113,7 @@ static void float32_to_uint24ne_array(const float32 *in, int32_t *out, size_t le
 }
 
 
-static void float64_to_uint24ne_array(const float64 *in, int32_t *out, size_t len)
+static void float64_to_uint24ne_array(const float64 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   int32_t o;
@@ -1133,7 +1136,7 @@ static void float64_to_uint24ne_array(const float64 *in, int32_t *out, size_t le
 }
 
 
-static void float32_to_uint24oe_array(const float32 *in, int32_t *out, size_t len)
+static void float32_to_uint24oe_array(const float32 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   int32_t o;
@@ -1156,7 +1159,7 @@ static void float32_to_uint24oe_array(const float32 *in, int32_t *out, size_t le
     }
 }
 
-static void float64_to_uint24oe_array(const float64 *in, int32_t *out, size_t len)
+static void float64_to_uint24oe_array(const float64 * _r in, int32_t * _r out, size_t len)
 {
   float64 sv;
   int32_t o;
@@ -1181,8 +1184,8 @@ static void float64_to_uint24oe_array(const float64 *in, int32_t *out, size_t le
 
 
 
-static void float64_to_uint24ple_array_wv(const float64 *in, 
-					  char *out, 
+static void float64_to_uint24ple_array_wv(const float64 * _r in, 
+					  char * _r out, 
 					  int len, 
 					  float64 volume)
 {
@@ -1208,8 +1211,8 @@ static void float64_to_uint24ple_array_wv(const float64 *in,
     }
 }
 
-static void float32_to_uint24ple_array_wv(const float32 *in, 
-					  char *out, 
+static void float32_to_uint24ple_array_wv(const float32 * _r in, 
+					  char * _r out, 
 					  int len, 
 					  float64 volume)
 {
@@ -1235,8 +1238,8 @@ static void float32_to_uint24ple_array_wv(const float32 *in,
     }
 }
 
-static void float64_to_uint24pbe_array_wv(const float64 *in, 
-					  char *out, 
+static void float64_to_uint24pbe_array_wv(const float64 * _r in, 
+					  char * _r out, 
 					  int len, 
 					  float64 volume)
 {
@@ -1266,8 +1269,8 @@ static void float64_to_uint24pbe_array_wv(const float64 *in,
     }
 }
 
-static void float32_to_uint24pbe_array_wv(const float32 *in, 
-					  char *out, 
+static void float32_to_uint24pbe_array_wv(const float32 * _r in, 
+					  char * _r out, 
 					  int len, 
 					  float64 volume)
 {
@@ -1297,8 +1300,8 @@ static void float32_to_uint24pbe_array_wv(const float32 *in,
     }
 }
 
-static void float32_to_uint24pbe_array(const float32 *in, 
-				       char *out, 
+static void float32_to_uint24pbe_array(const float32 * _r in, 
+				       char * _r out, 
 				       int len) 
 {
   int32_t val;
@@ -1327,8 +1330,8 @@ static void float32_to_uint24pbe_array(const float32 *in,
     }
 }
 
-static void float64_to_uint24pbe_array(const float64 *in, 
-				       char *out, 
+static void float64_to_uint24pbe_array(const float64 * _r in, 
+				       char * _r out, 
 				       int len) 
 {
   int32_t val;
@@ -1358,8 +1361,8 @@ static void float64_to_uint24pbe_array(const float64 *in,
 }
 
 
-static void float64_to_int24pbe_array_wv(const float64 *in, 
-					 char *out, 
+static void float64_to_int24pbe_array_wv(const float64 * _r in, 
+					 char * _r out, 
 					 int len, 
 					 float64 volume)
 {
@@ -1388,8 +1391,8 @@ static void float64_to_int24pbe_array_wv(const float64 *in,
     }
 }
 
-static void float32_to_int24pbe_array_wv(const float32 *in, 
-					 char *out, 
+static void float32_to_int24pbe_array_wv(const float32 * _r in, 
+					 char * _r out, 
 					 int len, 
 					 float64 volume)
 {
@@ -1425,8 +1428,8 @@ static void float32_to_int24pbe_array_wv(const float32 *in,
 
 
 
-static void float32_to_int24oe_array(const float32 *in, 
-				     int32_t *out, 
+static void float32_to_int24oe_array(const float32 * _r in, 
+				     int32_t * _r out, 
 				     size_t len)
 {
   float64 sv;
@@ -1450,8 +1453,8 @@ static void float32_to_int24oe_array(const float32 *in,
 }
 
 
-static void float64_to_uint24ne_array_wv(const float64 *in, 
-					 int32_t *out, 
+static void float64_to_uint24ne_array_wv(const float64 * _r in, 
+					 int32_t * _r out, 
 					 size_t len,
 					 float64 volume)
 {
@@ -1475,8 +1478,8 @@ static void float64_to_uint24ne_array_wv(const float64 *in,
     }
 }
 
-static void float32_to_uint24ne_array_wv(const float32 *in, 
-					 int32_t *out, 
+static void float32_to_uint24ne_array_wv(const float32 * _r in, 
+					 int32_t * _r out, 
 					 size_t len,
 					 float64 volume)
 {
@@ -1501,8 +1504,8 @@ static void float32_to_uint24ne_array_wv(const float32 *in,
 }
 
 
-static void float64_to_uint24oe_array_wv(const float64 *in, 
-					 int32_t *out, 
+static void float64_to_uint24oe_array_wv(const float64 * _r in, 
+					 int32_t * _r out, 
 					 size_t len,
 					 float64 volume)
 {
@@ -1527,8 +1530,8 @@ static void float64_to_uint24oe_array_wv(const float64 *in,
     }
 }
 
-static void float32_to_uint24oe_array_wv(const float32 *in, 
-					 int32_t *out, 
+static void float32_to_uint24oe_array_wv(const float32 * _r in, 
+					 int32_t * _r out, 
 					 size_t len,
 					 float64 volume)
 {
@@ -1609,42 +1612,42 @@ float_to_signed_oe(float32, int32, UINT32_MAX, bswap_32);
 float_to_signed_oe_wv(float32, int32, UINT32_MAX, bswap_32);
 float_to_signed_oe_wv(float64, int32, UINT32_MAX, bswap_32);
 
-//TODO: 24 bit
 
-void float32_to_float32_array(const float32 *in, float32 *out, size_t len)
+
+void float32_to_float32_array(const float32 * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
     out[i] = in[i];
 }
-void float32_to_float32_array_wv(const float32 *in, float32 *out, size_t len, float32 volume)
+void float32_to_float32_array_wv(const float32 * _r in, float32 * _r out, size_t len, float32 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
     out[i] = in[i] * volume;
 }
 
-void float64_to_float32_array(const float64 *in, float32 *out, size_t len)
+void float64_to_float32_array(const float64 * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
     out[i] = in[i];
 }
-void float32_to_float64_array_wv(const float32 *in, float64 *out, size_t len, float64 volume)
+void float32_to_float64_array_wv(const float32 * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
     out[i] = in[i] * volume;
 }
 
-void float32_to_float64_array(const float32 *in, float64 *out, size_t len)
+void float32_to_float64_array(const float32 * _r in, float64 * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
     out[i] = in[i];
 }
 
-void float64_to_float32_array_wv(const float64 *in, float32 *out, size_t len, float32 volume)
+void float64_to_float32_array_wv(const float64 * _r in, float32 * _r out, size_t len, float32 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1711,7 +1714,7 @@ static inline unsigned char s16_to_alaw(int pcm_val)
 }
 
 
-static void alaw_to_float32_array(const void *in, float32 *out, size_t len)
+static void alaw_to_float32_array(const void * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1720,7 +1723,7 @@ static void alaw_to_float32_array(const void *in, float32 *out, size_t len)
     }
 }
 
-static void alaw_to_float64_array(const void *in, double *out, size_t len)
+static void alaw_to_float64_array(const void * _r in, double * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1729,7 +1732,7 @@ static void alaw_to_float64_array(const void *in, double *out, size_t len)
     }
 }
 
-static void alaw_to_float32_array_wv(const void *in, float32 *out, size_t len, float64 volume)
+static void alaw_to_float32_array_wv(const void * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1738,7 +1741,7 @@ static void alaw_to_float32_array_wv(const void *in, float32 *out, size_t len, f
     }
 }
 
-static void alaw_to_float64_array_wv(const void *in, float64 *out, size_t len, float64 volume)
+static void alaw_to_float64_array_wv(const void * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1748,7 +1751,7 @@ static void alaw_to_float64_array_wv(const void *in, float64 *out, size_t len, f
 }
 
 
-static void float32_to_alaw_array(const float32 *in, void *out, size_t len)
+static void float32_to_alaw_array(const float32 * _r in, void * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -1762,7 +1765,7 @@ static void float32_to_alaw_array(const float32 *in, void *out, size_t len)
       ((unsigned char*)out)[i] = s16_to_alaw(val16);
     }
 }
-static void float64_to_alaw_array(const float64 *in, void *out, size_t len)
+static void float64_to_alaw_array(const float64 * _r in, void * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -1777,7 +1780,7 @@ static void float64_to_alaw_array(const float64 *in, void *out, size_t len)
     }
 }
 
-static void float32_to_alaw_array_wv(const float32 *in, void *out, size_t len, float64 volume)
+static void float32_to_alaw_array_wv(const float32 * _r in, void * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -1791,7 +1794,7 @@ static void float32_to_alaw_array_wv(const float32 *in, void *out, size_t len, f
       ((unsigned char*)out)[i] = s16_to_alaw(val16);
     }
 }
-static void float64_to_alaw_array_wv(const float64 *in, void *out, size_t len, float64 volume)
+static void float64_to_alaw_array_wv(const float64 * _r in, void * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -1869,7 +1872,7 @@ static inline unsigned char s16_to_ulaw(int pcm_val)
 }
 
 
-static void ulaw_to_float32_array(const void *in, float32 *out, size_t len)
+static void ulaw_to_float32_array(const void * _r in, float32 * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1878,7 +1881,7 @@ static void ulaw_to_float32_array(const void *in, float32 *out, size_t len)
     }
 }
 
-static void ulaw_to_float64_array(const void *in, double *out, size_t len)
+static void ulaw_to_float64_array(const void * _r in, double * _r out, size_t len)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1887,7 +1890,7 @@ static void ulaw_to_float64_array(const void *in, double *out, size_t len)
     }
 }
 
-static void ulaw_to_float32_array_wv(const void *in, float32 *out, size_t len, float64 volume)
+static void ulaw_to_float32_array_wv(const void * _r in, float32 * _r out, size_t len, float64 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1896,7 +1899,7 @@ static void ulaw_to_float32_array_wv(const void *in, float32 *out, size_t len, f
     }
 }
 
-static void ulaw_to_float64_array_wv(const void *in, float64 *out, size_t len, float64 volume)
+static void ulaw_to_float64_array_wv(const void * _r in, float64 * _r out, size_t len, float64 volume)
 {
   size_t i;
   for ( i = 0; i < len; i++ )
@@ -1906,7 +1909,7 @@ static void ulaw_to_float64_array_wv(const void *in, float64 *out, size_t len, f
 }
 
 
-static void float32_to_ulaw_array(const float32 *in, void *out, size_t len)
+static void float32_to_ulaw_array(const float32 * _r in, void * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -1920,7 +1923,7 @@ static void float32_to_ulaw_array(const float32 *in, void *out, size_t len)
       ((unsigned char*)out)[i] = s16_to_ulaw(val16);
     }
 }
-static void float64_to_ulaw_array(const float64 *in, void *out, size_t len)
+static void float64_to_ulaw_array(const float64 * _r in, void * _r out, size_t len)
 {
   size_t i;
   int32_t val;
@@ -1935,7 +1938,7 @@ static void float64_to_ulaw_array(const float64 *in, void *out, size_t len)
     }
 }
 
-static void float32_to_ulaw_array_wv(const float32 *in, void *out, size_t len, float64 volume)
+static void float32_to_ulaw_array_wv(const float32 * _r in, void * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;
@@ -1949,7 +1952,7 @@ static void float32_to_ulaw_array_wv(const float32 *in, void *out, size_t len, f
       ((unsigned char*)out)[i] = s16_to_ulaw(val16);
     }
 }
-static void float64_to_ulaw_array_wv(const float64 *in, void *out, size_t len, float64 volume)
+static void float64_to_ulaw_array_wv(const float64 * _r in, void * _r out, size_t len, float64 volume)
 {
   size_t i;
   int32_t val;

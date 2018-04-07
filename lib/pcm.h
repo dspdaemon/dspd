@@ -218,15 +218,18 @@ typedef enum _dspd_pcm_state {
 typedef float  float32;
 typedef double float64;
 
-typedef void (*dspd_tofloat32_t)(const void *in, float32 *out, size_t len);
-typedef void (*dspd_tofloat32wv_t)(const void *in, float32 *out, size_t len, float64 volume);
-typedef void (*dspd_tofloat64_t)(const void *in, float64 *out, size_t len);
-typedef void (*dspd_tofloat64wv_t)(const void *in, float64 *out, size_t len, float64 volume);
+//The pointers are not supposed to overlap.  This could serve as a hint to static analyzers.
+#define _RESTRICT __restrict
 
-typedef void (*dspd_fromfloat32_t)(const float32 *in, void *out, size_t len);
-typedef void (*dspd_fromfloat32wv_t)(const float32 *in, void *out, size_t len, float64 volume);
-typedef void (*dspd_fromfloat64_t)(const float64 *in, void *out, size_t len);
-typedef void (*dspd_fromfloat64wv_t)(const float64 *in, void *out, size_t len, float64 volume);
+typedef void (*dspd_tofloat32_t)(const void * _RESTRICT in, float32 * _RESTRICT out, size_t len);
+typedef void (*dspd_tofloat32wv_t)(const void * _RESTRICT in, float32 * _RESTRICT out, size_t len, float64 volume);
+typedef void (*dspd_tofloat64_t)(const void * _RESTRICT in, float64 * _RESTRICT out, size_t len);
+typedef void (*dspd_tofloat64wv_t)(const void * _RESTRICT in, float64 * _RESTRICT out, size_t len, float64 volume);
+
+typedef void (*dspd_fromfloat32_t)(const float32 * _RESTRICT in, void * _RESTRICT out, size_t len);
+typedef void (*dspd_fromfloat32wv_t)(const float32 * _RESTRICT in, void * _RESTRICT out, size_t len, float64 volume);
+typedef void (*dspd_fromfloat64_t)(const float64 * _RESTRICT in, void * _RESTRICT out, size_t len);
+typedef void (*dspd_fromfloat64wv_t)(const float64 * _RESTRICT in, void * _RESTRICT out, size_t len, float64 volume);
 
 struct pcm_conv {
   dspd_tofloat32_t     tofloat32;
