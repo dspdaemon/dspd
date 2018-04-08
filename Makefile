@@ -29,11 +29,15 @@ install-lib:
 install: $(INSTALL_TARGETS)
 
 install-config:
-	mkdir /etc/dspd
-	install -m 0644 -t /etc/dspd configs/dspd/*.conf
+	mkdir -p $(DESTDIR)/etc/dspd
+	install -m 0644 -t $(DESTDIR)/etc/dspd configs/dspd/*.conf
+	mkdir -p $(DESTDIR)/var/run/dspd
+	chown "nobody:audio" $(DESTDIR)/var/run/dspd
+	chmod 0770 /var/run/dspd
 
 uninstall:
 	sh -c 'OWD="$$PWD";for f in $(SUBDIRS); do cd $$OWD/$$f && make uninstall || exit 1; done'
+	rm -R -f /etc/dspd /var/run/dspd
 
 install32:
 	sh -c 'cd m32 && make DESTDIR=$(DESTDIR) install-lib || exit 1'
