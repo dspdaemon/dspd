@@ -57,6 +57,34 @@ static int dspd_module_list_new(struct dspd_module_list **list)
   return ret;
 }
 
+static struct dspd_ll *find_highest(struct dspd_ll **list)
+{
+  struct dspd_ll *curr, *item = NULL;
+  uint32_t p = 0;
+  struct dspd_module *m;
+  for ( curr = *list; curr; curr = curr->next )
+    {
+      m = curr->pointer;
+      if ( m->callbacks->init_priority > p )
+	{
+	  item = curr;
+	  p = m->callbacks->init_priority;
+	}
+    }
+  if ( item != NULL )
+    {
+      if ( item->prev != NULL )
+	item->prev->next = item->next;
+      else
+	*list = item->next;
+      if ( item->next != NULL )
+	item->next->prev = item->prev;
+      item->next = NULL;
+      item->prev = NULL;
+    }
+  return item;
+}
+
 int dspd_load_modules(struct dspd_module_list **l,
 		      void *context,
 		      const char **files,
@@ -179,16 +207,50 @@ int dspd_load_modules(struct dspd_module_list **l,
       list->count++;
       m = NULL;
     }
+  
+  struct dspd_ll *head = NULL, *tail = NULL;
+  while ( (curr = find_highest(&list->modules)) )
+    {
+      if ( tail )
+	{
+	  tail->next = curr;
+	  curr->prev = tail;
+	  tail = curr;
+	} else
+	{
+	  head = curr;
+	  tail = curr;
+	}
+    }
+  if ( tail )
+    {
+      if ( list->modules != NULL )
+	{
+	  assert(tail->next == NULL);
+	  tail->next = list->modules;
+	  assert(list->modules->prev == NULL);
+	  list->modules->prev = tail;
+	}
+      list->modules = head;
+    } else
+    {
+      assert(list->modules == NULL);
+    }
+  
 
   for ( curr = list->modules; curr; curr = curr->next )
-    {
+    {      
       m = curr->pointer;
       if ( m->callbacks->init )
 	{
+	  dspd_log(0, "Initializing module: %s", m->callbacks->desc);
 	  ret = m->callbacks->init(list->daemon_ctx, &m->context);
 	  m = NULL;
 	  if ( ret )
-	    goto out;
+	    {
+	      dspd_log(0, "Error %d while initializing %s", ret, m->callbacks->desc);
+	      goto out;
+	    }
 	  list->lastinit = curr;
 	}
     }

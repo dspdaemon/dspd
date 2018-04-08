@@ -2025,29 +2025,6 @@ int dspd_stream_open(int32_t device)
   return 0;
 }
 
-/*int dspd_stream_ctl(int32_t stream,
-		    uint32_t req,
-		    const void   *inbuf,
-		    size_t        inbufsize,
-		    void         *outbuf,
-		    size_t        outbufsize,
-		    size_t       *bytes_returned)
-		    {*/
-  /*
-    TODO: Dispatch commands using client methods.
-    Must make sure the slot has the appropriate methods.
-    Assume that locking is already done or maybe handle it
-    on the client.
-
-    This should handle read, write, getospace, getispace, status, setparams, getparams, trigger.
-
-    
-  */
-/*
-  
-
-  return -EINVAL;
-  }*/
 
 int dspd_stream_ref(int32_t stream)
 {
@@ -2060,50 +2037,6 @@ int dspd_stream_unref(int32_t stream)
 }
 
 
-/*int dspd_daemon_ctl(const char *module,
-		    uint32_t    req,
-		    const void   *inbuf,
-		    size_t        inbufsize,
-		    void         *outbuf,
-		    size_t        outbufsize,
-		    size_t       *bytes_returned)
-{
-  int ret;
-  struct dspd_ll *curr;
-  struct dspd_module *m;
-  if ( module == NULL )
-    {
-      ret = dspd_dispatch_request(daemon_req_handlers,
-				  sizeof(daemon_req_handlers) / sizeof(daemon_req_handlers[0]),
-				  NULL,
-				  req,
-				  inbuf,
-				  inbufsize,
-				  outbuf,
-				  outbufsize,
-				  bytes_returned);
-    } else
-    {
-      ret = -ENOENT;
-      for ( curr = dspd_dctx.modules->modules; curr; curr = curr->next )
-	{
-	  m = curr->pointer;
-	  if ( strcmp(m->callbacks->desc, module) == 0 )
-	    {
-	      ret = m->callbacks->ioctl(&dspd_dctx,
-					m->context,
-					req,
-					inbuf,
-					inbufsize,
-					outbuf,
-					outbufsize,
-					bytes_returned);
-	      break;
-	    }
-	}
-    }
-  return ret;
-  }*/
 
   
 int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags)

@@ -2865,21 +2865,10 @@ static void alsahw_close(void *daemon, void **context)
   
 }
 
-static int alsahw_ioctl(void         *daemon, 
-			void         *context,
-			int32_t       req,
-			const void   *inbuf,
-			size_t        inbufsize,
-			void         *outbuf,
-			size_t        outbufsize,
-			size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_alsahw = {
+  .init_priority = DSPD_MOD_INIT_PRIO_HWDRV,
   .desc = "ALSA PCM Hardware Driver",
   .init = alsahw_init,
   .close = alsahw_close,
-  .ioctl = alsahw_ioctl,
 };

@@ -194,23 +194,12 @@ static void lsr_close(void *daemon, void **context)
   
 }
 
-static int lsr_ioctl(void         *daemon, 
-		     void         *context,
-		     int32_t       req,
-		     const void   *inbuf,
-		     size_t        inbufsize,
-		     void         *outbuf,
-		     size_t        outbufsize,
-		     size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 
 
 struct dspd_mod_cb dspd_mod_libsamplerate = {
+  .init_priority = DSPD_MOD_INIT_PRIO_SRC,
   .desc = "SRC (libsamplerate) sample rate conversion",
   .init = lsr_init,
   .close = lsr_close,
-  .ioctl = lsr_ioctl,
 };

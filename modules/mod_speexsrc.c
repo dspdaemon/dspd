@@ -180,21 +180,10 @@ static void ssrc_close(void *daemon, void **context)
   
 }
 
-static int ssrc_ioctl(void         *daemon, 
-		      void         *context,
-		      int32_t       req,
-		      const void   *inbuf,
-		      size_t        inbufsize,
-		      void         *outbuf,
-		      size_t        outbufsize,
-		      size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_speexsrc = {
+  .init_priority = DSPD_MOD_INIT_PRIO_SRC + 1U,
   .desc = "Speex samplerate conversion",
   .init = ssrc_init,
   .close = ssrc_close,
-  .ioctl = ssrc_ioctl,
 };

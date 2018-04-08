@@ -592,21 +592,10 @@ static void udev_close(void *daemon, void **context)
     }
 }
 
-static int udev_ioctl(void         *daemon, 
-			 void         *context,
-			 int32_t       req,
-			 const void   *inbuf,
-			 size_t        inbufsize,
-			 void         *outbuf,
-			 size_t        outbufsize,
-			 size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_udev = {
+  .init_priority = DSPD_MOD_INIT_PRIO_HOTPLUG + 1U,
   .desc = "ALSA PCM UDEV Hotplug",
   .init = udev_init,
   .close = udev_close,
-  .ioctl = udev_ioctl,
 };

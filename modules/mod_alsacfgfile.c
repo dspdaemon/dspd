@@ -125,21 +125,10 @@ static void cfgfile_close(void *daemon, void **context)
   
 }
 
-static int cfgfile_ioctl(void         *daemon, 
-			 void         *context,
-			 int32_t       req,
-			 const void   *inbuf,
-			 size_t        inbufsize,
-			 void         *outbuf,
-			 size_t        outbufsize,
-			 size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_alsacfgfile = {
+  .init_priority = DSPD_MOD_INIT_PRIO_HOTPLUG,
   .desc = "ALSA PCM Simple Config File",
   .init = cfgfile_init,
   .close = cfgfile_close,
-  .ioctl = cfgfile_ioctl,
 };

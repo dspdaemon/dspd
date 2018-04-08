@@ -3416,21 +3416,10 @@ static void socksrv_close(void *daemon, void **context)
   
 }
 
-static int socksrv_ioctl(void         *daemon, 
-			 void         *context,
-			 int32_t       req,
-			 const void   *inbuf,
-			 size_t        inbufsize,
-			 void         *outbuf,
-			 size_t        outbufsize,
-			 size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_socketserver = {
+  .init_priority = DSPD_MOD_INIT_PRIO_INTSVC,
   .desc = "Socket server",
   .init = socksrv_init,
   .close = socksrv_close,
-  .ioctl = socksrv_ioctl,
 };

@@ -2803,23 +2803,12 @@ static int oc_init(void *daemon, void **context)
   return ret;
 }
 
-static int oc_ioctl(void         *daemon, 
-		    void         *context,
-		    int32_t       req,
-		    const void   *inbuf,
-		    size_t        inbufsize,
-		    void         *outbuf,
-		    size_t        outbufsize,
-		    size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 struct dspd_mod_cb dspd_mod_osscuse = {
+  .init_priority = DSPD_MOD_INIT_PRIO_EXTSVC,
   .desc = "OSSv4 CUSE Server",
   .init = oc_init,
   .close = oc_close,
-  .ioctl = oc_ioctl,
 };
 
 
