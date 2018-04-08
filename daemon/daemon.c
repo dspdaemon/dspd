@@ -26,6 +26,27 @@ int main(int argc, char **argv)
   char **names, **files;
   size_t i;
   int ret = 0;
+  char *buf, *p;
+
+  //Find the absolute path so module path lookups relative to the executable location
+  //will work.
+  if ( argv[0][0] != '/' )
+    {
+      buf = calloc(1, PATH_MAX+1UL);
+      assert(buf != NULL);
+      if ( buf )
+	{
+	  if ( readlink("/proc/self/exe", buf, PATH_MAX) > 0 )
+	    {
+	      p = strdup(buf);
+	      assert(p != NULL);
+	      if ( p )
+		argv[0] = p;
+	    }
+	  free(buf);
+	}
+    }
+
   signal(SIGPIPE, SIG_IGN);
   if ( (ret = dspd_daemon_init(argc, argv)) < 0 )
     {
