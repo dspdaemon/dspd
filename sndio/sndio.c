@@ -1772,8 +1772,9 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	       params->context->ipc_mode != 0 )
 	    {
 	      chown(sockpath, params->context->uid, params->context->gid);
-	      chmod(sockpath, params->context->ipc_mode);
 	    }
+	  if ( params->context->ipc_mode != 0 )
+	    chmod(sockpath, params->context->ipc_mode);
 	} else
 	{
 	  chmod(sockpath, 0777);
