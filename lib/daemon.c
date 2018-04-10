@@ -35,6 +35,7 @@
 #endif
 #include <sys/prctl.h>
 #include <ctype.h>
+#include <dirent.h>
 #include "sslib.h"
 #include "daemon.h"
 #include "syncgroup.h"
@@ -711,6 +712,62 @@ void dspd_daemon_set_thread_schedparam(int tid, int thread_type)
   dspd_daemon_set_thread_nice(tid, thread_type);
 }
 
+static int solib_filter(const struct dirent *de)
+{
+  const char *p;
+  int ret = 0;
+  if ( strncmp(de->d_name, "mod_", 4) == 0 )
+    {
+      p = strrchr(de->d_name, '.');
+      if ( p != NULL && strcmp(p, ".so") == 0 )
+	ret = 1;
+    }
+  return ret;
+}
+
+
+//Generate the default modules list since no modules section in the config was found.
+static struct dspd_dict *generate_modules_list(void)
+{
+  int count, i;
+  struct dspd_dict *dict = dspd_dict_new("MODULES");
+  struct dirent **namelist;
+  char name[NAME_MAX];
+  int e = 0;
+  char *p;
+  if ( dict )
+    {
+      count = scandir(dspd_get_modules_dir(), &namelist, solib_filter, alphasort);
+      if ( count > 0 )
+	{
+	  for ( i = 0; i < count; i++ )
+	    {
+	      if ( dict != NULL )
+		{
+		  strlcpy(name, &namelist[i]->d_name[4U], sizeof(name));
+		  p = strrchr(name, '.');
+		  assert(p != NULL);
+		  *p = 0;
+		  if ( ! dspd_dict_set_value(dict, name, namelist[i]->d_name, true) )
+		    {
+		      dspd_dict_free(dict);
+		      dict = NULL;
+		      e = errno;
+		    }
+		}
+	      free(namelist[i]);
+	    }
+	  free(namelist);
+	  if ( dict == NULL )
+	    errno = e;
+	} else
+	{
+	  dspd_dict_free(dict);
+	  dict = NULL;
+	}
+    }
+  return dict;
+}
 
 int dspd_daemon_init(int argc, char **argv)
 {
@@ -807,8 +864,11 @@ int dspd_daemon_init(int argc, char **argv)
     }
 
   dspd_dctx.config = dspd_read_config("dspd", true);
+  if ( dspd_dctx.config == NULL && errno == ENOENT )
+    dspd_dctx.config = dspd_dict_new("dspd");
   if ( ! dspd_dctx.config )
     goto out;
+  
 
   dcfg = dspd_dict_find_section(dspd_dctx.config, "DAEMON");
   if ( ! dcfg )
@@ -995,7 +1055,14 @@ int dspd_daemon_init(int argc, char **argv)
 	goto out;
     }
 
-  if ( dspd_dict_find_value(dcfg, "modules", &value) )
+ noconfig:
+  if ( dcfg == NULL )
+    dspd_dctx.ipc_mode = 0666;
+  if ( dspd_dctx.uid == 0 )
+    dspd_log(0, "WARNING: Running as root.  This is not recommended.");
+    
+
+  if ( dcfg != NULL && dspd_dict_find_value(dcfg, "modules", &value) != 0 )
     {
       dspd_dctx.modules_dir = strdup(value);
     } else
@@ -1007,11 +1074,11 @@ int dspd_daemon_init(int argc, char **argv)
 	  if ( p != NULL && p != tmp )
 	    {
 	      *p = 0;
-	      p = strrchr(p, '/');
+	      p = strrchr(tmp, '/');
 	      if ( p != NULL )
 		{
-		  sprintf(p, "/lib"LIBSUFFIX"/dspd");
-		  dspd_dctx.modules_dir = strdup(p);
+		  strcpy(p, "/lib"LIBSUFFIX"/dspd");
+		  dspd_dctx.modules_dir = strdup(tmp);
 		  if ( ! dspd_dctx.modules_dir )
 		    {
 		      ret = -ENOMEM;
@@ -1020,19 +1087,24 @@ int dspd_daemon_init(int argc, char **argv)
 		}
 	    }
 	}
-      /*if ( dspd_dctx.modules_dir == NULL )
-	{
-	  sprintf(tmp, "/usr/lib"LIBSUFFIX"/dspd");
-	  dspd_dctx.modules_dir = strdup(tmp);
-	  }*/
     }
-  /*  if ( ! dspd_dctx.modules_dir )
+  
+  assert(dspd_dctx.modules_dir != NULL);
+  if ( ! dspd_dict_find_section(dspd_dctx.config, "MODULES") )
     {
-      ret = -ENOMEM;
-      goto out;
-      }*/
-
- noconfig:
+      struct dspd_dict *curr;
+      for ( curr = dspd_dctx.config; curr; curr = curr->next )
+	{
+	  if ( curr->next == NULL )
+	    {
+	      curr->next = generate_modules_list();
+	      if ( curr->next )
+		curr->next->prev = curr;
+	      break;
+	    }
+	}
+    }
+ 
 
   /*
     Use sane defaults if the priorities are not specified.  This means
@@ -2389,6 +2461,7 @@ struct dspd_dict *dspd_read_config(const char *module_name, bool exec_ok)
   FILE *fp;
   struct dspd_dict *ret;
   bool x_ok;
+  int e;
   sprintf(buf, "%s/%s.conf", dir, module_name);
   if ( access(buf, X_OK) == 0 )
     {
@@ -2404,10 +2477,14 @@ struct dspd_dict *dspd_read_config(const char *module_name, bool exec_ok)
   if ( fp )
     {
       ret = dspd_dict_read(fp);
+      if ( ! ret )
+	e = errno;
       if ( x_ok == true )
 	pclose(fp);
       else
 	fclose(fp);
+      if ( ! ret )
+	errno = e;
     } else
     {
       ret = NULL;

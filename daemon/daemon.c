@@ -55,11 +55,7 @@ int main(int argc, char **argv)
     }
   dspd_time_init();
 
-  //sect = dict_read(fp);
-
-  sect = dspd_dctx.config;
-
-  struct dspd_dict *modules = dspd_dict_find_section(sect, "MODULES");
+  struct dspd_dict *modules = dspd_dict_find_section(dspd_dctx.config, "MODULES");
 
   if ( modules )
     {

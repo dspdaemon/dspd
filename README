@@ -4,14 +4,16 @@ it then go ahead and use it.
 
 General Information
 ===================
-DSPD is a Linux sound daemon that emulates a sound card that supports multiple
-streams (can be opened and used by multiple applications at the same time).  Simultaneous
-use of multiple devices is supported.  It isn't really complete right now but it works well enough
-that I don't need dmix or any other software mixers.  This software is for Linux only,
-with no compromises for any other operating systems.
+DSPD is a Linux sound daemon that allows multiple applications to access a 
+device simultaneously.  Simultaneous use of multiple devices is supported.  
+This software is for Linux only, with no compromises for any other 
+operating systems.  Support for various existing APIs allows applications to 
+work unmodified.  Latencies are low enough to support games without any lag 
+and high latencies are supported for applications, such as video players, 
+that work well with large buffers.
 
-So far it supports OSSv4, ALSA, and sndio (based on version 1.0.1) for clients applications.
-ALSA is the only supported hardware interface for the server.
+So far dspd supports OSSv4, ALSA, and sndio (based on version 1.0.1) for client 
+applications.  ALSA is the only supported hardware interface for the server.
 
 So far this has been tested with ESS Allegro, HDA Intel (Nvidia, Intel, and
 AMD chipsets), Nvidia AC97, Creative Labs USB, and Griffin Firewave cards.
@@ -24,7 +26,8 @@ Features
 *Hardware device hooking so applications can open hw:0, hw:1, etc and
  dspd will route the output to the appropriate device.  Anything that
  can detect existing hardware with udev or ALSA APIs can usually open 
- the equivalent dspd device and get the correct input or output.
+ the equivalent dspd device and get the correct input or output if
+ .asoundrc or asound.conf are configured correctly.
 
 *OSSv4 and OSS/Free emulation, including /dev/mixer support
 
@@ -46,6 +49,9 @@ Features
  will generally use the system timer as an IRQ source and only
  transfer audio and timestamps with shared memory.
 
+*Easy installation and uninstallation with no extra files left behind.
+ Only .asoundrc or /etc/asound.conf need to be modified by hand.  Other
+ files can be optionally edited as needed.
 
 Dependencies
 ============
@@ -94,9 +100,11 @@ make install
 make install-config
 
 
-Configurations are located in the configs directory.  The
-contents of the configs directory can be copied to /etc
-or "make install-config" can be used to copy everything
-except for asound.conf.
+#Uninstall (remove all dspd specific items, including the configuration)
+make uninstall
+
+Configurations are located in the configs directory.  The contents of the configs 
+directory can be copied to /etc or "make install-config" can be used to copy 
+everything except for asound.conf.
 
 

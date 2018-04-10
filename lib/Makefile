@@ -53,4 +53,5 @@ install:
 	install -m555 libdspdc.so $(REAL_LIBDIR)/libdspdc.so
 
 uninstall:
-	rm -f $(REAL_LIBDIR)/libsoundserver.so
+	rm -f $(REAL_LIBDIR)/libdspds.so $(REAL_LIBDIR)/libdspdc.so
+

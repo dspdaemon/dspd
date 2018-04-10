@@ -254,6 +254,7 @@ struct dspd_dict *dspd_dict_read(FILE *fp)
   char buf[4096];
   char *ptr;
   struct dspd_dict *sect = NULL, *n, *curr, *prev = NULL;
+  int e;
   while ( fgets(buf, sizeof(buf), fp) )
     {
       if ( buf[0] == ';' || buf[0] == '#' )
@@ -283,7 +284,9 @@ struct dspd_dict *dspd_dict_read(FILE *fp)
   return prev;
 
  out:
+  e = errno;
   dspd_dict_free(sect);
+  errno = e;
   return NULL;
 }
 

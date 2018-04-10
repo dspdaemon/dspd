@@ -150,7 +150,7 @@ int dspd_load_modules(struct dspd_module_list **l,
 	    }
 	} else if ( p[0] != '/' )
 	{
-	  //Use DSPD modules path by default
+	  //Use DSPD modules path by default for a relative path other than ./mod_*.so
 	  if ( snprintf(tmp, PATH_MAX, "%s/%s", dspd_get_modules_dir(), p) >= PATH_MAX )
 	    {
 	      ret = ENAMETOOLONG;
@@ -158,11 +158,10 @@ int dspd_load_modules(struct dspd_module_list **l,
 	    }
 	} else
 	{
-	  //default is loader path
+	  //Use loader path because the location could not be parsed.
 	  strlcpy(tmp, p, PATH_MAX);
 	}
       m->dl_handle = dlopen(tmp, RTLD_NOW);
-      
       if ( ! m->dl_handle )
 	{
 	  dspd_log(0, "Error loading module '%s': %s\n",

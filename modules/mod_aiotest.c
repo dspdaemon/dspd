@@ -142,6 +142,7 @@ static int aiotest_ioctl(void         *daemon,
 
 
 struct dspd_mod_cb dspd_mod_aiotest = {
+  .load_priority = 0,
   .desc = "Async io test module",
   .init = aiotest_init,
   .close = aiotest_close,
