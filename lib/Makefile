@@ -8,7 +8,7 @@ MAKEBIN=$(CC) $(LIBS) $(CFLAGS) -L. -ldspds -ldspdc -Wl,-rpath=./
 %.bin: %.c
 	$(MAKEBIN) -o $@ $<
 
-TESTPROGS=test_chmap.bin
+TESTPROGS=test_chmap.bin test_playback.bin
 
 OBJECTS=modules.o util.o cfgread.o objlist.o mbx.o shm.o fifo.o \
 	pcm.o scheduler.o device.o client.o dspd_time.o log.o req.o \
@@ -31,7 +31,7 @@ dspds:
 	$(CC) $(LIBS) $(CFLAGS) -L. -ldspdc -shared -o libdspds.so $(DSPDS_OBJ)
 
 runtest:
-	$(foreach f, $(TESTPROGS), ./$(f) )
+	$(foreach f,$(TESTPROGS), ./$(f)${\n}; )
 
 testobj: $(TESTPROGS)
 

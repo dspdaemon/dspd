@@ -2125,11 +2125,11 @@ int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags)
 				    &data,
 				    &server_ops,
 				    &client_ops);
-      if ( dspd_slist_refcnt(dspd_dctx.objects, stream) == 0 )
+      if ( dspd_slist_refcnt(dspd_dctx.objects, stream) == 0 ||	(client_ops == NULL && server_ops == NULL) )
 	{
 	  ret = -ENOENT;
-	} else if ( ((flags & DSPD_DCTL_ENUM_TYPE_CLIENT) != 0 && client_ops == NULL) ||
-		    ((flags & DSPD_DCTL_ENUM_TYPE_SERVER) != 0 && server_ops == NULL) )
+	} else if ( flags != 0 && (((flags & DSPD_DCTL_ENUM_TYPE_CLIENT) != 0 && client_ops == NULL) ||
+				   ((flags & DSPD_DCTL_ENUM_TYPE_SERVER) != 0 && server_ops == NULL)) )
 	{
 	  ret = -EINVAL;
 	} else

@@ -877,7 +877,7 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
   
   if ( revents & POLLIN )
     ret = dspd_aio_recv(ctx);
-    
+
   if ( ret == 0 && (revents & POLLOUT) )
     ret = dspd_aio_send(ctx);
   if ( ret == -EAGAIN )

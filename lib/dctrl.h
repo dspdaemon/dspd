@@ -2,6 +2,7 @@
 #define _DSPD_DCTRL_H_
 #define DSPD_DCTL_ENUM_TYPE_SERVER 1
 #define DSPD_DCTL_ENUM_TYPE_CLIENT 2
+#define DSPD_DCTL_ENUM_TYPE_ANY 0
 
 enum dspd_client_cb_idx {
   DSPD_CLIENT_CB_ERROR,

@@ -193,6 +193,10 @@ int32_t dspd_pcmcli_set_info(struct dspd_pcmcli *client,
 
 void dspd_pcmcli_set_timer_callbacks(struct dspd_pcmcli *client, const struct dspd_pcmcli_timer_ops *ops, void *arg);
 
+struct dspd_aio_ctx *dspd_pcmcli_get_aio_ctx(struct dspd_pcmcli *client);
 
+int32_t dspd_pcmcli_get_stream_index(struct dspd_pcmcli *cli, int32_t sbit);
+
+int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli);
 
 #endif /* ifdef _DSPD_PCMCLI_H_ */

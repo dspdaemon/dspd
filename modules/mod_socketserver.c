@@ -731,9 +731,9 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		    {
 		      cli->stream = ret;
 		      cli->playback_stream = ret;
-		      dspd_slist_ref(dspd_dctx.objects, cli->playback_stream);
+		      dspd_daemon_ref(cli->playback_stream, DSPD_DCTL_ENUM_TYPE_ANY);
 		      cli->capture_stream = ret;
-		      dspd_slist_ref(dspd_dctx.objects, cli->capture_stream);
+		      dspd_daemon_ref(cli->capture_stream, DSPD_DCTL_ENUM_TYPE_ANY);
 		      ret = 0; 
 		    }
 		}
@@ -799,16 +799,16 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 	      if ( (i32 & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
 		{
 		  if ( cli->playback_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->playback_device);
+		    dspd_daemon_unref(cli->playback_device);
 		  if ( cli->capture_device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->capture_device);
+		    dspd_daemon_unref(cli->capture_device);
 		  if ( cli->device >= 0 )
-		    dspd_slist_unref(dspd_dctx.objects, cli->device);
+		    dspd_daemon_unref(cli->device);
 		  cli->device = ret;
 		  cli->playback_device = cli->device;
-		  dspd_slist_ref(dspd_dctx.objects, cli->playback_device);
+		  dspd_daemon_ref(cli->playback_device, DSPD_DCTL_ENUM_TYPE_ANY);
 		  cli->capture_device = cli->device;
-		  dspd_slist_ref(dspd_dctx.objects, cli->capture_device);
+		  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
 		} else if ( i32 & DSPD_PCM_SBIT_PLAYBACK )
 		{
 		  if ( cli->playback_device >= 0 )
@@ -909,7 +909,7 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 		  cli->playback_device = cli->device;
 		  cli->device = -1;
 		  cli->capture_device = cli->capture_device;
-		  dspd_slist_ref(dspd_dctx.objects, cli->capture_device);
+		  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
 		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
 		{
 		  if ( cli->playback_device >= 0 )

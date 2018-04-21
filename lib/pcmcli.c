@@ -154,7 +154,6 @@ static void complete_event(struct dspd_pcmcli *client, int32_t result)
   if ( complete )
     {
       client->complete = NULL;
-      client->completion_data = NULL;
       client->pending_op.error = result;
       client->pending_op.data = client->completion_data;
       //Run the callback.  Since everything is really complete, it is possible to 
@@ -183,7 +182,7 @@ static int32_t submit_io(struct dspd_pcmcli *client,
 	  inbuf = client->input;
 	}
       assert(outbuf != client->output || outbufsize <= sizeof(client->output));
-      
+      memset(&client->pending_op, 0, sizeof(client->pending_op));
       client->pending_op.stream = -1;
       client->pending_op.req = req;
       client->pending_op.inbuf = inbuf;
@@ -1267,6 +1266,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 			    &out,
 			    sizeof(out),
 			    &br);
+      
       if ( ret == 0 )
 	{
 	  if ( br != sizeof(out) )
@@ -1276,7 +1276,6 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 	}
 
     }
-
   if ( ret == 0 && (client->streams & DSPD_PCM_SBIT_PLAYBACK) && playback_shm == NULL )
     {
       s = DSPD_PCM_SBIT_PLAYBACK;
@@ -1288,6 +1287,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 			    &pshm,
 			    sizeof(pshm),
 			    &br);
+      
       if ( ret == 0 )
 	{
 	  if ( br != sizeof(pshm) )
@@ -1331,7 +1331,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 	    }
 	}
     }
-
+ 
   if ( ret == 0 )
     {
       if ( client->streams & DSPD_PCM_SBIT_PLAYBACK )
@@ -1354,7 +1354,6 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 	  ret = dspd_stream_ctl(client->conn, -1, DSPD_SCTL_CLIENT_CONNECT, &s, sizeof(s), NULL, 0, &br);
 	}
     }
-
   if ( pfd >= 0 )
     close(pfd);
   if ( cfd >= 0 )
@@ -2785,6 +2784,7 @@ static void setinfo_complete_cb(void *context, struct dspd_async_op *op)
   //Fake completion of a pcmcli event.
   cli->pending_op = *op;
   complete_event(cli, op->error);
+  
 }
 
 int32_t dspd_pcmcli_set_info(struct dspd_pcmcli *client, 
@@ -2824,7 +2824,7 @@ int32_t dspd_pcmcli_set_info(struct dspd_pcmcli *client,
       //This is different than most operations because the aio context supports synchronous
       //calls tp dspd_aio_set_info in the same way as pcmcli supports synchronous calls to
       //most asynchronous functions.
-      ret = dspd_aio_set_info(client->conn, info, complete, arg);
+      ret = dspd_aio_set_info(client->conn, info, complete, client);
       if ( ret < 0 )
 	{
 	  //The operation was not submitted.
@@ -2837,4 +2837,25 @@ int32_t dspd_pcmcli_set_info(struct dspd_pcmcli *client,
       ret = -EBUSY;
     }
   return ret;
+}
+
+struct dspd_aio_ctx *dspd_pcmcli_get_aio_ctx(struct dspd_pcmcli *client)
+{
+  return client->conn;
+}
+
+int32_t dspd_pcmcli_get_stream_index(struct dspd_pcmcli *cli, int32_t sbit)
+{
+  int32_t ret = -EINVAL;
+  sbit &= ~cli->streams;
+  if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
+    ret = cli->playback.stream_idx;
+  else if ( sbit == DSPD_PCM_SBIT_CAPTURE )
+    ret = cli->capture.stream_idx;
+  return ret;
+}
+
+int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli)
+{
+  return cli->state;
 }
