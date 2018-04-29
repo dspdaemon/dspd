@@ -209,7 +209,7 @@ static int32_t wait_for_io(struct dspd_pcmcli *client)
       if ( ret < 0 && ret != -EINPROGRESS )
 	{
 	  if ( client->pending_op.error > 0 )
-	    (void)dspd_aio_cancel(client->conn, &client->pending_op);
+	    (void)dspd_aio_cancel(client->conn, &client->pending_op, false);
 	  break;
 	}
     }
@@ -2289,7 +2289,7 @@ int32_t dspd_pcmcli_cancel_io(struct dspd_pcmcli *client)
 	complete_event(client, client->pending_op.error);
     } else if ( client->pending_op.error > 0 && client->conn != NULL )
     {
-      ret = dspd_aio_cancel(client->conn, &client->pending_op);
+      ret = dspd_aio_cancel(client->conn, &client->pending_op, true);
     }
   return ret;
 }

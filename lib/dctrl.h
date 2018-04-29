@@ -21,13 +21,6 @@ enum dspd_dctl_req {
   DSPD_DCTL_ENUMERATE_OBJECTS,
   DSPD_DCTL_GET_MODULE_COUNT,
   DSPD_DCTL_GET_MODULE_NAME,
-  /*
-    TODO: Add support for new client.  Needs to be local context
-    only.  A server, such as mod_socketserver, would use stream -1
-    to handle this in a safe way.  Maybe it could even hook
-    stream 0 and check for success or that could be done in
-    dspd_stream_ctl().
-  */
   DSPD_DCTL_NEW_CLIENT,
   DSPD_DCTL_DELETE_CLIENT,
 
@@ -83,6 +76,10 @@ enum dspd_dctl_req {
   DSPD_SCTL_SERVER_GETLATENCY,
   DSPD_SCTL_SERVER_RESERVE, //Reserve a slot
   DSPD_SCTL_SERVER_CONVERT_CHMAP, //Convert a client specification into a compatible map.
+  DSPD_SCTL_SERVER_IRQINFO,
+  DSPD_SCTL_SERVER_LOCK,
+  DSPD_DCTL_ASYNC_EVENT,
+  DSPD_SCTL_SERVER_REMOVE,
   DSPD_SCTL_SERVER_PCM_LAST = DSPD_SCTL_SERVER_MIN + 256,
 
   DSPD_SCTL_SERVER_MIXER_ELEM_COUNT,
@@ -95,11 +92,11 @@ enum dspd_dctl_req {
   DSPD_SCTL_SERVER_MIXER_SETVAL,
   DSPD_SCTL_SERVER_MIXER_GETRANGE,
   DSPD_SCTL_SERVER_MIXER_HWCMD, //Hardware specific command
-  DSPD_SCTL_SERVER_IRQINFO,
   DSPD_SCTL_SERVER_MIXER_SETCB,
-  DSPD_SCTL_SERVER_LOCK,
-  DSPD_DCTL_ASYNC_EVENT,
-  DSPD_SCTL_SERVER_REMOVE,
+  DSPD_SCTL_SERVER_MIXER_SWCMD, //Extra software commands
+  DSPD_SCTL_SERVER_MIXER_LAST = DSPD_SCTL_SERVER_MIXER_FIRST + 32,
+
+    
   DSPD_SCTL_MAX = 8191,
   DSPD_SCTL_SERVER_MAX = DSPD_SCTL_MAX,
 
@@ -150,6 +147,7 @@ struct dspd_stream_volume {
 #define DSPD_CTL_EVENT_MASK_INFO	(1<<1)
 #define DSPD_CTL_EVENT_MASK_ADD		(1<<2)
 #define DSPD_CTL_EVENT_MASK_TLV		(1<<3)
+#define DSPD_CTL_EVENT_MASK_OVERFLOW    (1<<30)
 #define DSPD_CTL_EVENT_MASK_CHANGED     (1<<31)
 typedef void (*dspd_mixer_callback)(int32_t card,
 				    int32_t elem,
@@ -208,16 +206,24 @@ struct dspd_mix_val {
   uint32_t reserved;
   uint64_t type;
   int32_t value;
+  //scale the value
 #define DSPD_MIX_CONVERT -1
   int32_t channel;
   int32_t dir;
 #define DSPD_CTRLF_TSTAMP_32BIT 1
 #define DSPD_CTRLF_SCALE_PCT 2
+#define DSPD_CTRLF_MULTI_CHANNEL 4
   int32_t flags;
   //Device specific information.
   uint64_t hwinfo;
   uint64_t tstamp;
   uint64_t update_count;
+};
+
+//get+set multiple channels
+struct dspd_mix_val_multi {
+  struct dspd_mix_val val;
+  int32_t             channels[DSPD_CHMAP_MAXCHAN];
 };
 
 struct dspd_mix_info {
@@ -231,6 +237,22 @@ struct dspd_mix_info {
   int32_t  vol_index; //Enum only
   char     name[32];
 };
+
+
+struct dspd_mixer_swcmd_eventmap_req {
+#define DSPD_MIXER_SWCMD_EVENTMAP 1
+  uint32_t cmd;
+  uint32_t element;
+  uint64_t tstamp;
+};
+struct dspd_mixer_swcmd_eventmap {
+  uint32_t cmd;
+  uint32_t event_index;
+  uint64_t hwinfo;
+};
+
+
+
 
 typedef enum _dspd_mixer_elem_channel_id {
   /** Unknown */

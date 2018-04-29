@@ -1368,6 +1368,49 @@ static void scale_from_pct(long *val, long minval, long maxval, int dir)
     }
 }
 
+/*int32_t mixer_elem_get_playback_volume(struct alsahw_handle *hdl, struct alsahw_mix_elem *elem, size_t first, size_t count, long *volume)
+{
+  snd_mixer_elem_t *e;
+  size_t i, pos;
+  int32_t ret = -EINVAL;
+  e = snd_mixer_find_selem(hdl->mixer, elem->sid);
+  if ( e )
+    {
+      for ( i = first, pos = 0; i < elem->pchan_count && pos < count; i++ )
+	{
+	  if ( elem->pchan_mask & (1U << i) )
+	    {
+	      ret = snd_mixer_selem_get_playback_volume(e, i, &volume[pos]);
+	      if ( ret < 0 )
+		break;
+	      pos++;
+	    }
+	}
+    }
+  return ret;
+}
+
+int32_t mixer_elem_get_capture_volume(struct alsahw_handle *hdl, struct alsahw_mix_elem *elem, size_t first, size_t count, long *volume)
+{
+  snd_mixer_elem_t *e;
+  size_t i, pos;
+  int32_t ret = -EINVAL;
+  e = snd_mixer_find_selem(hdl->mixer, elem->sid);
+  if ( e )
+    {
+      for ( i = first, pos = 0; i < elem->cchan_count && pos < count; i++ )
+	{
+	  if ( elem->cchan_mask & (1U << i) )
+	    {
+	      ret = snd_mixer_selem_get_capture_volume(e, i, &volume[pos]);
+	      if ( ret < 0 )
+		break;
+	      pos++;
+	    }
+	}
+    }
+  return ret;
+  }*/
 
 static int32_t alsa_mixer_elem_getval(struct dspd_rctx *rctx,
 				      uint32_t          req,
@@ -2441,8 +2484,27 @@ static uint64_t dspd_alsa_selem_getflags(snd_mixer_elem_t *elem)
 static int dspd_selem_to_mix_elem(snd_mixer_elem_t *elem, 
 				  struct alsahw_mix_elem *e)
 {
+  size_t i;
+  ssize_t pc = -1L, cc = -1L;
   e->flags = dspd_alsa_selem_getflags(elem);
   e->elem = elem;
+  e->pchan_mask = 0;
+  e->cchan_mask = 0;
+  for ( i = 0; i <= DSPD_MIXER_CHN_LAST; i++ )
+    {
+      if ( snd_mixer_selem_has_playback_channel(elem, i) )
+	{
+	  pc = i;
+	  e->pchan_mask |= (1U << i);
+	}
+      if ( snd_mixer_selem_has_capture_channel(elem, i) )
+	{
+	  cc = i;
+	  e->cchan_mask |= (1U << i);
+	}
+    }
+  e->pchan_count = pc + 1L;
+  e->cchan_count = cc + 1L;
   return 0;
 }
 

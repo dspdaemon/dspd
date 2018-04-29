@@ -43,6 +43,8 @@ struct alsahw_mix_elem {
   uint64_t              tstamp;
   uint64_t              flags;
   uint64_t              update_count;
+  uint32_t              pchan_mask, cchan_mask;
+  uint32_t              pchan_count, cchan_count;
 };
 
 struct alsahw_handle {

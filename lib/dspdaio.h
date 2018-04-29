@@ -114,7 +114,7 @@ void dspd_aio_set_ready_cb(struct dspd_aio_ctx *ctx,
 			   void (*io_ready)(struct dspd_aio_ctx *ctx, void *arg),
 			   void  *arg);
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
-int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op);
+int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, bool async);
 int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t timeout);
 int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 		      uint32_t stream,

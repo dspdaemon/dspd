@@ -77,7 +77,7 @@ int dspd_aio_sync_ctl(struct dspd_aio_ctx *ctx,
 	}
       if ( ret < 0 && ret != -EINPROGRESS )
 	{
-	  if ( dspd_aio_cancel(ctx, &op) == 0 )
+	  if ( dspd_aio_cancel(ctx, &op, true) == 0 )
 	    dspd_aio_process(ctx, 0, 0);
 	} else
 	{
@@ -183,7 +183,7 @@ int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx,
 	  ret = dspd_aio_process(ctx, 0, -1);
 	  if ( ret < 0 && ret != -EINPROGRESS )
 	    {
-	      if ( dspd_aio_cancel(ctx, op) == 0 )
+	      if ( dspd_aio_cancel(ctx, op, true) == 0 )
 		dspd_aio_process(ctx, 0, 0);
 	      break;
 	    }
@@ -268,31 +268,38 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
   return ret;
 }
 
-int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
+int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, bool async)
 {
   size_t i;
-  int32_t ret = -ENOENT;
-  for ( i = 0; i < ctx->max_ops; i++ )
+  int32_t ret = -EINVAL;
+  if ( op->error > 0 )
     {
-      if ( ctx->pending_ops[i] == op )
+      ret = -ENOENT;
+      for ( i = 0; i < ctx->max_ops; i++ )
 	{
-	  if ( op->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
+	  if ( ctx->pending_ops[i] == op )
 	    {
-	      //If this op is next in line then remove it
-	      if ( (size_t)ctx->current_op == i )
-		ctx->current_op = -1;
-	      ctx->cancel_pending = true; //Must cancel later
-	      op->error = ECANCELED; //Pending cancellation
-	      ret = 0;
-	    } else
-	    {
-	      ret = -EBUSY;
+	      if ( op->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
+		{
+		  //If this op is next in line then remove it
+		  if ( (size_t)ctx->current_op == i )
+		    ctx->current_op = -1;
+		  ctx->cancel_pending = true; //Must cancel later
+		  op->error = ECANCELED; //Pending cancellation
+		   //Finish cancellation here.
+		  if ( async == false )
+		    dspd_aio_process(ctx, 0, 0);
+		  ret = 0;
+		} else
+		{
+		  ret = -EBUSY;
+		}
+	      break;
 	    }
-	  break;
 	}
+      if ( ret == 0 && ctx->io_ready != NULL )
+	ctx->io_ready(ctx, ctx->io_ready_arg);
     }
-  if ( ret == 0 && ctx->io_ready != NULL )
-    ctx->io_ready(ctx, ctx->io_ready_arg);
   return ret;
 }
 
@@ -980,7 +987,7 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 	{
 	  op = ctx->pending_ops[i];
 	  if ( op != NULL )
-	    dspd_aio_cancel(ctx, op);
+	    dspd_aio_cancel(ctx, op, true);
 	}
       while ( ctx->pending_ops_count > 0 )
 	{

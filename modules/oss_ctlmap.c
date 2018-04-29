@@ -652,6 +652,7 @@ static int32_t ctrlm_mixer_elem_info(struct dspd_rctx *rctx,
 	  info.tstamp = ctl->info.tstamp;
 	  info.pchan_mask = ctl->info.pchan_mask;
 	  info.cchan_mask = ctl->info.cchan_mask;
+	  info.hwinfo = ctl->real_element;
 	  strlcpy(info.name, ctl->info.name, sizeof(info.name));
 	}
     }
@@ -876,6 +877,44 @@ static int32_t ctrlm_mixer_set_cb(struct dspd_rctx *rctx,
   return dspd_req_reply_err(rctx, 0, EINVAL);
 }
 
+static int32_t ctrlm_mixer_swcmd(struct dspd_rctx *rctx,
+				 uint32_t          req,
+				 const void       *inbuf,
+				 size_t            inbufsize,
+				 void             *outbuf,
+				 size_t            outbufsize)
+{
+  uint32_t cmd = *(uint32_t*)inbuf;
+  const struct dspd_mixer_swcmd_eventmap_req *r;
+  int32_t ret;
+  struct dspd_ctl_map *map = dspd_req_userdata(rctx);
+  struct dspd_ctlm *c;
+  struct dspd_mixer_swcmd_eventmap em;
+  if ( cmd == DSPD_MIXER_SWCMD_EVENTMAP && inbufsize >= sizeof(*r) && outbufsize == sizeof(em) )
+    {
+      r = inbuf;
+      if ( r->element < map->control_count )
+	{
+	  c = &map->controls[r->element];
+	  if ( c->info.tstamp == r->tstamp )
+	    {
+	      memset(&em, 0, sizeof(em));
+	      em.event_index = c->real_element;
+	      em.hwinfo = c->info.hwinfo;
+	      em.cmd = cmd;
+	      ret = dspd_req_reply_buf(rctx, 0, &em, sizeof(em));
+	    } else
+	    {
+	      ret = dspd_req_reply_err(rctx, 0, EIDRM);
+	    }
+	}
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+    }
+  return ret;
+}
+
 #define OSS_MIXER_CMDN(cmd) (DSPD_MIXER_CMDN(cmd)+1UL)
 
 static struct dspd_req_handler mixer_handlers[] = {
@@ -926,6 +965,13 @@ static struct dspd_req_handler mixer_handlers[] = {
     .xflags = DSPD_REQ_FLAG_CMSG_FD | DSPD_REQ_FLAG_REMOTE,
     .rflags = 0,
     .inbufsize = sizeof(struct dspd_mixer_cbinfo),
+    .outbufsize = 0,
+  },
+  [OSS_MIXER_CMDN(DSPD_SCTL_SERVER_MIXER_SWCMD)] = { 
+    .handler = ctrlm_mixer_swcmd,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(uint32_t),
     .outbufsize = 0,
   },
 };

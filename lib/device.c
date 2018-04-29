@@ -3230,9 +3230,15 @@ static int32_t server_setvolume(struct dspd_rctx *context,
     } else
     {
       if ( sv->stream & DSPD_PCM_SBIT_PLAYBACK )
-	dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK, sv->volume);
+	{
+	  dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_PLAYBACK, sv->volume);
+	  dspd_daemon_vctrl_set_value(dev->key, DSPD_PCM_SBIT_PLAYBACK, sv->volume, NULL);
+	}
       if ( sv->stream & DSPD_PCM_SBIT_CAPTURE )
-	dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE, sv->volume);
+	{
+	  dspd_dev_set_stream_volume(dev, DSPD_PCM_STREAM_CAPTURE, sv->volume);
+	  dspd_daemon_vctrl_set_value(dev->key, DSPD_PCM_SBIT_CAPTURE, sv->volume, NULL);
+	}
       err = 0;
     }
   return dspd_req_reply_err(context, 0, err);

@@ -386,15 +386,19 @@ static int32_t vctrl_register(struct dspd_vctrl_list *list,
   ctrl->capture = capture;
   ctrl->flags = type;
   ctrl->flags |= DSPD_VCTRL_ADD;
+  if ( value < 0.0 )
+    value = 0.0;
+  else if ( value > 1.0 )
+    value = 1.0;
   if ( playback >= 0 )
     {
-      ctrl->values[DSPD_PCM_STREAM_PLAYBACK] = value;
+      ctrl->values[DSPD_PCM_STREAM_PLAYBACK] = (VCTRL_RANGE_MAX * value);
       ctrl->flags |= DSPD_PCM_SBIT_PLAYBACK;
       list->ctrl_pointers[playback] = ctrl;
     }
   if ( capture >= 0 )
     {
-      ctrl->values[DSPD_PCM_STREAM_CAPTURE] = value;
+      ctrl->values[DSPD_PCM_STREAM_CAPTURE] = (VCTRL_RANGE_MAX * value);
       ctrl->flags |= DSPD_PCM_SBIT_CAPTURE;
       list->ctrl_pointers[capture] = ctrl;
     }
@@ -609,7 +613,7 @@ static int32_t vctrl_mixer_elem_getval(struct dspd_rctx *rctx,
       val->update_count = list->update_count;
       val->tstamp = list->mixer_tstamp;
       ret = 0;
-    } else if ( cmd->index < list->ctrl_count && cmd->channel == DSPD_MIXER_CHN_MONO )
+    } else if ( cmd->index < list->ctrl_count && (cmd->channel == DSPD_MIXER_CHN_MONO || cmd->channel == -1) )
     {
       memset(val, 0, sizeof(*val));
       ctrl = list->ctrl_list[cmd->index];
