@@ -432,7 +432,7 @@ int32_t dspd_pcmcli_get_pollfd(struct dspd_pcmcli *client, struct pollfd *pfds, 
     streams |= DSPD_PCM_SBIT_CAPTURE;
   if ( (events & POLLOUT) && (client->streams & DSPD_PCM_SBIT_PLAYBACK) )
     streams |= DSPD_PCM_SBIT_PLAYBACK;
-  if ( client->state == PCMCLI_STATE_PREPARED || client->state == PCMCLI_STATE_RUNNING )
+  if ( client->state >= PCMCLI_STATE_PREPARED )
     ret = dspd_pcmcli_wait(client, streams, 0, true);
   if ( ret == 0 )
     {
