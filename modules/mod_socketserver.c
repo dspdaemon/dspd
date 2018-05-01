@@ -2263,6 +2263,8 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   const void *iptr;
   void *optr;
   struct dspd_req_pointers *ptrs;
+
+
   cli->rctx.user_data = NULL;
   cli->rctx.bytes_returned = 0;
   if ( cli->rctx.flags & DSPD_REQ_FLAG_ERROR )
@@ -2335,6 +2337,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
     {
       //All requests to object 0 are ok because this is the special
       //daemon context.
+      
       ret = dspd_slist_ctl(dspd_dctx.objects,
 			   &cli->rctx,
 			   cli->pkt_cmd,

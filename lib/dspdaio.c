@@ -288,7 +288,10 @@ int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, bool
 		  op->error = ECANCELED; //Pending cancellation
 		   //Finish cancellation here.
 		  if ( async == false )
-		    dspd_aio_process(ctx, 0, 0);
+		    {
+		      while ( op->error > 0 )
+			dspd_aio_process(ctx, 0, -1);
+		    }
 		  ret = 0;
 		} else
 		{

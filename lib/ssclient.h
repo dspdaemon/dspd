@@ -29,6 +29,7 @@ struct dspd_conn {
 
 };
 
+#define DSPD_STREAM_SOCKSRV -1
 
 enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_QUIT = 1,

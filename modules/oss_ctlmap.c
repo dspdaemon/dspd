@@ -907,6 +907,9 @@ static int32_t ctrlm_mixer_swcmd(struct dspd_rctx *rctx,
 	    {
 	      ret = dspd_req_reply_err(rctx, 0, EIDRM);
 	    }
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EIDRM);
 	}
     } else
     {

@@ -772,6 +772,7 @@ static int32_t vctrl_mixer_elem_getrange(struct dspd_rctx *rctx,
 	    {
 	      range->min = 0;
 	      range->max = VCTRL_RANGE_MAX;
+	      ret = 0;
 	    }
 	  break;
 	case DSPD_MIXF_CVOL:
@@ -779,6 +780,7 @@ static int32_t vctrl_mixer_elem_getrange(struct dspd_rctx *rctx,
 	    {
 	      range->min = 0;
 	      range->max = VCTRL_RANGE_MAX;
+	      ret = 0;
 	    }
 	  break;
 	}
@@ -902,14 +904,18 @@ int32_t dspd_vctrl_stream_ctl(struct dspd_rctx *rctx,
 			      size_t            outbufsize)
 {
   struct dspd_dispatch_ctl2_info info;
+  int32_t ret;
   info.min_req = DSPD_SCTL_SERVER_MIXER_FIRST;
   info.handlers_count = ARRAY_SIZE(mixer_handlers);
   info.req = req;
   info.handlers = mixer_handlers;
-  return dspd_daemon_dispatch_ctl2(rctx,
-				   &info,
-				   inbuf,
-				   inbufsize,
-				   outbuf,
-				   outbufsize);
+  ret = dspd_daemon_dispatch_ctl2(rctx,
+				  &info,
+				  inbuf,
+				  inbufsize,
+				  outbuf,
+				  outbufsize);
+  if ( ret == -ENOSYS )
+    ret = dspd_req_reply_err(rctx, 0, EINVAL);
+  return ret;
 }

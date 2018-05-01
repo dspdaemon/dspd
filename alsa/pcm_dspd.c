@@ -88,6 +88,8 @@ typedef struct _snd_pcm_dspd {
   uint32_t            alsa_min_ptime;
 
   int32_t             current_channels;
+
+  int32_t             epollfd;
 } snd_pcm_dspd_t;
 static const char *default_plugin_name = "ALSA <-> DSPD PCM I/O Plugin";
 static int check_stream(snd_pcm_dspd_t *dspd)
@@ -250,6 +252,11 @@ static int dspd_alsa_close(snd_pcm_ioplug_t *io)
   snd_pcm_dspd_t *dspd = io->private_data;
   if ( dspd )
     {
+      if ( dspd->epollfd >= 0 )
+	{
+	  close(dspd->epollfd);
+	  dspd->epollfd = -1;
+	}
       if ( dspd->client )
 	{
 	  dspd_pcmcli_delete(dspd->client);
@@ -494,9 +501,57 @@ static int dspd_alsa_poll_revents(snd_pcm_ioplug_t *io,
 {
   snd_pcm_dspd_t *dspd = io->private_data;
   int32_t ret, re = 0;
+  struct pollfd *p;
+  int32_t e, nf;
+  int i, j;
+  struct epoll_event *ep;
   ret = check_stream(dspd);
   if ( ret == 0 )
     {
+      if ( dspd->epollfd >= 0 )
+	{
+	  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+	    e = POLLOUT;
+	  else
+	    e = POLLIN;
+	  ret = dspd_pcmcli_pollfd_count(dspd->client);
+	  if ( ret < 0 )
+	    {
+	      re = POLLERR;
+	      goto out;
+	    }
+	  nf = ret;
+	  p = alloca(sizeof(*p) * nf);
+	  ep = alloca(sizeof(*ep) * nf);
+	  ret = dspd_pcmcli_get_pollfd(dspd->client, p, nf, e);
+	  if ( ret < 0 )
+	    {
+	      re = POLLERR;
+	      goto out;
+	    }
+	  while ( (ret = epoll_wait(dspd->epollfd, ep, nf, 0)) < 0 )
+	    {
+	      if ( errno != EINTR )
+		{
+		  re = POLLERR;
+		  goto out;
+		}
+	    }
+	  for ( i = 0; i < ret; i++ )
+	    {
+	      for ( j = 0; j < nf; j++ )
+		{
+		  if ( ep[i].data.fd == p[i].fd )
+		    {
+		      p[i].revents = ep[i].events;
+		      break;
+		    }
+		}
+	    }
+	  nfds = ret;
+	  pfd = p;
+	}
+
       ret = dspd_pcmcli_pollfd_revents(dspd->client, pfd, nfds, &re);
       if ( re & POLLHUP )
 	re |= POLLERR;
@@ -504,6 +559,8 @@ static int dspd_alsa_poll_revents(snd_pcm_ioplug_t *io,
     {
       re |= POLLERR;
     }
+
+ out:
   *revents = re;
   return ret;
 }
@@ -513,21 +570,35 @@ static int dspd_alsa_poll_descriptors(snd_pcm_ioplug_t *io,
 				      unsigned int space)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
-  int32_t ret;
+  int32_t ret = -EINVAL;
   int32_t events;
-  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
-    events = POLLOUT;
-  else
-    events = POLLIN;
-  ret = dspd_pcmcli_get_pollfd(dspd->client, pfd, space, events);
- 
+  if ( space > 0 )
+    {
+      if ( dspd->epollfd >= 0 )
+	{
+	  pfd->fd = dspd->epollfd;
+	  pfd->events = POLLIN;
+	  pfd->revents = 0;
+	  ret = 1;
+	} else
+	{
+	  if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+	    events = POLLOUT;
+	  else
+	    events = POLLIN;
+	  ret = dspd_pcmcli_get_pollfd(dspd->client, pfd, space, events);
+	}
+    }
   return ret;
 }
 
 static int dspd_alsa_poll_descriptors_count(snd_pcm_ioplug_t *io)
 {
   snd_pcm_dspd_t *dspd = io->private_data;
-  return dspd_pcmcli_pollfd_count(dspd->client);
+  int ret = 1;
+  if ( dspd->epollfd < 0 )
+    ret = dspd_pcmcli_pollfd_count(dspd->client);
+  return ret;
 }
 
 struct dspd_alsa_chmap {
@@ -1034,7 +1105,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   dspd->alsa_dev = -1;
   dspd->alsa_subdev = -1;
   dspd->dspd_index = -1;
-
+  dspd->epollfd = -1;
   dspd->io.nonblock = !!(mode & SND_PCM_NONBLOCK);
   dspd->nonblock = dspd->io.nonblock;
   dspd->io.flags = SND_PCM_IOPLUG_FLAG_LISTED;
@@ -1222,9 +1293,30 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 		  goto out;
 		}
 	    }
+	} else if ( strcmp(key, "singlefd") == 0 )
+	{
+	  //Support applications that don't like multiple pollfds.  Any app that needs
+	  //this has a bug.
+	  ret = snd_config_get_bool(n);
+	  if ( ret < 0 )
+	    {
+	      cfg_error(ret, key);
+	    } else if ( ret == 1 )
+	    {
+#ifdef EPOLL_CLOEXEC
+	      dspd->epollfd = epoll_create1(EPOLL_CLOEXEC);
+#else
+	      dspd->epollfd = epoll_create(2);
+#endif
+	      if ( dspd->epollfd < 0 )
+		{
+		  ret = -errno;
+		  goto out;
+		}
+	    }
+
 	}
     }
-  
 
 
   ret = dspd_pcmcli_new(&dspd->client, dspd->stream, 0);
@@ -1255,6 +1347,38 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
     {
       strlcpy(dspd->dspd_desc, info->desc, sizeof(dspd->dspd_desc));
       dspd->io.name = dspd->dspd_desc;
+    }
+
+  if ( dspd->epollfd >= 0 )
+    {
+      struct epoll_event evt;
+      struct pollfd *pfd;
+      int i, nfd, e;
+      ret = dspd_pcmcli_pollfd_count(dspd->client);
+      if ( ret < 0 )
+	goto out;
+      pfd = alloca(sizeof(*pfd) * ret);
+      memset(pfd, 0, sizeof(*pfd) * ret);
+      memset(&evt, 0, sizeof(evt));
+      if ( dspd->stream == DSPD_PCM_SBIT_PLAYBACK )
+	e = POLLOUT;
+      else
+	e = POLLIN;
+      ret = dspd_pcmcli_get_pollfd(dspd->client, pfd, ret, e);
+      if ( ret < 0 )
+	goto out;
+      nfd = ret;
+      for ( i = 0; i < nfd; i++ )
+	{
+	  evt.data.fd = pfd[i].fd;
+	  evt.events = pfd[i].events;
+	  ret = epoll_ctl(dspd->epollfd, EPOLL_CTL_ADD, pfd[i].fd, &evt);
+	  if ( ret < 0 )
+	    {
+	      ret = -errno;
+	      goto out;
+	    }
+	}
     }
 
   ret = snd_pcm_ioplug_create(&dspd->io, default_plugin_name, stream, mode);
@@ -1295,6 +1419,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 	    }
 	  if ( dspd->client )
 	    dspd_pcmcli_delete(dspd->client);
+	  if ( dspd->epollfd >= 0 )
+	    close(dspd->epollfd);
 	  free(dspd);
 	  if ( fallback[0] )
 	    ret = snd_pcm_open_fallback(pcmp, root, fallback, name, stream, mode);
