@@ -186,6 +186,7 @@ struct dspd_mixer_cbinfo {
 
 #define DSPD_MIXF_PLAYBACK (DSPD_MIXF_PVOL|DSPD_MIXF_PDB|DSPD_MIXF_ENUMP|DSPD_MIXF_PSWITCH)
 #define DSPD_MIXF_CAPTURE (DSPD_MIXF_CVOL|DSPD_MIXF_CDB|DSPD_MIXF_ENUMC|DSPD_MIXF_CSWITCH)
+#define DSPD_MIXF_SWITCH (DSPD_MIXF_PSWITCH|DSPD_MIXF_CSWITCH|DSPD_MIXF_COMMSWITCH|DSPD_MIXF_PSWJOINED|DSPD_MIXF_CSWJOINED|DSPD_MIXF_CSWEXCL)
 
 #define DSPD_MIXF_VOL (DSPD_MIXF_PVOL|DSPD_MIXF_CVOL|DSPD_MIXF_PDB|DSPD_MIXF_CDB)
 
@@ -226,6 +227,8 @@ struct dspd_mix_val_multi {
   int32_t             channels[DSPD_CHMAP_MAXCHAN];
 };
 
+#define DSPD_MIX_NAME_MAX 44
+
 struct dspd_mix_info {
   uint64_t flags;
   uint64_t hwinfo;
@@ -235,7 +238,8 @@ struct dspd_mix_info {
   uint32_t cchan_mask;
   uint32_t ctl_index;
   int32_t  vol_index; //Enum only
-  char     name[32];
+  char     name[DSPD_MIX_NAME_MAX];
+  int32_t  reserved;
 };
 
 
@@ -333,6 +337,7 @@ struct dspd_async_event {
   uint32_t arg2;
 };
 
+#define DSPD_CLI_NAME_MAX 32
 
 #ifdef _DSPD_HAVE_UCRED
 struct dspd_cli_info_pkt {
@@ -340,7 +345,7 @@ struct dspd_cli_info_pkt {
     struct ucred cred;
     int32_t      pad[4];
   } cred;
-  char    name[32];
+  char    name[DSPD_CLI_NAME_MAX];
 };
 #endif
 
@@ -354,7 +359,7 @@ struct dspd_cli_info {
   int32_t pid;
   int32_t uid;
   int32_t gid;
-  char    name[32];
+  char    name[DSPD_CLI_NAME_MAX];
 };
 
 #endif

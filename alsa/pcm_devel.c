@@ -91,6 +91,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 
   if ( ! handle )
     {
+#if SND_LIB_MINOR == 0 
       handle = snd_dlopen(solib, RTLD_NOW);
       if ( ! handle )
 	{
@@ -98,6 +99,19 @@ SND_PCM_PLUGIN_DEFINE_FUNC(devel)
 	    fprintf(stderr, "pcm_devel: dlopen: %s\n", dlerror());
 	  return -ELIBACC;
 	}
+#else 
+      /*
+	This is possibly incorrect for some 1.1.x versions.
+      */
+      char ebuf[256] = { 0 };
+      handle = snd_dlopen(solib, RTLD_NOW, ebuf, sizeof(ebuf));
+      if ( ! handle )
+	{
+	  if ( debug )
+	    fprintf(stderr, "pcm_devel: dlopen: %s\n", ebuf);
+	  return -ELIBACC;
+	}
+#endif
     }
 
   const char soname[] = "libasound_module_pcm_";

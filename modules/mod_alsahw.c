@@ -31,6 +31,13 @@ struct alsahw_mcfg {
   uint32_t  fragsize;
   uint32_t  bufsize;
 };
+static int alsahw_open(const struct dspd_drv_params *params,
+		       const struct dspd_pcmdrv_ops **ops,
+		       void **handle,
+		       uint64_t eid);
+static bool alsahw_mixer_list_test(const char *name, uint64_t eid);
+static void alsahw_mixer_list_add(const char *name, uint64_t eid);
+static void alsahw_mixer_list_remove(const char *name, uint64_t eid);
 
 static int alsahw_set_format(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, int format);
 static int alsahw_set_channels(snd_pcm_t *pcm, snd_pcm_hw_params_t *hwp, unsigned int channels);
@@ -1131,6 +1138,7 @@ static void destroy_ctl(struct alsahw_handle *hdl)
 static void alsahw_destructor(void *handle)
 {
   struct alsahw_handle *hdl = handle;
+  alsahw_mixer_list_remove(hdl->params.name, hdl->hotplug_event_id);
   destroy_ctl(hdl);
   if ( hdl->handle )
     snd_pcm_close(hdl->handle);
@@ -2082,9 +2090,10 @@ static uint32_t get_min_frags(time_t sample_time, unsigned int min_dma)
 
 #define CHECKPTR(_ptr) if(!_ptr){ret=errno;goto out;}
 
-int alsahw_open(const struct dspd_drv_params *params,
-		 const struct dspd_pcmdrv_ops **ops,
-		 void **handle)
+static int alsahw_open(const struct dspd_drv_params *params,
+		       const struct dspd_pcmdrv_ops **ops,
+		       void **handle,
+		       uint64_t eid)
 {
   int ret, i;
   unsigned int val, sample_time;
@@ -2108,6 +2117,7 @@ int alsahw_open(const struct dspd_drv_params *params,
       ret = -errno;
       goto out;
     }
+  hbuf->hotplug_event_id = eid;
   ret = snd_pcm_status_malloc(&hbuf->alsa_status);
   if ( ret )
     goto out;
@@ -2743,13 +2753,23 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
   int ret, err;
   const struct dspd_pcmdrv_ops *ops = NULL, *playback_ops = NULL, *capture_ops = NULL;
   void *handle = NULL;
-  char *desc = NULL, *name = NULL, *kdrv = NULL, *stream = NULL;
+  char *desc = NULL, *name = NULL, *kdrv = NULL, *stream = NULL, *eidstr = NULL;
   void *hlist[2] = { NULL, NULL };
   int flags = 0;
+  char str[DSPD_MIX_NAME_MAX];
+  char nstr[20UL];
+  size_t len, i;
+  uint64_t eid = 0;
+  bool register_eid = false;
+  assert(sizeof(nstr) < sizeof(str));
   dspd_dict_find_value(device, DSPD_HOTPLUG_DESC, &desc);
   dspd_dict_find_value(device, DSPD_HOTPLUG_DEVNAME, &name);
   dspd_dict_find_value(device, DSPD_HOTPLUG_KDRIVER, &kdrv);
   dspd_dict_find_value(device, DSPD_HOTPLUG_STREAM, &stream);
+  dspd_dict_find_value(device, DSPD_HOTPLUG_EVENT_ID, &eidstr);
+  if ( eidstr )
+    dspd_strtou64(eidstr, &eid, 0);
+  
   dspd_log(0, "alsahw: Got device: desc='%s' name='%s' driver='%s' stream='%s'", 
 	   desc, name, kdrv, stream);
 
@@ -2762,35 +2782,56 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
     {
       ret = alsahw_open(&params,
 			&ops,
-			&handle);
+			&handle,
+			eid);
       if ( ret )
 	goto out;
 
       //flags = params.stream;
-      ret = init_ctl(handle, flags);
-      if ( ret == 0 )
-	flags |= DSPD_PCM_SBIT_CTL;
-      else if ( ret != -ENOENT )
-	goto out;
+      if ( alsahw_mixer_list_test(name, eid) == false )
+	{
+	  ret = init_ctl(handle, flags);
+	  if ( ret == 0 )
+	    flags |= DSPD_PCM_SBIT_CTL;
+	  else if ( ret != -ENOENT )
+	    goto out;
+	  register_eid = true;
+	}
 
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
 	ret = dspd_daemon_add_device(&handle, 
 				     flags | DSPD_PCM_SBIT_PLAYBACK,
+				     eid,
 				     ops,
 				     NULL);
       else
 	ret = dspd_daemon_add_device(&handle, 
 				     flags | DSPD_PCM_SBIT_CAPTURE,
+				     eid,
 				     NULL,
 				     ops);
       
       
       if ( ret < 0 )
 	goto out;
+
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
-	err = dspd_daemon_vctrl_register(ret, -1, DSPD_VCTRL_DEVICE, 1.0, desc);
+	len = snprintf(nstr, sizeof(nstr), " Playback (%d)", ret);
       else
-	err = dspd_daemon_vctrl_register(-1, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
+	len = snprintf(nstr, sizeof(nstr), " Capture (%d)", ret);
+
+      strlcpy(str, desc, sizeof(str));
+      for ( i = 0; i < (sizeof(str) - len); i++ )
+	{
+	  if ( str[i] == 0 )
+	    break;
+	}
+      str[i] = 0;
+      strcat(str, nstr);
+      if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
+	err = dspd_daemon_vctrl_register(ret, -1, DSPD_VCTRL_DEVICE, 1.0, str);
+      else
+	err = dspd_daemon_vctrl_register(-1, ret, DSPD_VCTRL_DEVICE, 1.0, str);
       if ( err < 0 )
 	{
 	  dspd_log(0, "Could not register virtual control: error %d", err);
@@ -2799,26 +2840,39 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	}
     } else
     {
+
+
       params.stream = DSPD_PCM_STREAM_PLAYBACK;
       ret = alsahw_open(&params,
-			 &playback_ops,
-			 &hlist[DSPD_PCM_STREAM_PLAYBACK]);
+			&playback_ops,
+			&hlist[DSPD_PCM_STREAM_PLAYBACK],
+			eid);
       if ( ret )
 	goto out;
       params.stream = DSPD_PCM_STREAM_CAPTURE;
       ret = alsahw_open(&params,
-			 &capture_ops,
-			 &hlist[DSPD_PCM_STREAM_CAPTURE]);
+			&capture_ops,
+			&hlist[DSPD_PCM_STREAM_CAPTURE],
+			eid);
       if ( ret )
 	goto out;
       flags = DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE;
-      ret = init_ctl(hlist[DSPD_PCM_STREAM_PLAYBACK], flags);
-      if ( ret == 0 )
-	flags |= DSPD_PCM_SBIT_CTL;
-      else if ( ret != -ENOENT )
-	goto out;
+
+      
+
+      if ( alsahw_mixer_list_test(name, eid) == false )
+	{
+	  ret = init_ctl(hlist[DSPD_PCM_STREAM_PLAYBACK], flags);
+	  if ( ret == 0 )
+	    flags |= DSPD_PCM_SBIT_CTL;
+	  else if ( ret != -ENOENT )
+	    goto out;
+	  register_eid = true;
+	}
+      
       ret = dspd_daemon_add_device(hlist, 
 				   flags | DSPD_PCM_SBIT_PLAYBACK | DSPD_PCM_SBIT_CAPTURE,
+				   eid,
 				   playback_ops,
 				   capture_ops);
       if ( ret < 0 )
@@ -2831,7 +2885,14 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	    err = 0;
 	}
     }
-
+  if ( ret > 0 && register_eid == true )
+    {
+      dspd_log(0, "Registering mixer for ALSA device: name=%s, event_id=%llu", name, (long long)eid);
+      alsahw_mixer_list_add(name, eid);
+    } else
+    {
+      dspd_log(0, "Not registering mixer for ALSA device: name=%s, event_id=%llu (already registered)", name, (long long)eid);
+    }
 
   return ret;
   
@@ -2847,6 +2908,79 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
   free(params.bus);
   return ret;
 }
+
+struct alsahw_mixer_card_id {
+  char     name[32];
+  uint64_t eid;
+};
+struct alsahw_mixer_devlist {
+  size_t                        ncards;
+  struct alsahw_mixer_card_id **cards;
+  pthread_mutex_t               lock;
+};
+struct alsahw_mixer_devlist devlist = { 0, NULL, PTHREAD_MUTEX_INITIALIZER };
+static bool alsahw_mixer_list_test(const char *name, uint64_t eid)
+{
+  size_t i;
+  bool ret = false;
+  struct alsahw_mixer_card_id *ci;
+  pthread_mutex_lock(&devlist.lock);
+  for ( i = 0; i < devlist.ncards; i++ )
+    {
+      ci = devlist.cards[i];
+      if ( ci->eid == eid && strcmp(name, ci->name) == 0 )
+	{
+	  ret = true;
+	  break;
+	}
+    }
+  pthread_mutex_unlock(&devlist.lock);
+  return ret;
+}
+static void alsahw_mixer_list_add(const char *name, uint64_t eid)
+{
+  size_t count;
+  void *p;
+  struct alsahw_mixer_card_id *ci;
+  pthread_mutex_lock(&devlist.lock);
+  count = devlist.ncards + 1UL;
+  p = realloc(devlist.cards, sizeof(devlist.cards[0]) * count);
+  if ( p )
+    {
+      devlist.cards = p;
+      ci = calloc(1, sizeof(*ci));
+      if ( ci )
+	{
+	  strlcpy(ci->name, name, sizeof(ci->name));
+	  ci->eid = eid;
+	  devlist.cards[devlist.ncards] = ci;
+	  devlist.ncards = count;
+	}
+    }
+  pthread_mutex_unlock(&devlist.lock);
+}
+static void alsahw_mixer_list_remove(const char *name, uint64_t eid)
+{
+  size_t i, o = 0;
+  struct alsahw_mixer_card_id *ci;
+  pthread_mutex_lock(&devlist.lock);
+  for ( i = 0; i < devlist.ncards; i++ )
+    {
+      ci = devlist.cards[i];
+      if ( ci->eid == eid && strcmp(name, ci->name) == 0 )
+	{
+	  free(ci);
+	  devlist.cards[i] = NULL;
+	} else
+	{
+	  devlist.cards[o] = ci;
+	  o++;
+	}
+    }
+  devlist.ncards = o;
+  pthread_mutex_unlock(&devlist.lock);
+}
+
 
 static int alsahw_remove(void *arg, const struct dspd_dict *device)
 {
@@ -2895,6 +3029,9 @@ static int alsahw_remove(void *arg, const struct dspd_dict *device)
     }
   return 0;
 }
+
+
+
 
 
 static struct dspd_hotplug_cb alsahw_hotplug = {

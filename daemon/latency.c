@@ -112,13 +112,14 @@ int main(int argc, char **argv)
 		    us2 = 0;
 		  us1 /= 1000;
 		  us2 /= 1000;
-		  fprintf(stderr, "DEVICE[%d]: NAME=%s STREAMS=0x%x PLAYBACK=%uus CAPTURE=%uus REFCOUNT=%u\n",
+		  fprintf(stderr, "DEVICE[%d]: NAME=%s STREAMS=0x%x PLAYBACK=%uus CAPTURE=%uus REFCOUNT=%u EID=%llu\n",
 			  dev, 
 			  devinfo.name,
 			  devinfo.streams,
 			  us1,
 			  us2,
-			  devinfo.refcount);
+			  devinfo.refcount,
+			  (long long)devinfo.hotplug_event_id);
 			  
 		}
 	    }

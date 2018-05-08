@@ -408,7 +408,7 @@ struct dspd_device_stat {
   char name[64]; //Driver specific device name (hw:0, etc)
   char bus[64];  //Hardware bus
   char addr[64]; //Hardware address
-  char desc[128];
+  char desc[64];
   int32_t streams;
 #define DSPD_DEV_DEFAULT_PLAYBACK DSPD_PCM_SBIT_PLAYBACK
 #define DSPD_DEV_DEFAULT_CAPTURE DSPD_PCM_SBIT_CAPTURE
@@ -419,6 +419,7 @@ struct dspd_device_stat {
   uint64_t slot_id;
   uint32_t refcount;
   uint32_t pad;
+  uint64_t hotplug_event_id;
   struct dspd_cli_params playback;
   struct dspd_cli_params capture;
 };
@@ -492,6 +493,7 @@ struct dspd_pcmdev_params {
   void *arg;
 };
 int32_t dspd_pcm_device_new(void **dev,
+			    uint64_t hotplug_event_id,
 			    const struct dspd_pcmdev_params *params,
 			    struct dspd_slist *list);
 

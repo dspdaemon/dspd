@@ -169,15 +169,18 @@ static void vctrl_notify(struct dspd_vctrl_list *list, struct dspd_vctrl *ctrl)
 {
   uint32_t mask = 0;
   struct dspd_vctrl_callback *curr;
-  if ( ctrl->flags & DSPD_VCTRL_CHANGED )
+  if ( ctrl->flags & DSPD_VCTRL_REMOVED )
+    {
+      mask = DSPD_CTL_EVENT_MASK_REMOVE;
+    } else if ( ctrl->flags & DSPD_VCTRL_CHANGED )
     {
       mask = ctrl->flags & ~DSPD_VCTRL_CHANGED;
-      mask <<= 4U;
+      mask >>= 4U;
       mask |= DSPD_VCTRL_CHANGED;
     } else
     {
       mask = ctrl->flags;
-      mask <<= 4U;
+      mask >>= 4U;
     }
   for ( curr = list->callbacks; curr; curr = curr->next )
     {

@@ -74,9 +74,16 @@ static void trigger_hotplug_events(void *arg)
   char *p;
   char *val;
   bool c;
+  char eid[32UL], *e;
   dspd_log(0, "mod_alsacfg: Triggering hotplug events");
   for ( curr = config_sections; curr; curr = curr->next )
     {
+      if ( ! dspd_dict_find_value(curr, DSPD_HOTPLUG_EVENT_ID, &e) )
+	{
+	  dspd_daemon_hotplug_event_id(eid);
+	  if ( ! dspd_dict_insert_value(curr, DSPD_HOTPLUG_EVENT_ID, eid) )
+	    continue;
+	}
       if ( ! dspd_dict_find_value(curr, DSPD_HOTPLUG_DEVNAME, &p) )
 	continue;
       if ( ! p )
@@ -97,6 +104,7 @@ static void trigger_hotplug_events(void *arg)
 	    }
 	}
 
+      
       char *desc = NULL;
       dspd_dict_find_value(curr, DSPD_HOTPLUG_DESC, &desc);
       dspd_log(0, "mod_alsacfg: Adding '%s'...", desc);

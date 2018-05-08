@@ -89,6 +89,7 @@ struct dspd_pcm_device {
   int32_t  excl_client;
   unsigned int seed;
   uint32_t wakeup_count;
+  uint64_t hotplug_event_id;
 };
 
 #define DSPD_DEV_USE_TLS
@@ -2573,6 +2574,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
 
    
 int32_t dspd_pcm_device_new(void **dev,
+			    uint64_t hotplug_event_id,
 			    const struct dspd_pcmdev_params *params,
 			    struct dspd_slist *list)
 {
@@ -2591,6 +2593,7 @@ int32_t dspd_pcm_device_new(void **dev,
   devptr->mq[0] = -1;
   devptr->mq[1] = -1;
   devptr->excl_client = -1;
+  devptr->hotplug_event_id = hotplug_event_id;
   if ( list )
     {
       dspd_slist_wrlock(list);
@@ -3366,7 +3369,7 @@ static int32_t server_stat(struct dspd_rctx *context,
   struct dspd_pcm_device *dev = dspd_req_userdata(context);
   const struct dspd_drv_params *params;
   memset(stat, 0, sizeof(*stat));
-
+  stat->hotplug_event_id = dev->hotplug_event_id;
   if ( dev->playback.handle )
     {
       params = &dev->playback.params;

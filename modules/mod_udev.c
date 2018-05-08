@@ -236,11 +236,11 @@ static int get_info(const char *card, char desc[128], const char *prefix)
   return streams;
 }
 
-static bool insert_value(struct dspd_dict *sect, const char *key, const char *value)
+static bool insert_value(struct dspd_dict *dict, const char *key, const char *value)
 {
   bool ret;
   if ( value )
-    ret = dspd_dict_insert_value(sect, key, value);
+    ret = dspd_dict_insert_value(dict, key, value);
   else
     ret = false;
   if ( ret == true )
@@ -271,8 +271,9 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
   int streams, ret;
   char hwname[32];
   char desc[128];
-  struct dspd_dict *sect;
+  struct dspd_dict *dict;
   char busid[16] = { 0 }, hwid[64] = { 0 };
+  char eid[32UL];
   int s;
   if ( ! pdev )
     {
@@ -336,8 +337,8 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
   if ( ctx->nousb && strcmp(busid, "usb") == 0 )
     return true;
   
-  sect = dspd_dict_new("DEVICE");
-  if ( ! sect )
+  dict = dspd_dict_new("DEVICE");
+  if ( ! dict )
     return true;
 
   if (  ctx->fullduplex == false && (streams & DSPD_PCM_SBIT_FULLDUPLEX) )
@@ -354,20 +355,22 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
   if ( driver == NULL && pdev == dev )
     driver = "builtin";
 
+  (void)dspd_daemon_hotplug_event_id(eid);
 
-  if ( (insert_value(sect, DSPD_HOTPLUG_EVENT, action) &&
-	insert_value(sect, DSPD_HOTPLUG_BUSNAME, busid) &&
-	insert_value(sect, DSPD_HOTPLUG_DEVTYPE, "alsa") &&
-	insert_value(sect, DSPD_HOTPLUG_SENDER, "mod_udev") &&
-	insert_value(sect, DSPD_HOTPLUG_DESC, desc) &&
-	insert_value(sect, DSPD_HOTPLUG_DEVNAME, hwname) &&
-	insert_value(sect, DSPD_HOTPLUG_ADDRESS, udev_device_get_sysname(pdev)) &&
-	insert_value(sect, DSPD_HOTPLUG_KDRIVER, driver) &&
-	insert_value(sect, DSPD_HOTPLUG_HWID, hwid) && 
-	insert_value(sect, DSPD_HOTPLUG_MODALIAS, modalias) &&
-	insert_value(sect, DSPD_HOTPLUG_STREAM, stream_name(s))))
+  if ( (insert_value(dict, DSPD_HOTPLUG_EVENT_ID, eid) &&
+	insert_value(dict, DSPD_HOTPLUG_EVENT, action) &&
+	insert_value(dict, DSPD_HOTPLUG_BUSNAME, busid) &&
+	insert_value(dict, DSPD_HOTPLUG_DEVTYPE, "alsa") &&
+	insert_value(dict, DSPD_HOTPLUG_SENDER, "mod_udev") &&
+	insert_value(dict, DSPD_HOTPLUG_DESC, desc) &&
+	insert_value(dict, DSPD_HOTPLUG_DEVNAME, hwname) &&
+	insert_value(dict, DSPD_HOTPLUG_ADDRESS, udev_device_get_sysname(pdev)) &&
+	insert_value(dict, DSPD_HOTPLUG_KDRIVER, driver) &&
+	insert_value(dict, DSPD_HOTPLUG_HWID, hwid) && 
+	insert_value(dict, DSPD_HOTPLUG_MODALIAS, modalias) &&
+	insert_value(dict, DSPD_HOTPLUG_STREAM, stream_name(s))))
     {
-      ret = dspd_daemon_hotplug_add(sect);
+      ret = dspd_daemon_hotplug_add(dict);
       if ( ret > 0 )
 	dspd_log(0, "mod_udev: Added %s (%s) for stream %s,0x%x to slot %d", hwname, desc, stream_name(s), streams, ret);
       else
@@ -379,9 +382,9 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
     }
   if (  ctx->fullduplex == false && (streams & DSPD_PCM_SBIT_FULLDUPLEX) )
     {
-      if ( dspd_dict_set_value(sect, DSPD_HOTPLUG_STREAM, stream_name(DSPD_PCM_SBIT_CAPTURE), false) )
+      if ( dspd_dict_set_value(dict, DSPD_HOTPLUG_STREAM, stream_name(DSPD_PCM_SBIT_CAPTURE), false) )
 	{
-	  ret = dspd_daemon_hotplug_add(sect);
+	  ret = dspd_daemon_hotplug_add(dict);
 	  if ( ret > 0 )
 	    dspd_log(0, "mod_udev: Added %s (%s) for stream %s,0x%x to slot %d", hwname, desc, stream_name(DSPD_PCM_SBIT_CAPTURE), streams, ret);
 	  else
@@ -390,7 +393,7 @@ static bool udev_device_event(struct hotplug_ctx *ctx, struct udev_device *dev, 
     }
   
 
-  dspd_dict_free(sect);
+  dspd_dict_free(dict);
 
   return true;
 }

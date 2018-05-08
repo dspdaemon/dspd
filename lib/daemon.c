@@ -1567,6 +1567,20 @@ static bool check_duplicates(const struct dspd_dict *dict)
   return ret;
 }
 
+uint64_t dspd_daemon_hotplug_event_id(char buf[32UL])
+{
+  static uint64_t last_id = UINT16_MAX;
+  static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+  uint64_t ret;
+  pthread_mutex_lock(&lock);
+  last_id++;
+  ret = last_id;
+  pthread_mutex_unlock(&lock);
+  if ( buf )
+    snprintf(buf, 32UL, "0x%llx", (long long)ret);
+  return ret;
+}
+
 int dspd_daemon_hotplug_add(const struct dspd_dict *dict)
 {
   int ret = -ENOENT;
@@ -1962,6 +1976,7 @@ int dspd_daemon_get_config(const struct dspd_dict *dict,
 
 int dspd_daemon_add_device(void **handles, 
 			   int32_t stream,
+			   uint64_t hotplug_event_id,
 			   const struct dspd_pcmdrv_ops *playback_ops,
 			   const struct dspd_pcmdrv_ops *capture_ops)
 {
@@ -1974,6 +1989,7 @@ int dspd_daemon_add_device(void **handles,
   devparams.ops[1] = capture_ops;
   devparams.driver_handles = handles;
   ret = dspd_pcm_device_new(&dev,
+			    hotplug_event_id,
 			    &devparams,
 			    dspd_dctx.objects);
   //if ( ret == 0 )

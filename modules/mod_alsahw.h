@@ -31,9 +31,7 @@ intptr_t alsahw_pcm_write_commit(void *handle,
 
 
 
-int alsahw_open(const struct dspd_drv_params *params,
-		 const struct dspd_pcmdrv_ops **ops,
-		 void **handle);
+
 
 
 struct alsahw_mix_elem {
@@ -103,7 +101,7 @@ struct alsahw_handle {
   
 
   void *other_handle;
-
+  uint64_t hotplug_event_id;
  
 };
 

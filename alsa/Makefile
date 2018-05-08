@@ -12,7 +12,7 @@ APLDFLAGS=-shared -lm -ldl -lpthread -lasound -lrt \
 MAKEOBJ=$(CC) $(APCFLAGS) -c
 
 
-all: pcm_devel pcm_dspd
+all: pcm_dspd
 
 skel:
 	$(MAKEOBJ) pcm_skel.c

@@ -31,6 +31,26 @@
 
 #define DSPD_AIO_DATABUF (1ULL<<32U)
 
+//#define DEBUG_IO_COUNT
+#ifdef DEBUG_IO_COUNT
+static void check_io_count(struct dspd_aio_ctx *_ctx)
+{
+  volatile size_t i, c = 0;
+  volatile struct dspd_aio_ctx *ctx = _ctx;
+  for ( i = 0; i < (size_t)ctx->max_ops; i++ )
+    {
+      if ( ctx->pending_ops[i] )
+	{
+	  c++;
+	  assert(ctx->pending_ops[i]->error != -EINPROGRESS);
+	}
+    }
+  assert(c == (size_t)ctx->pending_ops_count);
+}
+#else
+#define check_io_count(ctx)
+#endif
+
 static void sync_ctl_cb(void *context, struct dspd_async_op *op)
 {
   bool *complete = op->data;
@@ -203,6 +223,7 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   assert(ctx->pending_ops_count >= 0);
   ctx->pending_ops_count++;
   assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
+  check_io_count(ctx);
 }
 
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
@@ -389,6 +410,7 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
   return ctx->current_op >= 0;
 }
 
+
 static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 {
   size_t index = (op->reserved >> 16U) & 0xFFFFU;
@@ -398,6 +420,9 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
   if ( (size_t)ctx->op_in == index )
     ctx->op_in = -1;
   ctx->pending_ops_count--;
+
+  check_io_count(ctx);
+
   assert(ctx->pending_ops_count >= 0);
   if ( op->reserved & DSPD_AIO_DATABUF )
     {
@@ -729,7 +754,7 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
   ssize_t ret;
   void *buf;
   size_t len;
-  struct dspd_async_op *op;
+  struct dspd_async_op *op = NULL;
   struct dspd_async_event *evt;
   void *ptr;
   size_t buflen;
@@ -747,7 +772,6 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 	    op = ctx->pending_ops[ctx->op_in];
 	  else
 	    op = NULL;
-
 	  if ( ctx->req_in.len > sizeof(ctx->req_in) )
 	    {
 	      if ( op != NULL && op->outbuf != NULL )
@@ -777,14 +801,14 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLHUP )
 		ctx->revents |= POLLHUP;
 	    }
-	  
+
 
 	  //It is possible to have event flags carried by a regular reply.
 	  if ( ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT ||
 		 (ctx->req_in.flags & (0xFFFF ^ DSPD_REQ_FLAG_ERROR)) != 0 ) &&
 	       ctx->async_event != NULL )
 	    {
-	      
+
 	      if ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT && len >= sizeof(*evt) )
 		{
 		  evt = buf;
@@ -825,6 +849,7 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 	  ctx->off_in = 0;
 	} else if ( ret != -EINPROGRESS )
 	{
+
 	  if ( ctx->op_in >= 0 )
 	    {
 	      op = ctx->pending_ops[ctx->op_in];
@@ -856,7 +881,7 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
   if ( ctx->cancel_pending )
     {
       ctx->cancel_pending = false;
-      ctx->output_pending = false;
+      //ctx->output_pending = false;
       for ( i = 0; i < ctx->max_ops; i++ )
 	{
 	  op = ctx->pending_ops[i];
@@ -868,6 +893,7 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
 		  op->error = -ECANCELED;
 		  op->xfer = 0;
 		  io_complete(ctx, op);
+		  timeout = 0;
 		} else if ( op->error == EBUSY || op->error == EINPROGRESS )
 		{
 		  //Operation has finished sending or got submitted but did not start.
@@ -875,24 +901,26 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
 		}
 	    }
 	}
+      check_io_count(ctx);
     }
   if ( revents == 0 && (ctx->pending_ops_count > 0 || ctx->error == 0) )
     {
+      check_io_count(ctx);
       ret = ctx->ops->poll(ctx->ops_arg, dspd_aio_block_directions(ctx), &revents, timeout);
       if ( ret < 0 && ret != -EAGAIN && ret != -EINTR )
 	return ret;
       if ( ret > 0 )
 	ret = 0;
     }
-  
+  check_io_count(ctx);
   if ( revents & POLLIN )
     ret = dspd_aio_recv(ctx);
-
-  if ( ret == 0 && (revents & POLLOUT) )
+  check_io_count(ctx);
+  if ( (ret == 0 || ret == -EINPROGRESS) && (revents & POLLOUT) )
     ret = dspd_aio_send(ctx);
   if ( ret == -EAGAIN )
     ret = -EINPROGRESS;
-  
+  check_io_count(ctx);
   if ( ret == 0 )
     {
       if ( ctx->io_ready )
@@ -906,6 +934,7 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
 	  ctx->io_dead = NULL;
 	}
     }
+  check_io_count(ctx);
   return ret;
 }
 
@@ -983,6 +1012,7 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
   int32_t ret = -ECANCELED;
   if ( ! ctx )
     return;
+  check_io_count(ctx);
   ctx->error = -ESHUTDOWN;
   if ( ctx->ops != NULL )
     {
@@ -992,11 +1022,14 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 	  if ( op != NULL )
 	    dspd_aio_cancel(ctx, op, true);
 	}
+      check_io_count(ctx);
       while ( ctx->pending_ops_count > 0 )
 	{
-	  if ( (ret = dspd_aio_process(ctx, 0, -1)) < 0 )
+	  ret = dspd_aio_process(ctx, 0, -1);
+	  if ( ret < 0 && ret != -EINPROGRESS )
 	    break;
 	}
+      check_io_count(ctx);
       if ( ret == 0 )
 	ret = -ECANCELED;
       if ( ctx->pending_ops_count > 0 )
@@ -1096,21 +1129,18 @@ int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *conte
 
 
 void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx, 
-			   void (*async_event)(struct dspd_aio_ctx    *context,
-					       void                   *arg,
-					       uint32_t                req,
-					       int32_t                 stream,
-					       int32_t                 flags,
-					       const struct dspd_async_event *evt,
-					       const void             *buf,
-					       size_t                  len),
+			   dspd_aio_event_cb_t async_event,
 			   void  *async_event_arg)
 {
   ctx->async_event = async_event;
   ctx->async_event_arg = async_event_arg;
 }
 
-
+void dspd_aio_get_event_cb(struct dspd_aio_ctx *ctx, dspd_aio_event_cb_t *async_event, void **arg)
+{
+  *async_event = ctx->async_event;
+  *arg = ctx->async_event_arg;
+}
 
 static void dspd_aio_fifo_destroy(struct dspd_aio_fifo_master *master)
 {

@@ -425,22 +425,21 @@ void dspd_pcmcli_restore_wait(struct dspd_pcmcli *client)
 
 int32_t dspd_pcmcli_get_pollfd(struct dspd_pcmcli *client, struct pollfd *pfds, size_t nfds, int32_t events)
 {
-  int32_t ret = 0;
   int32_t streams = 0;
   size_t i;
-  if ( (events & POLLIN) && (client->streams & DSPD_PCM_SBIT_CAPTURE) )
-    streams |= DSPD_PCM_SBIT_CAPTURE;
-  if ( (events & POLLOUT) && (client->streams & DSPD_PCM_SBIT_PLAYBACK) )
-    streams |= DSPD_PCM_SBIT_PLAYBACK;
-  if ( client->state >= PCMCLI_STATE_PREPARED )
-    ret = dspd_pcmcli_wait(client, streams, 0, true);
-  if ( ret == 0 )
+  int32_t ret = -EBADFD;
+  if ( client->state >= PCMCLI_STATE_OPEN )
     {
+      if ( (events & POLLIN) && (client->streams & DSPD_PCM_SBIT_CAPTURE) )
+	streams |= DSPD_PCM_SBIT_CAPTURE;
+      if ( (events & POLLOUT) && (client->streams & DSPD_PCM_SBIT_PLAYBACK) )
+	streams |= DSPD_PCM_SBIT_PLAYBACK;
+      if ( client->state >= PCMCLI_STATE_PREPARED )
+	dspd_pcmcli_wait(client, streams, 0, true);
       for ( i = 0; i < client->nfds && i < nfds; i++ )
 	pfds[i] = client->pfds[i];
       ret = i;
     }
-
   return ret;
 }
 

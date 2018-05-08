@@ -3247,7 +3247,9 @@ static void socksrv_init_device(void *arg, const struct dspd_dict *device)
 		    .outbuf = NULL,
 		    .outbufsize = 0,
 		    .bytes_returned = &br});
-	      if ( ret < 0 )
+	      if ( ret == -ENOENT )
+		dspd_log(0, "Device %d does not have mixer controls", index);
+	      else if ( ret < 0 )
 		dspd_log(0, "Could not install mixer callback for device %d: error %d", index, ret);
 	      socksrv_mixer_callback(index, SS_DEV_ADD, DSPD_CTL_EVENT_MASK_ADD, server);
 	    }

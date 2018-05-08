@@ -2,6 +2,7 @@
 #define _DSPDAIO_H_
 struct ucred;
 struct dspd_async_op;
+struct dspd_aio_ctx;
 typedef void (*dspd_aio_ccb_t)(void *context, struct dspd_async_op *op);
 struct dspd_async_op {
   uint32_t     stream;
@@ -33,6 +34,14 @@ struct dspd_aio_ops {
   void    (*close)(void *arg);
 };
 
+typedef void (*dspd_aio_event_cb_t)(struct dspd_aio_ctx     *context,
+				    void                    *arg,
+				    uint32_t                 req,
+				    int32_t                  stream,
+				    int32_t                  flags,
+				    const struct dspd_async_event *evt,
+				    const void              *buf,
+				    size_t                   len);
 
 #define DSPD_AIO_SYNC    -1
 #define DSPD_AIO_DEFAULT  0
@@ -80,14 +89,8 @@ struct dspd_aio_ctx {
  
   
   void  *async_event_arg;
-  void (*async_event)(struct dspd_aio_ctx     *context,
-		      void                    *arg,
-		      uint32_t                 req,
-		      int32_t                  stream,
-		      int32_t                  flags,
-		      const struct dspd_async_event *evt,
-		      const void              *buf,
-		      size_t                   len);
+  dspd_aio_event_cb_t async_event;
+  
 
   uint32_t event_flags;
   void (*event_flags_changed)(void *arg, uint32_t *flags);
@@ -136,19 +139,13 @@ bool dspd_aio_is_local(struct dspd_aio_ctx *aio);
 struct dspd_aio_fifo_ops;
 int32_t dspd_aio_connect(struct dspd_aio_ctx *ctx, const char *addr, void *context, const struct dspd_aio_fifo_ops *ops, void *arg);
 void dspd_aio_set_event_cb(struct dspd_aio_ctx *ctx, 
-			   void (*async_event)(struct dspd_aio_ctx    *context,
-					       void                   *arg,
-					       uint32_t                req,
-					       int32_t                 stream,
-					       int32_t                 flags,
-					       const struct dspd_async_event *evt,
-					       const void             *buf,
-					       size_t                  len),
+			   dspd_aio_event_cb_t async_event,
 			   void  *async_event_arg);
+void dspd_aio_get_event_cb(struct dspd_aio_ctx *ctx, dspd_aio_event_cb_t *async_event, void **arg);
 
 
 void dspd_aio_set_event_flag_cb(struct dspd_aio_ctx *ctx, 
-				 void (*event_flags_changed)(void *arg, uint32_t *flags),
+				void (*event_flags_changed)(void *arg, uint32_t *flags),
 				void *arg);
 
 uint32_t dspd_aio_get_event_flags(struct dspd_aio_ctx *ctx, bool clear);

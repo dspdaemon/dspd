@@ -93,7 +93,7 @@ struct dspd_client {
   volatile uint32_t avail_min;
   bool alloc;
 
-  char name[32];
+  char name[DSPD_MIX_NAME_MAX];
   bool vctrl_registered;
   int32_t uid;
   int32_t gid;
@@ -2977,8 +2977,10 @@ static int32_t client_setinfo(struct dspd_rctx *context,
 	cli->uid = info->cred.cred.uid;
       if ( info->cred.cred.gid >= 0 )
 	cli->gid = info->cred.cred.gid;
-      if ( cli->name[0] )
-	strlcpy(cli->name, info->name, sizeof(cli->name));
+      if ( info->name[0] ) //This buffer is validated with memchr
+	snprintf(cli->name, sizeof(cli->name), "%s (%d)", info->name, cli->index);
+      
+
       if ( cli->vctrl_registered )
 	dspd_daemon_vctrl_set_value(cli->index, DSPD_PCM_SBIT_PLAYBACK, -1, cli->name);
       ret = 0;

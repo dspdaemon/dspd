@@ -46,7 +46,7 @@ struct dspd_kvpair {
   char *value;
 };
 
-
+//This is a section of a config file or a standalone dictionary
 struct dspd_dict {
   char          *name;
   size_t         count;

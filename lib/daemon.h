@@ -28,6 +28,8 @@
 
 #define DSPD_HOTPLUG_MODALIAS "modalias"
 
+#define DSPD_HOTPLUG_EVENT_ID "event_id"
+
 /*
   Glitch correction.
 
@@ -164,6 +166,7 @@ int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
 				 void *arg);
 int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
 				   void *arg);
+uint64_t dspd_daemon_hotplug_event_id(char buf[32UL]);
 int dspd_daemon_hotplug_add(const struct dspd_dict *dict);
 int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name);
 int dspd_hotplug_delete(const struct dspd_dict *dict);
@@ -171,6 +174,7 @@ int dspd_daemon_get_config(const struct dspd_dict *sect,
 			   struct dspd_drv_params *params);
 int dspd_daemon_add_device(void **handles, 
 			   int32_t stream,
+			   uint64_t hotplug_event_id,
 			   const struct dspd_pcmdrv_ops *playback_ops,
 			   const struct dspd_pcmdrv_ops *capture_ops);
 
