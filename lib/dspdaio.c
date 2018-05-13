@@ -224,6 +224,7 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   ctx->pending_ops_count++;
   assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
   check_io_count(ctx);
+  ctx->ops->poll_async(ctx->ops_arg, dspd_aio_block_directions(ctx));
 }
 
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
@@ -916,8 +917,10 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
   if ( revents & POLLIN )
     ret = dspd_aio_recv(ctx);
   check_io_count(ctx);
+
   if ( (ret == 0 || ret == -EINPROGRESS) && (revents & POLLOUT) )
     ret = dspd_aio_send(ctx);
+    
   if ( ret == -EAGAIN )
     ret = -EINPROGRESS;
   check_io_count(ctx);
@@ -935,6 +938,7 @@ int32_t dspd_aio_process(struct dspd_aio_ctx *ctx, int32_t revents, int32_t time
 	}
     }
   check_io_count(ctx);
+  ctx->ops->poll_async(ctx->ops_arg, dspd_aio_block_directions(ctx));
   return ret;
 }
 
@@ -1644,6 +1648,29 @@ int32_t dspd_aio_fifo_set_nonblocking(void *arg, bool nonblocking)
   return 0;
 }
 
+void dspd_aio_fifo_poll_async(void *arg, uint32_t events)
+{
+  int32_t re;
+  struct dspd_aio_fifo_ctx *ctx = arg;
+  int ret = dspd_aio_fifo_poll(arg, events, &re, 0);
+  if ( ret == 0 )
+    {
+      if ( re == 0 )
+	{
+	  ret = ctx->ops->reset(ctx, ctx->arg);
+	  if ( ret == 0 )
+	    {
+	      ret = dspd_aio_fifo_poll(arg, events, &re, 0);
+	      if ( ret > 0 )
+		ctx->ops->wake(ctx, ctx->arg);
+	    }
+	}
+    } else
+    {
+      ctx->ops->wake(ctx, ctx->arg);
+    }
+}
+
 
 static int32_t dspd_aio_fifo_ptevent_wake(struct dspd_aio_fifo_ctx *ctx, void *arg)
 {
@@ -1666,10 +1693,7 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
   struct timespec ts;
   (void)ctx;
 
-  if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
-    {
-      dspd_ts_clear(&evt->tsval);
-    } else if ( timeout != 0 )
+  if ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET && timeout != 0 )
     {
       if ( timeout > 0 )
 	{
@@ -1692,6 +1716,13 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
     }
   return 0;
 }
+static int32_t dspd_aio_fifo_ptevent_reset(struct dspd_aio_fifo_ctx *ctx, void *arg)
+{
+  struct dspd_aio_fifo_ptevent *evt = arg;
+  dspd_ts_clear(&evt->tsval);
+  return 0;
+}
+
 
 static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *arg)
 {
@@ -1720,11 +1751,7 @@ static int32_t dspd_aio_fifo_eventfd_wait(struct dspd_aio_fifo_ctx *ctx, void *a
   int32_t ret = 0;
   uint64_t val;
   (void)ctx;
-  if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
-    {
-      if ( read(evt->fd, &val, sizeof(val)) == sizeof(val) )
-	dspd_ts_clear(&evt->tsval);
-    } else if ( timeout != 0 )
+  if ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET && timeout != 0 )
     {
       pfd.fd = evt->fd;
       pfd.events = POLLIN;
@@ -1737,23 +1764,35 @@ static int32_t dspd_aio_fifo_eventfd_wait(struct dspd_aio_fifo_ctx *ctx, void *a
 	    ret = 0;
 	} else if ( ret > 0 && (pfd.revents & POLLIN) )
 	{
-	  read(evt->fd, &val, sizeof(val));
-	  dspd_ts_clear(&evt->tsval);
+	  if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
+	    if ( read(evt->fd, &val, sizeof(val)) == sizeof(val) )
+	      dspd_ts_clear(&evt->tsval);
 	  ret = 0;
 	}
     }
   return ret;
 }
 
+static int32_t dspd_aio_fifo_eventfd_reset(struct dspd_aio_fifo_ctx *ctx, void *arg)
+{
+  uint64_t val;
+  struct dspd_aio_fifo_eventfd *evt = arg;
+  if ( dspd_ts_load(&evt->tsval) == DSPD_TS_SET )
+    if ( read(evt->fd, &val, sizeof(val)) == sizeof(val) )
+      dspd_ts_clear(&evt->tsval);
+  return 0;
+}
 
 
 struct dspd_aio_fifo_ops dspd_aio_fifo_ptevent_ops = {
   .wake = dspd_aio_fifo_ptevent_wake,
   .wait = dspd_aio_fifo_ptevent_wait,
+  .reset = dspd_aio_fifo_ptevent_reset,
 };
 struct dspd_aio_fifo_ops dspd_aio_fifo_eventfd_ops = {
   .wake = dspd_aio_fifo_eventfd_wake,
   .wait = dspd_aio_fifo_eventfd_wait,
+  .reset = dspd_aio_fifo_eventfd_reset,
 };
 
 
@@ -2142,7 +2181,10 @@ bool dspd_aio_is_local(struct dspd_aio_ctx *aio)
   return aio->local;
 }
 
-
+static void no_pa(void *arg, uint32_t events)
+{
+  return;
+}
 
 struct dspd_aio_ops dspd_aio_sock_ops = {
   .writev = dspd_aio_sock_writev,
@@ -2155,6 +2197,7 @@ struct dspd_aio_ops dspd_aio_sock_ops = {
   .send_cred = dspd_aio_sock_send_cred,
   .recv_cred = dspd_aio_sock_recv_cred,
   .close = dspd_aio_sock_close,
+  .poll_async = no_pa,
 };
 
 struct dspd_aio_ops dspd_aio_fifo_ctx_ops = {
@@ -2168,5 +2211,6 @@ struct dspd_aio_ops dspd_aio_fifo_ctx_ops = {
   .send_cred = dspd_aio_fifo_send_cred,
   .recv_cred = dspd_aio_fifo_recv_cred,
   .close = dspd_aio_fifo_close,
+  .poll_async = dspd_aio_fifo_poll_async,
 };
 

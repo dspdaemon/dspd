@@ -32,6 +32,7 @@ struct dspd_aio_ops {
   ssize_t (*send_cred)(void *arg, const struct ucred *uc, const void *data, size_t length);
   ssize_t (*recv_cred)(void *arg, struct ucred *uc, void *data, size_t length);
   void    (*close)(void *arg);
+  void    (*poll_async)(void *arg, uint32_t events);
 };
 
 typedef void (*dspd_aio_event_cb_t)(struct dspd_aio_ctx     *context,
@@ -162,6 +163,7 @@ struct dspd_aio_fifo_ctx;
 struct dspd_aio_fifo_ops {
   int32_t (*wake)(struct dspd_aio_fifo_ctx *ctx, void *arg);
   int32_t (*wait)(struct dspd_aio_fifo_ctx *ctx, void *arg, int32_t timeout);
+  int32_t (*reset)(struct dspd_aio_fifo_ctx *ctx, void *arg);
 };
 
 struct dspd_aio_fifo_eventfd {

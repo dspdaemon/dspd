@@ -12,7 +12,7 @@ APLDFLAGS=-shared -lm -ldl -lpthread -lasound -lrt \
 MAKEOBJ=$(CC) $(APCFLAGS) -c
 
 
-all: pcm_dspd
+all: pcm_dspd ctl_dspd
 
 skel:
 	$(MAKEOBJ) pcm_skel.c
@@ -31,6 +31,10 @@ pcm_dspd:
 	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_pcm_dspd.so \
 	pcm_dspd.o
 
+ctl_dspd:
+	$(MAKEOBJ) ctl_dspd.c
+	$(CC) $(APCFLAGS) $(LIBS) -rdynamic -shared -ldspdc -L../lib -o libasound_module_ctl_dspd.so \
+	ctl_dspd.o
 
 pcm_dspd_old:
 	$(MAKEOBJ) pcm_dspd_old.c
@@ -39,6 +43,7 @@ pcm_dspd_old:
 install:
 	mkdir -p $(REAL_LIBDIR)/alsa-lib
 	install -m555 libasound_module_pcm_dspd.so $(REAL_LIBDIR)/alsa-lib/
+	install -m555 libasound_module_ctl_dspd.so $(REAL_LIBDIR)/alsa-lib/
 
 uninstall:
 	-rm -f $(REAL_LIBDIR)/alsa-lib/libasound_module_pcm_dspd.so

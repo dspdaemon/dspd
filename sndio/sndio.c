@@ -1,9 +1,23 @@
 /*
-  TODO: Add support for SIO_SYNC and default params.  The second one doesn't seem to
-  be used in practice but the real sndiod seems to support it.
- 
-
-*/
+ *   DSPD sndio protocol server
+ *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
+ *
+ *   This library is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU Lesser General Public License as
+ *   published by the Free Software Foundation; either version 2.1 of
+ *   the License, or (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU Lesser General Public License for more details.
+ *
+ *   You should have received a copy of the GNU Lesser General Public
+ *   License along with this library; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
+ */
 
 /*This module is compatible with sndio-1.0.1*/
 
@@ -19,6 +33,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/eventfd.h>
 #define _DSPD_HAVE_UCRED
 #include "../lib/socket.h"
 #include "../lib/sslib.h"
@@ -31,7 +46,7 @@
 
 #define MAX_CLIENTS 32
 
-
+#define ENABLE_CTL 
 
 union sockaddr_gen {
   struct sockaddr_un un;
@@ -52,7 +67,7 @@ void dspd_sndio_delete(struct sndio_ctx *ctx);
 
 struct sndio_client {
   struct dspd_rclient *pclient, *cclient;
-
+  int32_t pclient_idx;
   struct cbpoll_ctx  *cbctx;
   struct sndio_ctx   *server;
   bool                timer_active;
@@ -124,6 +139,13 @@ struct sndio_client {
   uint32_t delta;
   
   bool draining;
+
+    
+  bool vol_changed;
+  bool vol_pending;
+  bool vol_update;
+  uint32_t volume;
+  int32_t vol_elem;
 };
 
 
@@ -155,6 +177,17 @@ struct sndio_ctx {
   int              *tcp_fds;
   size_t            tcp_nfds;
   bool              started;
+
+  struct dspd_aio_ctx    *aio;
+  struct dspd_ctl_client *ctl;
+  struct dspd_aio_fifo_eventfd efd;
+
+  ssize_t              cli_vol_index; //current index for getting new volume
+  size_t               cli_vol_pos; //schedule position
+  struct sndio_client *cli_vol_ptr; //pointer to current client for new volume
+  int32_t              cli_vol;     //new volume value
+  int16_t              cli_map[MAX_CLIENTS]; //map of dspd stream # to sndio client #
+  int32_t              cli_vol_elem;
 };
 
 struct amsg_handler {
@@ -165,9 +198,9 @@ static int par2cli(const struct dspd_device_stat *info,
 		   int mode,
 		   const struct amsg_par *par, 
 		   struct dspd_cli_params *clp);
-static int cli2par(int mode,
+/*static int cli2par(int mode,
 		   const struct dspd_cli_params *clp,
-		   struct sio_par *par);
+		   struct sio_par *par);*/
 int client_pollout(struct sndio_client *cli);
 int client_check_io(struct sndio_client *cli);
 int client_check_io_fast(struct sndio_client *cli, dspd_time_t *nextwakeup);
@@ -486,6 +519,12 @@ int client_buildmsg(struct sndio_client *cli, bool async)
 	  cli->opkt.msg.u.data.size = htonl(ret);
 	  ret = send_pkt(cli, sizeof(struct amsg) + ret, async);
 	}
+    } else if ( cli->vol_changed )
+    {
+      cli->opkt.msg.cmd = htonl(AMSG_SETVOL);
+      cli->opkt.msg.u.vol.ctl = htonl(cli->volume);
+      cli->vol_changed = false;
+      ret = send_pkt(cli, sizeof(struct amsg), async);
     } else
     {
       if ( cli->cstate == CLIENT_STATE_TXPKT )
@@ -788,6 +827,12 @@ static int amsg_hello(struct sndio_client *cli)
     {
       cli->streams = mode; //Same as PCM_SBIT
       cli->pstate = PROTO_INIT;
+      if ( cli->pclient != NULL )
+	{
+	  cli->pclient_idx = dspd_rclient_client_index(cli->pclient);
+	  if ( cli->pclient_idx > 0 )
+	    cli->server->cli_map[cli->pclient_idx] = cli->sio_idx;
+	}
       ret = send_ack(cli);
     } else
     {
@@ -805,7 +850,7 @@ static void par2cpu(struct amsg_par *par)
   par->round = ntohl(par->round);
   par->appbufsz = ntohl(par->appbufsz);
 }
-static void cpu2par(struct amsg_par *par)
+/*static void cpu2par(struct amsg_par *par)
 {
   par->pchan = htons(par->pchan);
   par->rchan = htons(par->rchan);
@@ -814,7 +859,7 @@ static void cpu2par(struct amsg_par *par)
   par->round = htonl(par->round);
   par->appbufsz = htonl(par->appbufsz);
 
-}
+  }*/
 
 static void adjust_param(int32_t *val1, int32_t *val2)
 {
@@ -1134,6 +1179,8 @@ static int amsg_setvol(struct sndio_client *cli)
 			     NULL,
 			     0,
 			     NULL);
+      if ( ret == 0 )
+	cli->volume = v;
     } else
     {
       ret = 0;
@@ -1322,6 +1369,9 @@ static int client_fd_event(void *data,
     ret = 0;
   return ret;
 }
+
+
+
 static void free_client_cb(struct cbpoll_ctx *ctx,
 			   void *data,
 			   int64_t arg,
@@ -1523,7 +1573,155 @@ static const struct cbpoll_fd_ops sndio_listen_ops = {
   .destructor = NULL,
 };
 
+static void set_cur_vol(struct sndio_ctx *ctx, uint32_t index, uint32_t value)
+{
+  struct sndio_client *sc;
+  if ( ctx->cli_vol_elem != index || ctx->cli_vol_ptr == NULL || ctx->cli_vol_index < 0 )
+    return;
+  sc = ctx->clients[ctx->cli_vol_index];
+  if ( sc != ctx->cli_vol_ptr )
+    return;
+  if ( sc->vol_pending == false || sc->vol_elem != index )
+    return;
+  if ( sc->volume != value )
+    {
+      sc->volume = value;
+      sc->vol_changed = true;
+    }
+  sc->vol_pending = false;
+}
+static void ctl_get_cb(struct dspd_ctl_client *cli, void *arg, struct dspd_async_op *op, uint32_t index, int32_t value);
+static void start_next_vol(struct dspd_ctl_client *cli, struct sndio_ctx *ctx)
+{
+  size_t i, idx;
+  struct sndio_client *sc;
+  int32_t ret;
+  for ( i = 1; i <= ARRAY_SIZE(ctx->clients); i++ )
+    {
+      idx = i + ctx->cli_vol_pos;
+      sc = ctx->clients[idx % ARRAY_SIZE(ctx->clients)];
+      if ( sc == NULL || sc == (struct sndio_client*)UINTPTR_MAX )
+	continue;
+      if ( sc->vol_update == true && sc->vol_elem >= 0 )
+	{
+	  ret = dspd_ctlcli_elem_get_int32(cli, sc->vol_elem, -1, &ctx->cli_vol, ctl_get_cb, ctx);
+	  if ( ret == -EINPROGRESS )
+	    {
+	      ctx->cli_vol_index = sc->sio_idx;
+	      ctx->cli_vol_ptr = sc;
+	      ctx->cli_vol_pos = idx;
+	      ctx->cli_vol_elem = sc->vol_elem;
+	      sc->vol_pending = true;
+	      sc->vol_update = false;
+	      return;
+	    }
+	}
+    }
+  ctx->cli_vol_index = -1;
+  ctx->cli_vol_ptr = NULL;
+  ctx->cli_vol_elem = -1;
+}
 
+#define RANGE_DIV (VCTRL_RANGE_MAX / SIO_MAXVOL)
+static void ctl_get_cb(struct dspd_ctl_client *cli, void *arg, struct dspd_async_op *op, uint32_t index, int32_t value)
+{
+  if ( op->error == 0 )
+    {
+      if ( value == VCTRL_RANGE_MAX )
+	value = SIO_MAXVOL;
+      else
+	value /= RANGE_DIV;
+      set_cur_vol(arg, index, value);
+    }
+  start_next_vol(cli, arg); 
+}
+
+static void ctl_change_cb(struct dspd_ctl_client *cli, void *arg, int32_t err, uint32_t elem, int32_t evt, const struct dspd_mix_info *info)
+{
+  struct sndio_client *sc;
+  struct sndio_ctx *server = arg;
+  int32_t ret;
+  if ( evt != DSPD_CTL_EVENT_MASK_REMOVE && (evt & DSPD_CTL_EVENT_MASK_VALUE) != 0 )
+    {
+      size_t stream = info->hwinfo & 0xFFFFU;
+      if ( stream > 0 && stream < ARRAY_SIZE(server->cli_map) )
+	{
+	  ssize_t idx = server->cli_map[stream];
+	  if ( idx >= 0 )
+	    {
+	      sc = server->clients[idx];
+	      if ( sc != NULL && sc != (struct sndio_client*)UINTPTR_MAX )
+		{
+		  if ( sc->pclient != NULL && sc->pclient_idx == stream )
+		    {
+		      if ( server->cli_vol_index < 0 )
+			{
+			  ret = dspd_ctlcli_elem_get_int32(cli, elem, -1, &server->cli_vol, ctl_get_cb, server);
+			  if ( ret == -EINPROGRESS )
+			    {
+			      server->cli_vol_index = idx;
+			      server->cli_vol_ptr = sc;
+			      server->cli_vol_pos = idx;
+			      server->cli_vol_elem = elem;
+			      sc->vol_elem = elem;
+			      sc->vol_pending = true;
+			      sc->vol_update = false;
+			    }
+			} else
+			{
+			  sc->vol_update = true;
+			  sc->vol_elem = elem;
+			}
+		    }
+		}
+	    }
+	}
+    }
+}
+
+
+
+static int ctl_fd_event(void *data, 
+			struct cbpoll_ctx *context,
+			int index,
+			int fd,
+			int revents)
+{
+  int ret;
+  struct sndio_ctx *ctx = data;
+  if ( revents & (POLLRDHUP|POLLHUP|POLLERR|POLLNVAL) )
+    return -1;
+  if ( ctx->ctx )
+    {
+      ret = dspd_aio_process(ctx->aio, 0, 0);
+      if ( ret == -EINPROGRESS )
+	ret = 0;
+    } else
+    {
+      ret = dspd_aio_process(ctx->aio, revents, 0);
+      if ( ret == 0 || ret == -EINPROGRESS )
+	ret = cbpoll_set_events(context, index, dspd_aio_block_directions(ctx->aio));
+    }
+  return ret;
+}
+static bool ctl_destructor(void *data,
+			   struct cbpoll_ctx *context,
+			   int index,
+			   int fd)
+{
+  struct sndio_ctx *ctx = data;
+  dspd_ctlcli_delete(ctx->ctl);
+  ctx->ctl = NULL;
+  dspd_aio_delete(ctx->aio);
+  ctx->aio = NULL;
+  ctx->efd.fd = -1;
+  return true; //close fd
+}
+static const struct cbpoll_fd_ops sndio_ctl_ops = {
+  .fd_event = ctl_fd_event,
+  .pipe_event = NULL,
+  .destructor = ctl_destructor,
+};
 
 static int par2cli(const struct dspd_device_stat *info, 
 		   int mode,
@@ -1626,7 +1824,7 @@ static int par2cli(const struct dspd_device_stat *info,
 
   return 0;
 }
-static int cli2par(int mode,
+/*static int cli2par(int mode,
 		   const struct dspd_cli_params *clp,
 		   struct sio_par *par)
 {
@@ -1652,7 +1850,7 @@ static int cli2par(int mode,
     return -1; //Should not happen
   par->round = clp->fragsize;
   return 0;
-}
+  }*/
 
 
 static bool timer_destructor(void *data,
@@ -1670,8 +1868,6 @@ static const struct cbpoll_fd_ops sndio_timer_ops = {
   .pipe_event = NULL,
   .destructor = timer_destructor,
 };
-
-
 
 int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 {
@@ -1691,7 +1887,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   sctx->fd = -1;
   sctx->tmr.timer.fd = -1;
   sctx->cbidx = -1;
-  
+  sctx->cli_vol_index = -1;
   if ( params->server_addr )
     {
       sctx->server_addr = strdup(params->server_addr);
@@ -1712,7 +1908,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       for ( tok = strchr(params->net_addrs, ','); tok; tok = strchr(&tok[1], ',') )
 	fd_count++;
     }
-  ret = cbpoll_init(&sctx->cbctx, 0, MAX_CLIENTS+2+fd_count);
+  ret = cbpoll_init(&sctx->cbctx, 0, MAX_CLIENTS+3+fd_count);
   if ( ret < 0 )
     goto out;
 
@@ -1824,6 +2020,55 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	    }
 	}
     }
+
+#ifdef ENABLE_CTL
+  if ( sctx->ctx )
+    {
+      sctx->efd.fd = eventfd(0, EFD_NONBLOCK|EFD_CLOEXEC);
+      if ( sctx->efd.fd < 0 )
+	{
+	  ret = -errno;
+	  goto out;
+	}
+      dspd_ts_clear(&sctx->efd.tsval);
+    }
+
+  ret = dspd_aio_new(&sctx->aio, DSPD_AIO_SYNC); //synchronous nonblocking io
+  if ( ret < 0 )
+    goto out;
+  if ( sctx->ctx )
+    ret = dspd_aio_connect(sctx->aio, NULL, sctx->ctx, &dspd_aio_fifo_eventfd_ops, &sctx->efd);
+  else
+    ret = dspd_aio_connect(sctx->aio, NULL, NULL, NULL, NULL);
+  if ( ret < 0 )
+    goto out;
+    
+  ret = dspd_ctlcli_new(&sctx->ctl, DSPD_CC_IO_SYNC, DSPD_MAX_OBJECTS);
+  if ( ret < 0 )
+    goto out;
+  dspd_ctlcli_bind(sctx->ctl, sctx->aio, 0);
+  uint32_t count;
+ 
+  dspd_ctlcli_set_event_cb(sctx->ctl, ctl_change_cb, sctx);
+  ret = dspd_ctlcli_subscribe(sctx->ctl, true, &count, NULL, NULL);
+  if ( ret < 0 )
+    goto out;
+
+  ret = dspd_ctlcli_refresh_count(sctx->ctl, &count, NULL, NULL);
+  if ( ret < 0 )
+    goto out;
+  
+  if ( sctx->ctx )
+    ret = cbpoll_add_fd(&sctx->cbctx, sctx->efd.fd, EPOLLIN, &sndio_ctl_ops, sctx);
+  else
+    ret = cbpoll_add_fd(&sctx->cbctx, dspd_aio_get_iofd(sctx->aio), dspd_aio_block_directions(sctx->aio), &sndio_ctl_ops, sctx);
+  if ( ret < 0 )
+    goto out;
+#else
+  (void)ctl_change_cb;
+  (void)sndio_ctl_ops;
+#endif
+
   ret = 0;
   *ctx = sctx;
   
@@ -1895,6 +2140,13 @@ void dspd_sndio_delete(struct sndio_ctx *ctx)
 	close(ctx->tcp_fds[i]);
     }
   free(ctx->tcp_fds);
+  if ( ctx->ctl )
+    dspd_ctlcli_delete(ctx->ctl);
+  if ( ctx->aio )
+    dspd_aio_delete(ctx->aio);
+  if ( ctx->efd.fd >= 0 )
+    close(ctx->efd.fd);
+  free(ctx);
 }
 
 

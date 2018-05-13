@@ -2,6 +2,7 @@
 #define _DSPD_VCTRL_H_
 #define DSPD_VCTRL_DEVICE (1<<2)
 #define DSPD_VCTRL_CLIENT (1<<3)
+#define VCTRL_RANGE_MAX 65535
 struct dspd_vctrl_list;
 int32_t dspd_vctrl_list_new(struct dspd_vctrl_list **list);
 void dspd_vctrl_list_delete(struct dspd_vctrl_list *list);

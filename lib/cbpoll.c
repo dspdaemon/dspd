@@ -448,6 +448,8 @@ int32_t cbpoll_set_events(struct cbpoll_ctx *ctx,
 	  if ( f->ops->set_events )
 	    {
 	      ret = f->ops->set_events(f->data, ctx, index, f->fd, events);
+	      if ( ret == 0 )
+		f->events = events;
 	    } else
 	    {
 	      f->events = events;

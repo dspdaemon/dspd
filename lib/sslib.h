@@ -32,4 +32,5 @@
 #include "rtalloc.h"
 #include "dspdaio.h"
 #include "pcmcli.h"
+#include "ctlcli.h"
 #endif

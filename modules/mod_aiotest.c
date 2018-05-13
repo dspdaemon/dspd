@@ -128,23 +128,11 @@ static void aiotest_close(void *daemon, void **context)
   
 }
 
-static int aiotest_ioctl(void         *daemon, 
-			 void         *context,
-			 int32_t       req,
-			 const void   *inbuf,
-			 size_t        inbufsize,
-			 void         *outbuf,
-			 size_t        outbufsize,
-			 size_t       *bytes_returned)
-{
-  return -ENOSYS;
-}
 
 
 struct dspd_mod_cb dspd_mod_aiotest = {
-  .load_priority = 0,
+  .init_priority = 0,
   .desc = "Async io test module",
   .init = aiotest_init,
   .close = aiotest_close,
-  .ioctl = aiotest_ioctl,
 };

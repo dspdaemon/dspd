@@ -2978,7 +2978,7 @@ static int32_t client_setinfo(struct dspd_rctx *context,
       if ( info->cred.cred.gid >= 0 )
 	cli->gid = info->cred.cred.gid;
       if ( info->name[0] ) //This buffer is validated with memchr
-	snprintf(cli->name, sizeof(cli->name), "%s (%d)", info->name, cli->index);
+	snprintf(cli->name, sizeof(cli->name), "%d: %s", cli->index, info->name);
       
 
       if ( cli->vctrl_registered )

@@ -1237,7 +1237,7 @@ static int32_t alsa_mixer_elem_info(struct dspd_rctx *rctx,
       ret = 0;
     } else
     {
-      ret = -EINVAL;
+      ret = -EIDRM;
     }
   dspd_mutex_unlock(&hdl->mixer_lock);
   if ( ret )
@@ -2757,11 +2757,8 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
   void *hlist[2] = { NULL, NULL };
   int flags = 0;
   char str[DSPD_MIX_NAME_MAX];
-  char nstr[20UL];
-  size_t len, i;
   uint64_t eid = 0;
   bool register_eid = false;
-  assert(sizeof(nstr) < sizeof(str));
   dspd_dict_find_value(device, DSPD_HOTPLUG_DESC, &desc);
   dspd_dict_find_value(device, DSPD_HOTPLUG_DEVNAME, &name);
   dspd_dict_find_value(device, DSPD_HOTPLUG_KDRIVER, &kdrv);
@@ -2816,18 +2813,9 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	goto out;
 
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
-	len = snprintf(nstr, sizeof(nstr), " Playback (%d)", ret);
+	snprintf(str, sizeof(str), "%d: %s Playback", ret, desc);
       else
-	len = snprintf(nstr, sizeof(nstr), " Capture (%d)", ret);
-
-      strlcpy(str, desc, sizeof(str));
-      for ( i = 0; i < (sizeof(str) - len); i++ )
-	{
-	  if ( str[i] == 0 )
-	    break;
-	}
-      str[i] = 0;
-      strcat(str, nstr);
+	snprintf(str, sizeof(str), "%d: %s Capture", ret, desc);
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
 	err = dspd_daemon_vctrl_register(ret, -1, DSPD_VCTRL_DEVICE, 1.0, str);
       else

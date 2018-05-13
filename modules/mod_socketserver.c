@@ -2611,6 +2611,7 @@ int client_pipe_event(void *data,
 	}
     } else
     {
+     
       ret = event->arg >> 32;
       events = event->arg & 0xFFFFFFFF;
       if ( ret == 0 )
@@ -2668,6 +2669,7 @@ static int client_vfd_set_events(void *data,
 				 int events)
 {
   struct ss_cctx *cli = data;
+
   assert(cli->fifo != NULL); //This is for virtual fd only
   if ( cli->cbpfd == NULL || events != cli->cbpfd->events )
     {
@@ -2888,7 +2890,8 @@ static int eventfd_event(void *data,
   if ( revents & POLLIN )
     {
       server->wake_self = false;
-      server->vfd_ops->wait(NULL, &server->eventfd, 0);
+      //server->vfd_ops->wait(NULL, &server->eventfd, 0);
+      server->vfd_ops->reset(NULL, &server->eventfd);
     }    
   
   for ( i = 0; i < server->vfd_index; i++ )
