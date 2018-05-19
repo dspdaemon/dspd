@@ -218,7 +218,7 @@ static void client_destructor(void *obj)
   struct dspd_client *cli = obj;
 
   if ( cli->vctrl_registered )
-    dspd_daemon_vctrl_unregister(cli->index, cli->index);
+    dspd_daemon_vctrl_unregister(cli->index, cli->index, NULL);
 
   assert(cli->alloc);
   if ( cli->syncgroup )
@@ -1380,6 +1380,7 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
 {
   struct dspd_client *cli = handle;
   int32_t ret;
+  struct dspd_vctrl_reg info;
   if ( cli->err )
     {
       ret = cli->err;
@@ -1398,7 +1399,13 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
       if ( ! cli->vctrl_registered )
 	{
 	  dspd_slist_entry_wrlock(cli->list, cli->index);
-	  dspd_daemon_vctrl_register(cli->index, -1, DSPD_VCTRL_CLIENT, playback_get_volume(cli), cli->name);
+	  memset(&info, 0, sizeof(info));
+	  info.playback = cli->index;
+	  info.capture = -1;
+	  info.type = DSPD_VCTRL_CLIENT;
+	  info.initval = playback_get_volume(cli);
+	  info.name = cli->name;
+	  dspd_daemon_vctrl_register(&info);
 	  cli->vctrl_registered = true;
 	  dspd_slist_entry_rw_unlock(cli->list, cli->index);
 	}

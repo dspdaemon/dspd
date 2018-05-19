@@ -57,6 +57,7 @@ struct dspd_vctrl {
   int16_t  index;
   uint64_t tstamp;  //Time of creation
   uint64_t update_count; //Number of times updated
+  uint64_t event_id;
   int32_t  values[2];
   char     name[32];
 };
@@ -372,7 +373,9 @@ static int32_t vctrl_register(struct dspd_vctrl_list *list,
 			      int32_t capture,
 			      int32_t type,
 			      float value,
+			      uint64_t event_id,
 			      const char *name)
+			      
 {
   int32_t ret = -EEXIST;
   struct dspd_vctrl *ctrl;
@@ -413,6 +416,7 @@ static int32_t vctrl_register(struct dspd_vctrl_list *list,
   ctrl->capture = capture;
   ctrl->flags = type;
   ctrl->flags |= DSPD_VCTRL_ADD;
+  ctrl->event_id = event_id;
   if ( value < 0.0 )
     value = 0.0;
   else if ( value > 1.0 )
@@ -442,19 +446,21 @@ static int32_t vctrl_register(struct dspd_vctrl_list *list,
   return ret;
 }
 
-int32_t dspd_daemon_vctrl_register(int32_t playback,
-				   int32_t capture,
-				   int32_t type,
-				   float value,
-				   const char *name)
+int32_t dspd_daemon_vctrl_register(const struct dspd_vctrl_reg *info)
 {
   int32_t ret = -ENOSYS;
   if ( dspd_dctx.vctrl )
-    ret = vctrl_register(dspd_dctx.vctrl, playback, capture, type, value, name);
+    ret = vctrl_register(dspd_dctx.vctrl, 
+			 info->playback, 
+			 info->capture, 
+			 info->type, 
+			 info->initval, 
+			 info->hotplug_event_id, 
+			 info->name);
   return ret;
 }
 
-static bool unreg(struct dspd_vctrl_list *list, int32_t stream)
+static bool unreg(struct dspd_vctrl_list *list, int32_t stream, const uint64_t *event_id)
 {
   size_t i, j, o;
   struct dspd_vctrl *ctrl;
@@ -463,7 +469,7 @@ static bool unreg(struct dspd_vctrl_list *list, int32_t stream)
   for ( i = 0; i < list->ctrl_count; i++ )
     {
       ctrl = list->ctrl_list[i];
-      if ( ctrl->playback == stream || ctrl->capture == stream )
+      if ( (ctrl->playback == stream || ctrl->capture == stream) && (event_id == NULL || *event_id == ctrl->event_id) )
 	{
 	  //Add to the list of items to be removed.
 	  for ( j = 0; j < ARRAY_SIZE(list->removed_list); j++ )
@@ -502,15 +508,16 @@ static bool unreg(struct dspd_vctrl_list *list, int32_t stream)
 
 static int32_t vctrl_unregister(struct dspd_vctrl_list *list, 
 				int32_t playback,
-				int32_t capture)
+				int32_t capture,
+				const uint64_t *event)
 {
   int32_t ret = -ENOENT;
   dspd_mutex_lock(&list->list_lock);
   if ( playback >= 0 )
-    if ( unreg(list, playback) )
+    if ( unreg(list, playback, event) )
       ret = 0;
   if ( capture >= 0 )
-    if ( unreg(list, capture) )
+    if ( unreg(list, capture, event) )
       ret = 0;
   if ( ret == 0 )
     {
@@ -523,11 +530,12 @@ static int32_t vctrl_unregister(struct dspd_vctrl_list *list,
 }
 
 int32_t dspd_daemon_vctrl_unregister(int32_t playback,
-				     int32_t capture)
+				     int32_t capture,
+				     const uint64_t *event_id)
 {
   int32_t ret = -ENOSYS;
   if ( dspd_dctx.vctrl )
-    ret = vctrl_unregister(dspd_dctx.vctrl, playback, capture);
+    ret = vctrl_unregister(dspd_dctx.vctrl, playback, capture, event_id);
   return ret;
 }
 

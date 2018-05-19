@@ -1138,6 +1138,20 @@ static void destroy_ctl(struct alsahw_handle *hdl)
 static void alsahw_destructor(void *handle)
 {
   struct alsahw_handle *hdl = handle;
+  struct alsahw_handle *oh = hdl->other_handle;
+  int32_t p = -1, c = -1;
+  if ( hdl->stream == SND_PCM_STREAM_PLAYBACK )
+    p = hdl->stream_index;
+  else
+    c = hdl->stream_index;
+  if ( oh )
+    {
+      if ( oh->stream == SND_PCM_STREAM_PLAYBACK )
+	p = oh->stream_index;
+      else
+	c = oh->stream_index;
+    }
+  dspd_daemon_vctrl_unregister(p, c, &hdl->hotplug_event_id);
   alsahw_mixer_list_remove(hdl->params.name, hdl->hotplug_event_id);
   destroy_ctl(hdl);
   if ( hdl->handle )
@@ -2759,6 +2773,8 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
   char str[DSPD_MIX_NAME_MAX];
   uint64_t eid = 0;
   bool register_eid = false;
+  struct dspd_vctrl_reg info;
+  memset(&info, 0, sizeof(info));
   dspd_dict_find_value(device, DSPD_HOTPLUG_DESC, &desc);
   dspd_dict_find_value(device, DSPD_HOTPLUG_DEVNAME, &name);
   dspd_dict_find_value(device, DSPD_HOTPLUG_KDRIVER, &kdrv);
@@ -2816,10 +2832,22 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	snprintf(str, sizeof(str), "%d: %s Playback", ret, desc);
       else
 	snprintf(str, sizeof(str), "%d: %s Capture", ret, desc);
+      info.type = DSPD_VCTRL_DEVICE;
+      info.initval = 1.0;
+      info.hotplug_event_id = eid;
+      info.name = str;
+      
+
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
-	err = dspd_daemon_vctrl_register(ret, -1, DSPD_VCTRL_DEVICE, 1.0, str);
-      else
-	err = dspd_daemon_vctrl_register(-1, ret, DSPD_VCTRL_DEVICE, 1.0, str);
+	{
+	  info.playback = ret;
+	  info.capture = -1;
+	} else
+	{
+	  info.capture = ret;
+	  info.playback = -1;
+	}
+      err = dspd_daemon_vctrl_register(&info);
       if ( err < 0 )
 	{
 	  dspd_log(0, "Could not register virtual control: error %d", err);
@@ -2865,7 +2893,14 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 				   capture_ops);
       if ( ret < 0 )
 	goto out;
-      err = dspd_daemon_vctrl_register(ret, ret, DSPD_VCTRL_DEVICE, 1.0, desc);
+      info.type = DSPD_VCTRL_DEVICE;
+      info.initval = 1.0;
+      info.hotplug_event_id = eid;
+      info.name = desc;
+      info.playback = ret;
+      info.capture = ret;
+
+      err = dspd_daemon_vctrl_register(&info);
       if ( err < 0 )
 	{
 	  dspd_log(0, "Could not register virtual control: error %d", err);
@@ -2992,7 +3027,7 @@ static int alsahw_remove(void *arg, const struct dspd_dict *device)
 	    playback = idx;
 	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
 	    capture = idx;
-	  dspd_daemon_vctrl_unregister(playback, capture);
+
 	  if ( playback > 0 )
 	    {
 	      if ( dspd_daemon_ref(playback, DSPD_DCTL_ENUM_TYPE_SERVER) == 0 )
@@ -3009,7 +3044,6 @@ static int alsahw_remove(void *arg, const struct dspd_dict *device)
 		  dspd_daemon_unref(capture);
 		}
 	    }
-	      
 	} else
 	{
 	  dspd_log(0, "alsahw: Invalid event for slot '%s' stream '%s'", slot, stream);

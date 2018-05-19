@@ -16,12 +16,19 @@ void dspd_daemon_vctrl_set_value(uint32_t stream,
 				 uint32_t sbits,
 				 float value,
 				 const char *name);
-int32_t dspd_daemon_vctrl_register(int32_t playback,
-				   int32_t capture,
-				   int32_t type,
-				   float value,
-				   const char *name);
-int32_t dspd_daemon_vctrl_unregister(int32_t playback,
-				     int32_t capture);
+
+struct dspd_vctrl_reg {
+  int32_t     playback;
+  int32_t     capture;
+  int32_t     type;
+  float       initval;
+  const char *name;
+  uint64_t    hotplug_event_id;
+};
+
+int32_t dspd_daemon_vctrl_register(const struct dspd_vctrl_reg *info);
+int32_t dspd_daemon_vctrl_unregister(int32_t   playback,
+				     int32_t   capture,
+				     const uint64_t *hotplug_event_id);
 
 #endif

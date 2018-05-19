@@ -1884,16 +1884,16 @@ static bool check_latencies(const struct dspd_cli_params *playback, const struct
   return minl <= maxl;
 }
 
-void event_cb(struct dspd_aio_ctx    *context,
-	      void                   *arg,
-	      uint32_t                req,
-	      int32_t                 stream,
-	      int32_t                 flags,
-	      const struct dspd_async_event *evt,
-	      const void             *buf,
-	      size_t                  len)
+static void event_cb(struct dspd_aio_ctx    *context,
+		     void                   *arg,
+		     uint32_t                req,
+		     int32_t                 stream,
+		     int32_t                 flags,
+		     const struct dspd_async_event *evt,
+		     const void             *buf,
+		     size_t                  len)
 {
-  printf("GOT EVENT\n");
+  
 }
 
 int32_t dspd_pcmcli_open_device(struct dspd_pcmcli *client, 
