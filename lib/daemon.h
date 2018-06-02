@@ -21,7 +21,7 @@
 #define DSPD_HOTPLUG_KDRIVER "kernel_driver"
 //used internally
 #define DSPD_HOTPLUG_SLOT    "slot"
-//fullduplex,playback,capture,both(separate threads, not implemented yet)
+//fullduplex,playback,capture
 #define DSPD_HOTPLUG_STREAM  "stream"
 //Bus specific chip id such as 041e:3040
 #define DSPD_HOTPLUG_HWID    "hwid"
@@ -82,6 +82,16 @@ struct dspd_hotplug_handler {
  
 };
 
+struct dspd_hotplug_devname;
+struct dspd_hotplug_devname {
+  char      hwname[64];
+  int32_t   slot;
+  int32_t   sbits;
+  uint64_t  event_id;
+  const struct dspd_dict *info;
+  struct dspd_hotplug_devname *next;
+};
+
 struct dspd_hotplug {
   pthread_mutex_t     lock;
   uint32_t            device_count;
@@ -89,8 +99,11 @@ struct dspd_hotplug {
   struct dspd_ll     *handlers;
   int32_t                 default_playback;
   int32_t                 default_capture;
-  int32_t                 default_fullduplex;
+  struct dspd_hotplug_devname *names;
+  struct dspd_dict *playback_search, *capture_search;
+
 };
+
 struct dspd_startup_callback {
   void (*callback)(void *arg);
   void *arg;
@@ -125,8 +138,8 @@ struct dspd_daemon_ctx {
   int32_t rtsvc_policy;
   int32_t rtsvc_priority;
   int32_t priority;
-  struct dspd_kvpair default_device;
-  struct dspd_dict *default_dev_info;
+  //struct dspd_kvpair default_device;
+  //struct dspd_dict *default_dev_info;
 
   int glitch_correction;
 
@@ -207,7 +220,7 @@ int32_t dspd_daemon_dispatch_ctl2(struct dspd_rctx *rctx,
 
 int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags);
 void dspd_daemon_unref(uint32_t stream);
-
+int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits);
 
 #define DSPD_THREADATTR_RTIO     1
 #define DSPD_THREADATTR_RTSVC    2

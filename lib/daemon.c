@@ -1,6 +1,7 @@
 /*
  *  DAEMON - Server support code
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -51,7 +52,8 @@
 
 
 struct dspd_daemon_ctx dspd_dctx;
-
+static bool refresh_default_device_dict(struct dspd_hotplug *hp);
+static bool refresh_default_device_name(struct dspd_hotplug *hp);
 static int32_t daemon_reply_buf(struct dspd_rctx *arg, 
 				int32_t flags, 
 				const void *buf, 
@@ -124,7 +126,12 @@ static int32_t drh_syncstop(struct dspd_rctx         *context,
 			     void         *outbuf,
 			     size_t        outbufsize);
 
-
+static int32_t drh_change_route(struct dspd_rctx         *context,
+				uint32_t      req,
+				const void   *inbuf,
+				size_t        inbufsize,
+				void         *outbuf,
+				size_t        outbufsize);
 static const struct dspd_req_handler daemon_req_handlers[DSPD_DCTL_LAST+1] = {
   [DSPD_DCTL_GET_OBJMASK_SIZE] = {
     .handler = drh_get_objmask_size,
@@ -174,6 +181,13 @@ static const struct dspd_req_handler daemon_req_handlers[DSPD_DCTL_LAST+1] = {
     .rflags = 0,
     .inbufsize = sizeof(struct dspd_sg_info),
     .outbufsize = 0,
+  },
+  [DSPD_DCTL_CHANGE_ROUTE] = {
+    .handler = drh_change_route,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(struct dspd_route_req),
+    .outbufsize = sizeof(uint64_t),
   },
 };
 
@@ -517,6 +531,7 @@ static int32_t dspd_daemon_obj_ctl(struct dspd_rctx *rctx,
 static int dspd_hotplug_init(struct dspd_daemon_ctx *ctx)
 {
   int ret = pthread_mutex_init(&ctx->hotplug.lock, NULL);
+  struct dspd_dict *dict;
   if ( ret )
     {
       ret *= -1;
@@ -524,7 +539,15 @@ static int dspd_hotplug_init(struct dspd_daemon_ctx *ctx)
     {
       ctx->hotplug.default_playback = -1;
       ctx->hotplug.default_capture = -1;
-      ctx->hotplug.default_fullduplex = -1;
+
+      dict = dspd_dict_find_section(dspd_dctx.config, "DEFAULT_DEVICE");
+      ctx->hotplug.playback_search = dspd_dict_find_section(dspd_dctx.config, "DEFAULT_PLAYBACK");
+      if ( ctx->hotplug.playback_search == NULL )
+	ctx->hotplug.playback_search = dict;
+      ctx->hotplug.capture_search = dspd_dict_find_section(dspd_dctx.config, "DEFAULT_CAPTURE");
+      if ( ctx->hotplug.capture_search == NULL )
+	ctx->hotplug.capture_search = dict;
+
     }
   return ret;
 }
@@ -592,10 +615,7 @@ int dspd_setpriority(int which, int who, int prio, int *result)
   return r;
 }
 
-static void *dummy(void *p)
-{
-  return NULL;
-}
+
 
 static int get_gp(const char *value)
 {
@@ -614,6 +634,11 @@ static int get_gp(const char *value)
   return i;
 }
 
+/*
+static void *dummy(void *p)
+{
+  return NULL;
+}
 static bool is_rt(void)
 {
   dspd_threadattr_t attr = { .init = 0 };
@@ -635,7 +660,7 @@ static bool is_rt(void)
   if ( r == 0 )
     pthread_join(thr, NULL);
   return true;
-}
+  }*/
 
 static int set_caps(void)
 {
@@ -957,20 +982,6 @@ int dspd_daemon_init(int argc, char **argv)
       setrlimit(RLIMIT_RTPRIO, &rl);
     }
 
-  if ( dspd_dict_find_value(dcfg, "preferred_defaultdev", &value) )
-    {
-      if ( value )
-	{
-	  p = strchr(value, ',');
-	  if ( p )
-	    {
-	      dspd_dctx.default_device.key = strndup(value, (size_t)p - (size_t)value);
-	      dspd_dctx.default_device.value = strdup(&p[1]);
-	      if ( ! (dspd_dctx.default_device.key && dspd_dctx.default_device.value) )
-		goto out;
-	    }
-	}
-    }
   pwbuf = malloc(pwsize);
   if ( ! pwbuf )
     {
@@ -1191,6 +1202,8 @@ int dspd_daemon_init(int argc, char **argv)
   dspd_dctx.ctl_ops = &daemon_rcb;
   dspd_dctx.magic = DSPD_OBJ_TYPE_DAEMON_CTX;
   
+ 
+
   /*tmp = malloc(PATH_MAX);
   if ( ! tmp )
   goto out;*/
@@ -1330,11 +1343,101 @@ int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
   return ret;
 }
 
-static void init_device_notify(const struct dspd_dict *device)
+int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits)
+{
+  struct dspd_hotplug_devname *dev;
+  int32_t ret = -ENOENT, s = -1;
+  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  if ( strcmp(hwname, "default") == 0 )
+    {
+      if ( sbits == DSPD_PCM_SBIT_PLAYBACK )
+	s = dspd_dctx.hotplug.default_playback;
+      else if ( sbits == DSPD_PCM_SBIT_CAPTURE )
+	s = dspd_dctx.hotplug.default_capture;
+      if ( s > 0 )
+	{
+	  ret = dspd_daemon_ref(s, DSPD_DCTL_ENUM_TYPE_SERVER);
+	  if ( ret == 0 )
+	    ret = s;
+	}
+    } else
+    {
+      for ( dev = dspd_dctx.hotplug.names; dev; dev = dev->next )
+	{
+	  if ( (dev->sbits & sbits) == sbits && dspd_devname_cmp(dev->hwname, hwname) == true )
+	    {
+	      ret = dspd_daemon_ref(dev->slot, DSPD_DCTL_ENUM_TYPE_SERVER);
+	      if ( ret == 0 )
+		ret = dev->slot;
+	      break;
+	    }
+	}
+    }
+  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  return ret;
+}
+
+static void remove_device(struct dspd_hotplug *hotplug, uint64_t event_id, const char *hwname)
+{
+  struct dspd_hotplug_devname *dev, **prev = &hotplug->names;
+  bool found;
+  do {
+    found = false;
+    for ( dev = hotplug->names; dev; dev = dev->next )
+      {
+	if ( dev->event_id == event_id && strcmp(dev->hwname, hwname) == 0 )
+	  {
+	    *prev = dev->next;
+	    free(dev);
+	    found = true;
+	    break;
+	  }
+	prev = &dev->next;
+      }
+  } while ( found );
+}
+
+static void init_device_notify(struct dspd_hotplug *hotplug, const struct dspd_dict *device)
 {
   struct dspd_ll *curr;
   struct dspd_hotplug_handler *h;
-  for ( curr = dspd_dctx.hotplug.handlers; curr; curr = curr->next )
+  struct dspd_hotplug_devname *dev;
+  const char *slot, *stream, *eid, *name;
+  dev = calloc(1, sizeof(*dev));
+  if ( dev )
+    {
+      name = dspd_dict_value_for_key(device, DSPD_HOTPLUG_DEVNAME);
+      stream = dspd_dict_value_for_key(device, DSPD_HOTPLUG_STREAM);
+      slot = dspd_dict_value_for_key(device, DSPD_HOTPLUG_SLOT);
+      eid = dspd_dict_value_for_key(device, DSPD_HOTPLUG_EVENT_ID);
+      if ( name && stream && slot && eid )
+	{
+	  int sbits = 0;
+	  if ( strcmp(stream, "playback") == 0 )
+	    sbits = DSPD_PCM_SBIT_PLAYBACK;
+	  else if ( strcmp(stream, "capture") == 0 )
+	    sbits = DSPD_PCM_SBIT_CAPTURE;
+	  else if ( strcmp(stream, "fullduplex") == 0 )
+	    sbits = DSPD_PCM_SBIT_FULLDUPLEX;
+	  if ( sbits != 0 &&
+	       strlcpy(dev->hwname, name, sizeof(dev->hwname)) < sizeof(dev->hwname) &&
+	       dspd_strtou64(eid, &dev->event_id, 0) == 0 &&
+	       dspd_strtoi32(slot, &dev->slot, 0) == 0 )
+	    {
+	      dev->next = hotplug->names;
+	      dev->sbits = sbits;
+	      dev->info = device;
+	      hotplug->names = dev;
+	    } else
+	    {
+	      free(dev);
+	    }
+	} else
+	{
+	  free(dev);
+	}
+    }
+  for ( curr = hotplug->handlers; curr; curr = curr->next )
     {
       h = curr->pointer;
       if ( h->callbacks->init_device != NULL )
@@ -1342,168 +1445,13 @@ static void init_device_notify(const struct dspd_dict *device)
     }
 }
 
-static int32_t getdevnum(const char *name)
-{
-  const char *p = strchr(name, ':');
-  int32_t i = -1;
-  if ( p )
-    dspd_strtoi32(&p[1], &i, 10);
-  return i;
-}
 
 static void dspd_hotplug_updatedefault(struct dspd_dict *dict)
 {
-  uint8_t mask[DSPD_MASK_SIZE];
-  struct dspd_device_stat info;
-  int32_t playback = INT32_MAX, capture = INT32_MAX, fulldup = INT32_MAX;
-  int32_t pidx = -1, cidx = -1, fidx = -1;
-  size_t i, bits = sizeof(mask) * 8;
-  int32_t ret;
-  size_t br;
-  char *n; int32_t dev_num = -1;
-  int32_t dev_idx = -1; char *slot;
-  bool found_device = false;
-  bool removed = !!dict;
-  if ( dict == NULL && dspd_dctx.default_device.key != NULL )
-    dict = dspd_dctx.default_dev_info;
-  
-  if ( dict && dspd_dctx.default_device.key )
-    {
-	      
-      if ( dspd_dict_test_value(dict, dspd_dctx.default_device.key, dspd_dctx.default_device.value) )
-	{
-	  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_SLOT, &slot) )
-	    {
-	      if ( slot )
-		{
-		  dev_idx = atoi(slot);
-		}
- 	    }
-	  if ( dspd_dict_find_value(dict, DSPD_HOTPLUG_DEVNAME, &n) )
-	    {
-	      if ( n )
-		{
-		  dev_num = getdevnum(n);
-		}
-	    }
-	}
-    }
-
-  if ( dev_idx >= 0 && dev_num >= 0 && removed == false )
-    {
-      ret = dspd_stream_ctl(&dspd_dctx,
-			    dev_idx,
-			    DSPD_SCTL_SERVER_STAT,
-			    NULL,
-			    0,
-			    &info,
-			    sizeof(info),
-			    &br);
-      if ( ret == 0 && br == sizeof(info) )
-	{
-	  ret = getdevnum(info.name);
-	  if ( ret == dev_num )
-	    {
-	      if ( info.streams == DSPD_PCM_SBIT_PLAYBACK )
-		{
-		  playback = ret;
-		  pidx = dev_idx;
-		  found_device = true;
-		} else if ( info.streams == DSPD_PCM_SBIT_CAPTURE )
-		{
-		  capture = ret;
-		  cidx = dev_idx;
-		  found_device = true;
-		} else
-		{
-		  fulldup = ret;
-		  fidx = dev_idx;
-		  found_device = true;
-		}
-	    }
-	}
-    }
-
-
-  if ( ! found_device )
-    {
-      dspd_slist_get_object_mask(dspd_dctx.objects,
-				 mask,
-				 sizeof(mask),
-				 1,
-				 0);
-      for ( i = 0; i < bits; i++ )
-	{
-	  if ( dspd_test_bit(mask, i) )
-	    {
-	      if ( dspd_daemon_ref(i, DSPD_DCTL_ENUM_TYPE_SERVER) == 0 )
-		{
-		  ret = dspd_stream_ctl(&dspd_dctx,
-					i,
-					DSPD_SCTL_SERVER_STAT,
-					NULL,
-					0,
-					&info,
-					sizeof(info),
-					&br);
-		  if ( ret == 0 && br == sizeof(info) )
-		    {
-		      ret = getdevnum(info.name);
-		      if ( ret >= 0 )
-			{
-			  if ( info.streams == DSPD_PCM_SBIT_PLAYBACK )
-			    {
-			      if ( ret < playback && playback != dev_num )
-				{
-				  playback = ret;
-				  pidx = i;
-				}
-			    } else if ( info.streams == DSPD_PCM_SBIT_CAPTURE )
-			    {
-			      if ( ret < capture && capture != dev_num )
-				{
-				  capture = ret;
-				  cidx = i;
-				}
-			    } else if ( info.streams == (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE) )
-			    {
-			      if ( ret < fulldup && fulldup != dev_num )
-				{
-				  fulldup = ret;
-				  fidx = i;
-				}
-			    }
-			}
-		    }
-		  dspd_daemon_unref(i);
-		}
-	    }
-	}
-    }
-  
-  
-  if ( fulldup == INT32_MAX )
-    {
-      dspd_dctx.hotplug.default_fullduplex = -1;
-      dspd_dctx.hotplug.default_capture = -1;
-      dspd_dctx.hotplug.default_playback = -1;
-    } else if ( dspd_dctx.default_dev_info == NULL )
-    {
-      dspd_dctx.hotplug.default_fullduplex = fidx;
-      dspd_dctx.hotplug.default_playback = fidx;
-      dspd_dctx.hotplug.default_capture = fidx;
-      if ( fidx == dev_idx && dspd_dctx.default_dev_info != dict )
-	{
-	  dspd_dict_free(dspd_dctx.default_dev_info);
-	  dspd_dctx.default_dev_info = dict;
-	}
-    }
-
-  if ( playback != INT32_MAX && dspd_dctx.hotplug.default_playback == -1 && pidx != -1 )
-    dspd_dctx.hotplug.default_playback = pidx;
-  if ( capture != INT32_MAX && dspd_dctx.hotplug.default_capture == -1 && cidx != -1 )
-    dspd_dctx.hotplug.default_capture = cidx;
-
+  if ( ! refresh_default_device_dict(&dspd_dctx.hotplug) )
+    refresh_default_device_name(&dspd_dctx.hotplug);
+  dspd_log(0, "Default devices: playback=%d capture=%d", 
+	   dspd_dctx.hotplug.default_playback, dspd_dctx.hotplug.default_capture);
 }
 
 static bool str_equal(const char *str1, const char *str2)
@@ -1650,7 +1598,7 @@ int dspd_daemon_hotplug_add(const struct dspd_dict *dict)
 	  ret = -ENOMEM;
 	}
       if ( ret >= 0 )
-	init_device_notify(kvs);
+	init_device_notify(&dspd_dctx.hotplug, kvs);
       else
 	kvs = NULL;
     }
@@ -1676,7 +1624,7 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
   struct dspd_dict *curr, *c;
   struct dspd_ll *l;
   struct dspd_hotplug_handler *h;
-  int r, isdefault = 0;
+  int r;
   pthread_mutex_lock(&dspd_dctx.hotplug.lock);
   curr = dspd_dctx.hotplug.devices;
   do { 
@@ -1694,8 +1642,6 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
       }
     if ( curr )
       {
-	if ( curr == dspd_dctx.default_dev_info )
-	  isdefault = 1;
 	for ( l = dspd_dctx.hotplug.handlers; l; l = l->next )
 	  {
 	    h = l->pointer;
@@ -1719,6 +1665,16 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
 	    c = curr->next;
 	    curr->next = NULL;
 	    curr->prev = NULL;
+
+	    const char *eid = dspd_dict_value_for_key(curr, DSPD_HOTPLUG_EVENT_ID);
+	    const char *hwn = dspd_dict_value_for_key(curr, DSPD_HOTPLUG_DEVNAME);
+	    if ( eid && hwn )
+	      {
+		uint64_t e;
+		if ( dspd_strtou64(eid, &e, 0) == 0 )
+		  remove_device(&dspd_dctx.hotplug, e, hwn);
+	      }
+
 	    dspd_dict_free(curr);
 	    curr = c;
 	  } else
@@ -1730,11 +1686,7 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
   
 
   
-  if ( isdefault != 0 && ret == 0 )
-    {
-      dspd_dctx.default_dev_info = NULL;
-      dspd_hotplug_updatedefault(NULL);
-    }
+  dspd_hotplug_updatedefault(NULL);
   pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
@@ -2273,28 +2225,17 @@ static int32_t drh_get_defaultdev(struct dspd_rctx         *context,
     } else if ( streams == DSPD_PCM_SBIT_CAPTURE )
     {
       dev = dspd_dctx.hotplug.default_capture;
-    } else if ( streams == (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE) )
-    {
-      dev = dspd_dctx.hotplug.default_fullduplex;
     } else if ( streams == 0 && outbufsize == sizeof(fdev) )
     {
-      if ( dspd_dctx.hotplug.default_fullduplex > 0 )
-	{
-	  fdev = (uint32_t)dspd_dctx.hotplug.default_fullduplex;
-	  fdev <<= 32U;
-	  fdev |= (uint32_t)dspd_dctx.hotplug.default_fullduplex;
-	} else
-	{
-	  if ( dspd_dctx.hotplug.default_playback > 0 )
-	    fdev = (uint32_t)dspd_dctx.hotplug.default_playback;
-	  else
-	    fdev = UINT32_MAX;
-	  fdev <<= 32U;
-	  if ( dspd_dctx.hotplug.default_capture > 0 )
-	    fdev |= (uint32_t)dspd_dctx.hotplug.default_capture;
-	  else
-	    fdev |= UINT32_MAX;
-	}
+      if ( dspd_dctx.hotplug.default_playback > 0 )
+	fdev = (uint32_t)dspd_dctx.hotplug.default_playback;
+      else
+	fdev = UINT32_MAX;
+      fdev <<= 32U;
+      if ( dspd_dctx.hotplug.default_capture > 0 )
+	fdev |= (uint32_t)dspd_dctx.hotplug.default_capture;
+      else
+	fdev |= UINT32_MAX;
     } else
     {
       dev = -1;
@@ -2360,6 +2301,51 @@ static int32_t drh_syncstop(struct dspd_rctx         *context,
       ret = ENOENT;
     }
   return dspd_req_reply_err(context, 0, ret);
+}
+
+static int32_t drh_change_route(struct dspd_rctx *context,
+				uint32_t      req,
+				const void   *inbuf,
+				size_t        inbufsize,
+				void         *outbuf,
+				size_t        outbufsize)
+{
+  const struct dspd_route_req *rr = inbuf;
+  int32_t ret = EINVAL;
+  bool unref_cli = false, unref_dev = false;
+  uint64_t tstamp;
+  size_t br = 0;
+  if ( rr->client > 0 && rr->device > 0 )
+    {
+      ret = dspd_daemon_ref(rr->client, DSPD_DCTL_ENUM_TYPE_CLIENT);
+      if ( ret == 0 )
+	{
+	  unref_cli = true;
+	  ret = dspd_daemon_ref(rr->device, DSPD_DCTL_ENUM_TYPE_SERVER);
+	  if ( ret == 0 )
+	    {
+	      unref_dev = true;
+	      ret = dspd_stream_ctl(&dspd_dctx,
+				    rr->client,
+				    DSPD_SCTL_CLIENT_CHANGE_ROUTE,
+				    &rr->device,
+				    sizeof(rr->device),
+				    &tstamp,
+				    sizeof(tstamp),
+				    &br);
+
+	    }
+	}
+      if ( unref_cli )
+	dspd_daemon_unref(rr->client);
+      if ( unref_dev )
+	dspd_daemon_unref(rr->device);
+    }
+  if ( ret == 0 && br > 0 )
+    ret = dspd_req_reply_buf(context, 0, &tstamp, sizeof(tstamp));
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
 }
 
 static int32_t daemon_reply_buf(struct dspd_rctx *rctx, 
@@ -2579,4 +2565,119 @@ int dspd_daemon_set_ipc_perm_fd(int fd)
        fchmod(fd, dspd_dctx.ipc_mode) < 0 )
     return -errno;
   return 0;
+}
+
+//Compare dict against search using only what is in search
+static bool dict_cmp(const struct dspd_dict *dict, const struct dspd_dict *search)
+{
+  size_t i;
+  bool ret = true;
+  const struct dspd_kvpair *kvp;
+  for ( i = 0; i < search->count; i++ )
+    {
+      kvp = &search->list[i];
+      if ( ! dspd_dict_test_value(dict, kvp->key, kvp->value) )
+	{
+	  ret = false;
+	  break;
+	}
+    }
+  return ret;
+}
+
+static bool refresh_default_device_dict(struct dspd_hotplug *hp)
+{
+  const struct dspd_dict *dev;
+  const struct dspd_hotplug_devname *name;
+  int32_t pdev = -1, cdev = -1;
+  const char *slot;
+  if ( hp->playback_search || hp->capture_search )
+    {
+      for ( name = hp->names; name != NULL && (pdev < 0 || cdev < 0); name = name->next )
+	{
+	  dev = name->info;
+	  if ( (name->sbits & DSPD_PCM_SBIT_PLAYBACK) && 
+	       hp->playback_search != NULL && pdev < 0 && dict_cmp(dev, hp->playback_search) == true )
+	    {
+	      slot = dspd_dict_value_for_key(dev, DSPD_HOTPLUG_SLOT);
+	      if ( slot != NULL )
+		if ( dspd_strtoi32(slot, &pdev, 0) == 0 )
+		  if ( pdev >= DSPD_MAX_OBJECTS )
+		    pdev = -1;
+	    }
+	  if ( (name->sbits & DSPD_PCM_SBIT_CAPTURE) && 
+	       hp->capture_search != NULL && cdev < 0 && dict_cmp(dev, hp->capture_search) == true )
+	    {
+	      slot = dspd_dict_value_for_key(dev, DSPD_HOTPLUG_SLOT);
+	      if ( slot != NULL )
+		if ( dspd_strtoi32(slot, &cdev, 0) == 0 )
+		  if ( cdev >= DSPD_MAX_OBJECTS )
+		    cdev = -1;
+	    }
+	}
+    }
+  hp->default_playback = pdev;
+  hp->default_capture = cdev;
+  return pdev > 0 && cdev > 0;
+}
+
+static struct dspd_hotplug_devname *find_default_dev(struct dspd_hotplug *hp, 
+						     struct dspd_hotplug_devname *match)
+{
+  struct dspd_hotplug_devname *dev, *ret = NULL;
+  int32_t slot = -1;
+  for ( dev = hp->names; dev; dev = dev->next )
+    {
+      if ( match != NULL )
+	{
+	  if ( dev->sbits != match->sbits )
+	    {
+	      if ( strcmp(dev->hwname, match->hwname) == 0 || dev->slot == match->slot )
+		{
+		  ret = dev;
+		  break;
+		}
+	    } else if ( match->sbits == DSPD_PCM_SBIT_FULLDUPLEX && dev->slot == match->slot )
+	    {
+	      ret = dev;
+	      break;
+	    }
+	} else if ( dev->slot > slot )
+	{
+	  slot = dev->slot;
+	  ret = dev;
+	}
+    }
+  return ret;
+}
+
+static bool refresh_default_device_name(struct dspd_hotplug *hp)
+{
+  struct dspd_hotplug_devname *dev, *dn1 = NULL, *dn2 = NULL, *match = NULL;
+  if ( hp->default_playback < 0 || hp->default_capture < 0 )
+    {
+      for ( dev = hp->names; dev; dev = dev->next )
+	{
+	  if ( dev->slot == hp->default_playback || dev->slot == hp->default_capture )
+	    {
+	      match = dev;
+	      break;
+	    }
+	}
+      dn1 = find_default_dev(hp, match);
+      if ( match != NULL )
+	dn2 = match;
+      else
+	dn2 = find_default_dev(hp, dn1);
+      if ( dn1 && (dn1->sbits & DSPD_PCM_SBIT_PLAYBACK) )
+	hp->default_playback = dn1->slot;
+      else if ( dn2 && (dn2->sbits & DSPD_PCM_SBIT_PLAYBACK) )
+	hp->default_playback = dn2->slot;
+
+      if ( dn1 && (dn1->sbits & DSPD_PCM_SBIT_CAPTURE) )
+	hp->default_capture = dn1->slot;
+      else if ( dn2 && (dn2->sbits & DSPD_PCM_SBIT_CAPTURE) )
+	hp->default_capture = dn2->slot;
+    }
+  return hp->default_playback > 0 && hp->default_capture > 0;
 }

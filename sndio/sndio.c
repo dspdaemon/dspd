@@ -728,6 +728,12 @@ static int amsg_auth(struct sndio_client *cli)
   return send_none(cli, ret);
 }
 
+static void route_changed(int32_t dev, int32_t index, void *client, int32_t err, void *arg)
+{
+  //Nothing to do since the device isn't accessed directly.
+  return;
+}
+
 static int amsg_hello(struct sndio_client *cli)
 {
   int ret;
@@ -739,6 +745,7 @@ static int amsg_hello(struct sndio_client *cli)
   struct dspd_cli_info_pkt info;
   socklen_t len;
   char path[1024];
+  struct dspd_client_cb ccb;
   if ( (mode & ~(DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) != 0 ||
        h->version != AMSG_VERSION )
     return -1; //Unsupported mask
@@ -831,7 +838,23 @@ static int amsg_hello(struct sndio_client *cli)
 	{
 	  cli->pclient_idx = dspd_rclient_client_index(cli->pclient);
 	  if ( cli->pclient_idx > 0 )
-	    cli->server->cli_map[cli->pclient_idx] = cli->sio_idx;
+	    {
+	      cli->server->cli_map[cli->pclient_idx] = cli->sio_idx;
+	      if ( cli->server->ctx != NULL )
+		{
+		  memset(&ccb, 0, sizeof(ccb));
+		  ccb.index = cli->pclient_idx;
+		  ccb.callback.route_changed = route_changed;
+		  ccb.arg = cli;
+		  (void)dspd_rclient_ctl(cli->pclient,
+					 DSPD_SCTL_CLIENT_SETCB,
+					 &ccb,
+					 sizeof(ccb),
+					 NULL,
+					 0,
+					 &br);
+		}
+	    }
 	}
       ret = send_ack(cli);
     } else

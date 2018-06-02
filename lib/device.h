@@ -345,6 +345,7 @@ struct dspd_cli_params {
 
   int32_t latency;
 #define DSPD_CLI_FLAG_SHM (1<<0)
+#define DSPD_CLI_FLAG_DONTROUTE (1<<1)
 #define DSPD_CLI_FLAG_RESERVED (1<<31)
   int32_t flags;
 

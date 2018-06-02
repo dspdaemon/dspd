@@ -215,7 +215,14 @@ int main(int argc, char **argv)
     err_exit(ret);
   test_playback(cli, &params, fp, params.rate);
 
- 
+  /*
+    The idea is that instead of polling for space and delay separately,
+    the buffer size is the maximum delay and the fill level is kept at
+    whatever would be appropriate to maintain that delay.  Otherwise
+    the delay would be bufsize+hwdelay and the hardware delay can vary.
+    This doesn't work pefectly but it is probably good enough to implement
+    certain APIs such as sndio.
+  */ 
 
   printf("Testing constant latency...\n");
   ret = dspd_pcmcli_prepare(cli, NULL, NULL);

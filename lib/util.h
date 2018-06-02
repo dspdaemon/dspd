@@ -104,5 +104,5 @@ static inline bool dspd_tmperr(int err)
 }
 
 #define dspd_fatal_err(_e) (!dspd_tmperr(_e))
-
+bool dspd_devname_cmp(const char *devname, const char *str);
 #endif

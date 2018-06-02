@@ -624,3 +624,25 @@ const char *dspd_strtok_c(const char *str, const char *delim, const char **savep
   } while ( *length == 0 && ret != NULL );
   return ret;
 }
+
+bool dspd_devname_cmp(const char *devname, const char *str)
+{
+  const char *p;
+  bool ret = false;
+  if ( str != NULL )
+    {
+      if ( str[0] == ':' )
+	{
+	  p = strchr(devname, ':');
+	  if ( p != NULL )
+	    ret = strcmp(p, str) == 0;
+	} else
+	{
+	  ret = strcmp(devname, str) == 0;
+	}
+    } else
+    {
+      ret = true;
+    }
+  return ret;
+}

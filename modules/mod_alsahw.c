@@ -1,6 +1,7 @@
 /*
  *  ALSAHW - ALSA PCM hardware support
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -2835,7 +2836,8 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
       info.type = DSPD_VCTRL_DEVICE;
       info.initval = 1.0;
       info.hotplug_event_id = eid;
-      info.name = str;
+      info.displayname = str;
+
       
 
       if ( params.stream == DSPD_PCM_STREAM_PLAYBACK )
@@ -2896,9 +2898,9 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
       info.type = DSPD_VCTRL_DEVICE;
       info.initval = 1.0;
       info.hotplug_event_id = eid;
-      info.name = desc;
       info.playback = ret;
       info.capture = ret;
+      info.displayname = desc;
 
       err = dspd_daemon_vctrl_register(&info);
       if ( err < 0 )

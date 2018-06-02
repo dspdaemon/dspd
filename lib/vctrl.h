@@ -22,7 +22,7 @@ struct dspd_vctrl_reg {
   int32_t     capture;
   int32_t     type;
   float       initval;
-  const char *name;
+  const char *displayname;
   uint64_t    hotplug_event_id;
 };
 

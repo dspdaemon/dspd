@@ -456,7 +456,7 @@ int32_t dspd_daemon_vctrl_register(const struct dspd_vctrl_reg *info)
 			 info->type, 
 			 info->initval, 
 			 info->hotplug_event_id, 
-			 info->name);
+			 info->displayname);
   return ret;
 }
 

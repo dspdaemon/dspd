@@ -5,14 +5,26 @@
 #define DSPD_DCTL_ENUM_TYPE_ANY 0
 
 enum dspd_client_cb_idx {
+  DSPD_CLIENT_CB_CLEAR_ALL = -1,
   DSPD_CLIENT_CB_ERROR,
+  DSPD_CLIENT_CB_ROUTE_CHANGED,
 };
-struct dspd_client_cb {
-  enum dspd_client_cb_idx  index;
-  void                    *callback;
-  void                    *arg;
+typedef void (*dspd_client_error_cb_t)(void *dev, int32_t index, void *client, int32_t err, void *arg);
+typedef void (*dspd_client_change_route_cb_t)(int32_t dev, int32_t index, void *client, int32_t err, void *arg);
+union dspd_client_cb_t {
+  dspd_client_error_cb_t error;
+  dspd_client_change_route_cb_t route_changed;
 };
 
+struct dspd_client_cb {
+  enum dspd_client_cb_idx  index;
+  union dspd_client_cb_t   callback;
+  void                    *arg;
+};
+struct dspd_route_req {
+  int32_t client;
+  int32_t device;
+};
 
 enum dspd_dctl_req {
   //Daemon control
@@ -28,7 +40,8 @@ enum dspd_dctl_req {
   DSPD_DCTL_ASYNC_RESERVED,
   DSPD_DCTL_SYNCSTART,
   DSPD_DCTL_SYNCSTOP,
-  DSPD_DCTL_LAST = DSPD_DCTL_SYNCSTOP,
+  DSPD_DCTL_CHANGE_ROUTE,
+  DSPD_DCTL_LAST = DSPD_DCTL_CHANGE_ROUTE,
   DSPD_DCTL_MAX = 4095,
 
   //Stream object control
@@ -62,6 +75,8 @@ enum dspd_dctl_req {
   DSPD_SCTL_CLIENT_SWPARAMS,
   DSPD_SCTL_CLIENT_PAUSE,
   DSPD_SCTL_CLIENT_SETINFO,
+  DSPD_SCTL_CLIENT_CHANGE_ROUTE,
+  DSPD_SCTL_CLIENT_GETDEV,
   DSPD_SCTL_CLIENT_MAX = 6144,
   DSPD_SCTL_SERVER_MIN,
   DSPD_SCTL_SERVER_CONNECT, //Connect: server<=client

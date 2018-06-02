@@ -98,6 +98,10 @@ struct dspd_client {
   int32_t uid;
   int32_t gid;
   int32_t pid;
+
+  dspd_client_change_route_cb_t route_changed_cb;
+  void *route_changed_arg;
+  bool  dontroute;
 };
 
 
@@ -348,6 +352,10 @@ static int32_t dspd_client_release(struct dspd_client *cli)
   size_t br;
   if ( cli->device >= 0 )
     {
+      dspd_mutex_lock(&cli->sync_start_lock);
+      cli->server_ops = NULL;
+      dspd_mutex_unlock(&cli->sync_start_lock);
+      
       ret = dspd_stream_ctl(&dspd_dctx,
 			    cli->device,
 			    DSPD_SCTL_SERVER_DISCONNECT,
@@ -1404,7 +1412,7 @@ static int32_t playback_set_params(void *handle, const struct dspd_cli_params *p
 	  info.capture = -1;
 	  info.type = DSPD_VCTRL_CLIENT;
 	  info.initval = playback_get_volume(cli);
-	  info.name = cli->name;
+	  info.displayname = cli->name;
 	  dspd_daemon_vctrl_register(&info);
 	  cli->vctrl_registered = true;
 	  dspd_slist_entry_rw_unlock(cli->list, cli->index);
@@ -1964,41 +1972,23 @@ static int32_t client_getvolume(struct dspd_rctx *context,
   return dspd_req_reply_buf(context, 0, &vol, sizeof(vol));
 }
 
-static int32_t client_connect(struct dspd_rctx *context,
-			      uint32_t      req,
-			      const void   *inbuf,
-			      size_t        inbufsize,
-			      void         *outbuf,
-			      size_t        outbufsize)
+static int32_t connect_to_device(struct dspd_client *cli, uint32_t idx)
 {
-  struct dspd_client *cli = dspd_req_userdata(context);
-  uint32_t idx = *(uint32_t*)inbuf;
   void *server_ops, *client_ops, *data;
   int32_t err = EINVAL, sb;
   size_t br;
   struct dspd_cli_params params;
   uint32_t playback_rate = 0, capture_rate = 0, latency;
 
-  dspd_slist_entry_wrlock(cli->list, cli->index);
-  dspd_slist_entry_srvlock(cli->list, cli->index);
-
-
-
   //Reconnecting is ok
   if ( cli->device >= 0 )
     {
       if ( cli->device != idx )
-	{
-	  err = EALREADY;
-	  goto out;
-	}
+	return EALREADY;
     }
   if ( idx < 0 || idx >= DSPD_MAX_OBJECTS )
-    {
-      err = EINVAL;
-      goto out;
-    }
-
+    return EINVAL;
+  
   //Make sure it is a server and get a reference if it is.
   dspd_slist_entry_wrlock(cli->list, idx);
   if ( dspd_slist_refcnt(cli->list, idx) > 0 )
@@ -2105,7 +2095,9 @@ static int32_t client_connect(struct dspd_rctx *context,
 	  if ( err == 0 && latency > 0 )
 	    cli->latency = latency;
 	  cli->device = idx;
+	  dspd_mutex_lock(&cli->sync_start_lock);
 	  cli->server_ops = server_ops;
+	  dspd_mutex_unlock(&cli->sync_start_lock);
 	  cli->server = data;
 	  dspd_stream_setsrc(cli, false);
 	  dspd_slist_entry_set_key(cli->list, cli->index, idx);
@@ -2138,30 +2130,68 @@ static int32_t client_connect(struct dspd_rctx *context,
 	  err = refresh_chmap(cli, DSPD_PCM_SBIT_FULLDUPLEX);
 	}
     }
+ 
+  return err;
+}
 
- out:
+static int32_t client_connect(struct dspd_rctx *context,
+			      uint32_t      req,
+			      const void   *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  uint32_t idx = *(uint32_t*)inbuf;
+  int32_t err;
+  dspd_slist_entry_wrlock(cli->list, cli->index);
+  dspd_slist_entry_srvlock(cli->list, cli->index);
+  err = connect_to_device(cli, idx);
   dspd_slist_entry_srvunlock(cli->list, cli->index);
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_err(context, 0, err);
 }
 
 static int32_t client_disconnect(struct dspd_rctx *context,
-				  uint32_t      req,
-				  const void   *inbuf,
-				  size_t        inbufsize,
-				  void         *outbuf,
-				  size_t        outbufsize)
+				 uint32_t      req,
+				 const void   *inbuf,
+				 size_t        inbufsize,
+				 void         *outbuf,
+				 size_t        outbufsize)
 {
   
   int32_t ret;
   struct dspd_client *cli = dspd_req_userdata(context);
+  int32_t sbits;
+  uint64_t delay, d1, d2;
+  if ( inbufsize == sizeof(sbits) )
+    {
+      sbits = *(int32_t*)inbuf;
+      client_stop_now(cli, sbits, true);
+    }
   dspd_slist_entry_wrlock(cli->list, cli->index);
   ret = dspd_client_release(cli);
   cli->device_reserved = 0;
   cli->min_latency = dspd_get_tick();
   cli->mq_fd = -1;
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
-  return dspd_req_reply_err(context, 0, ret);
+  if ( outbufsize == sizeof(delay) )
+    {
+      if ( cli->playback.ready && cli->playback.params.rate )
+	d1 = 1000000000 / cli->playback.params.rate;
+      else
+	d1 = 0;
+      if ( cli->capture.ready && cli->capture.params.rate )
+	d2 = 1000000000 / cli->capture.params.rate;
+      else
+	d2 = 0;
+      delay = MAX(d1, d2);
+      ret = dspd_req_reply_buf(context, 0, &delay, sizeof(delay));
+    } else
+    {
+      ret = dspd_req_reply_err(context, 0, ret);
+    }
+  return ret;
 }
 
 
@@ -2380,10 +2410,19 @@ static int32_t client_setcb(struct dspd_rctx *context,
   dspd_client_srvlock(cli);
   switch(cb->index)
     {
+    case DSPD_CLIENT_CB_CLEAR_ALL:
+      cli->error_cb = NULL;
+      cli->error_arg = NULL;
+      cli->route_changed_cb = NULL;
+      cli->route_changed_arg = NULL;
+      break;
     case DSPD_CLIENT_CB_ERROR:
-      cli->error_cb = cb->callback;
+      cli->error_cb = cb->callback.error;
       cli->error_arg = cb->arg;
       break;
+    case DSPD_CLIENT_CB_ROUTE_CHANGED:
+      cli->route_changed_cb = cb->callback.route_changed;
+      cli->route_changed_arg = cb->arg;
     default:
       ret = EINVAL;
       break;
@@ -2419,6 +2458,33 @@ static int32_t client_stat(struct dspd_rctx *context,
   params->gid = cli->gid;
   dspd_slist_entry_rw_unlock(cli->list, cli->index);
   return dspd_req_reply_buf(context, 0, params, sizeof(*params));
+}
+
+static int32_t reserve_device(struct dspd_client *cli, int32_t server)
+{
+  int32_t ret = dspd_daemon_ref(server, DSPD_DCTL_ENUM_TYPE_SERVER);
+  size_t br;
+  if ( ret == 0 )
+    {
+      ret = dspd_stream_ctl(&dspd_dctx,
+			    server,
+			    DSPD_SCTL_SERVER_RESERVE,
+			    &cli->index,
+			    sizeof(cli->index),
+			    NULL,
+			    0,
+			    &br);
+      if ( ret == 0 )
+	{
+	  cli->device = server;
+	  cli->device_reserved = 1;
+	  dspd_slist_ref(cli->list, cli->index);
+	} else
+	{
+	  dspd_daemon_unref(server);
+	}
+    }
+  return ret;
 }
 
 static int32_t client_reserve(struct dspd_rctx *context,
@@ -2471,29 +2537,7 @@ static int32_t client_reserve(struct dspd_rctx *context,
   
   
   if ( ret == 0 )
-    {
-      ret = dspd_daemon_ref(server, DSPD_DCTL_ENUM_TYPE_SERVER);
-      if ( ret == 0 )
-	{
-	  ret = dspd_stream_ctl(&dspd_dctx,
-				server,
-				DSPD_SCTL_SERVER_RESERVE,
-				&cli->index,
-				sizeof(cli->index),
-				NULL,
-				0,
-				&br);
-	  if ( ret == 0 )
-	    {
-	      cli->device = server;
-	      cli->device_reserved = 1;
-	      dspd_slist_ref(cli->list, cli->index);
-	    } else
-	    {
-	      dspd_daemon_unref(server);
-	    }
-	}
-    }
+    ret = reserve_device(cli, server);
 
  out:
   dspd_slist_entry_srvunlock(cli->list, cli->index);
@@ -2656,7 +2700,6 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
   struct dspd_client_trigger_tstamp *ts;
   if ( ! cli->server_ops )
     return -EBADFD;
-
   dspd_mutex_lock(&cli->sync_start_lock);
   if ( cli->playback.ready == false )
     streams &= ~DSPD_PCM_SBIT_PLAYBACK;
@@ -2679,8 +2722,8 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
       ts->playback_tstamp = cli->playback.trigger_tstamp;
       ts->capture_tstamp = cli->capture.trigger_tstamp;
       dspd_mbx_release_write(cli->sync_start_tstamp, ts);
-
     }
+
   ret = cli->server_ops->trigger(cli->server, (uint32_t)cli->index, cli->trigger);
 
   if ( ret == 0 && cli->trigger != old )
@@ -2712,7 +2755,6 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
 	}
       dspd_slist_entry_srvunlock(cli->list, cli->index);
     }
-
   dspd_mutex_unlock(&cli->sync_start_lock);
   return ret;
 }
@@ -2999,6 +3041,156 @@ static int32_t client_setinfo(struct dspd_rctx *context,
   return dspd_req_reply_err(context, 0, ret);
 }
 
+#define ENABLE_ROUTING
+
+static int32_t client_change_route(struct dspd_rctx *context,
+				   uint32_t      req,
+				   const void   *inbuf,
+				   size_t        inbufsize,
+				   void         *outbuf,
+				   size_t        outbufsize)
+{
+  int32_t ret = EINVAL;
+#ifdef ENABLE_ROUTING
+  size_t br;
+  struct dspd_client_trigger_tstamp *ts;
+  struct dspd_client *cli = dspd_req_userdata(context);
+  bool restart = false;
+  bool reconnect;
+  int32_t device = *(int32_t*)inbuf;
+  dspd_time_t tslist[2] = { 0, 0 };
+  int32_t oldroute;
+  dspd_slist_entry_wrlock(cli->list, cli->index);
+  dspd_slist_entry_srvlock(cli->list, cli->index);
+  if ( cli->playback.ready == false || cli->capture.ready == true || cli->device < 0 || cli->route_changed_cb == NULL || cli->mq_fd >= 0 )
+    goto out;
+  if ( cli->dontroute )
+    {
+      ret = EAGAIN;
+      goto out;
+    }
+  if ( device < 0 )
+    {
+      ret = EIO;
+      goto out;
+    }
+
+  oldroute = cli->device;
+  
+  dspd_mutex_lock(&cli->sync_start_lock);
+  cli->server_ops = NULL;
+  dspd_mutex_unlock(&cli->sync_start_lock);
+      
+  dspd_slist_entry_set_key(cli->list, cli->index, 0);
+  reconnect = ! cli->device_reserved;
+  ret = dspd_stream_ctl(&dspd_dctx,
+			cli->device,
+			DSPD_SCTL_SERVER_DISCONNECT,
+			&cli->index,
+			sizeof(cli->index),
+			NULL,
+			0,
+			&br);
+  dspd_slist_entry_wrlock(cli->list, cli->device);
+  dspd_slist_unref(cli->list, cli->device);
+  dspd_slist_entry_rw_unlock(cli->list, cli->device);
+  cli->device = -1;
+  cli->device_reserved = 0;
+  cli->mq_fd = -1;
+  
+  if ( ret == 0 && device > 0 )
+    {
+      dspd_mutex_lock(&cli->sync_start_lock);
+      if ( cli->playback.ready && cli->playback.started && (cli->trigger & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  restart = true;
+	  cli->trigger &= ~DSPD_PCM_SBIT_PLAYBACK;
+	  ts = dspd_mbx_acquire_write(cli->sync_start_tstamp);
+	  if ( ts )
+	    {
+	      ts->streams = cli->trigger;
+	      cli->playback.trigger_tstamp = 0;
+	      ts->playback_tstamp = 0;
+	      dspd_mbx_release_write(cli->sync_start_tstamp, ts);
+	    }
+	  cli->playback.last_hw = 0;
+	  cli->playback.curr_hw = 0;
+	  cli->playback.dev_appl_ptr = 0;
+	  cli->playback.cli_appl_ptr = 0;
+	  cli->playback.start_count = 0;
+	  cli->playback.started = false;
+	}
+      dspd_mutex_unlock(&cli->sync_start_lock);
+
+      if ( reconnect )
+	ret = connect_to_device(cli, device);
+      else
+	ret = reserve_device(cli, device);
+      if ( restart == true && ret == 0 )
+	ret = client_start_at_time(cli, dspd_get_time(), DSPD_PCM_SBIT_PLAYBACK, tslist, true);
+      if ( cli->device != oldroute && cli->route_changed_cb )
+	cli->route_changed_cb(cli->device, cli->index, cli, 0, cli->route_changed_arg);
+    }
+
+
+ out:
+  if ( ret < 0 && cli->route_changed_cb )
+    cli->route_changed_cb(cli->device, cli->index, cli, ret, cli->route_changed_arg);
+
+  dspd_slist_entry_srvunlock(cli->list, cli->index);
+  dspd_slist_entry_rw_unlock(cli->list, cli->index);
+  if ( ret == 0 && restart == true && reconnect == true )
+    ret = dspd_req_reply_buf(context, 0, &tslist[DSPD_PCM_STREAM_PLAYBACK], sizeof(tslist[0]));
+  else
+#endif
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
+}
+
+//Return the connected device with a retain count of +1
+static int32_t client_getdev(struct dspd_rctx *context,
+			     uint32_t      req,
+			     const void   *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize)
+{
+  struct dspd_client *cli = dspd_req_userdata(context);
+  int32_t ret = -ENOTCONN, dev = -1;
+  bool retain = false;
+  dspd_slist_entry_rdlock(cli->list, cli->index);
+  if ( cli->device > 0 )
+    {
+      if ( inbufsize == sizeof(retain) )
+	retain = *(const bool*)inbuf;
+
+      if ( (dspd_req_flags(context) & DSPD_REQ_FLAG_REMOTE) && retain == true )
+	{
+	  retain = *(const bool*)inbuf;
+	  if ( retain )
+	    {
+	      ret = dspd_daemon_ref(cli->device, DSPD_DCTL_ENUM_TYPE_SERVER);
+	      if ( ret == 0 )
+		dev = cli->device;
+	    }
+	} else if ( retain == true )
+	{
+	  //Can't retain for external clients
+	  ret = -EINVAL;
+	} else
+	{
+	  dev = cli->device;
+	  ret = 0;
+	}
+    }
+  dspd_slist_entry_rw_unlock(cli->list, cli->index);
+  if ( ret == 0 )
+    ret = dspd_req_reply_buf(context, 0, &dev, sizeof(dev));
+  else
+    ret = dspd_req_reply_err(context, 0, ret);
+  return ret;
+}
+
 static const struct dspd_req_handler client_req_handlers[] = {
   [CLIDX(DSPD_SCTL_CLIENT_START)] = {
     .handler = client_start,
@@ -3160,6 +3352,20 @@ static const struct dspd_req_handler client_req_handlers[] = {
     .rflags = 0,
     .inbufsize = sizeof(struct dspd_cli_info_pkt),
     .outbufsize = 0,
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_CHANGE_ROUTE)] = {
+    .handler = client_change_route,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = sizeof(uint64_t),
+  },
+  [CLIDX(DSPD_SCTL_CLIENT_GETDEV)] = {
+    .handler = client_getdev,
+    .xflags = DSPD_REQ_FLAG_CMSG_FD,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = sizeof(int32_t),
   },
 };
 

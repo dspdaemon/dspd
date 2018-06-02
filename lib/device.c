@@ -3399,9 +3399,7 @@ static int32_t server_stat(struct dspd_rctx *context,
 
   stat->slot_id = dspd_slist_id(dev->list, dev->key);
 
-  if ( dspd_dctx.hotplug.default_fullduplex == dev->key )
-    stat->flags |= DSPD_DEV_DEFAULT_ANY;
-  else if ( dspd_dctx.hotplug.default_playback == dev->key )
+  if ( dspd_dctx.hotplug.default_playback == dev->key )
     stat->flags |= DSPD_DEV_DEFAULT_PLAYBACK;
   else if ( dspd_dctx.hotplug.default_capture == dev->key )
     stat->flags |= DSPD_DEV_DEFAULT_CAPTURE;

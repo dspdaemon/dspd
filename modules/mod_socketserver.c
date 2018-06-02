@@ -85,6 +85,9 @@ struct ss_cctx {
   struct socksrv_ctl_eq     eventq;
   bool                      retry_event;
   int32_t                   ctl_stream;
+
+
+  struct ss_cctx *prev, *next;
 };
 
 struct ss_sctx {
@@ -104,8 +107,18 @@ struct ss_sctx {
   int32_t                         ctl_fd;
   uint8_t                         listening_clients[DSPD_MASK_SIZE*3];
   size_t                          listening_clients_index;
+
+  struct ss_cctx                 *client_list;
+
 };
 
+static void add_client_to_list(struct ss_sctx *server, struct ss_cctx *client)
+{
+  client->next = server->client_list;
+  if ( client->next )
+    client->next->prev = client;
+  server->client_list = client;
+}
 
 static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
 				      uint32_t             req,
@@ -297,6 +310,27 @@ static const struct dspd_rcb client_rcb = {
   .reply_err = client_reply_err,
 };
 
+static void socksrv_route_changed(int32_t dev, int32_t index, void *client, int32_t err, void *arg)
+{
+  struct ss_cctx *cli = arg;
+  struct cbpoll_pipe_event evt;
+  dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
+  dspd_mutex_lock(&cli->lock);
+  if ( cli->cbctx )
+    {
+      memset(&evt, 0, sizeof(evt));
+      evt.fd = cli->fd;
+      evt.index = cli->index;
+      evt.stream = cli->stream;
+      evt.msg = MSG_EVENT_FLAGS;
+      evt.arg = index;
+      evt.arg <<= 32U;
+      evt.arg |= DSPD_REQ_FLAG_ROUTE_CHANGED;
+      cbpoll_send_event(cli->cbctx, &evt);
+    }
+  dspd_mutex_unlock(&cli->lock);
+}
+
 static void socksrv_error(void *dev, int32_t index, void *client, int32_t err, void *arg)
 {
   struct ss_cctx *cli = arg;
@@ -337,7 +371,7 @@ static int32_t open_client_stream(struct ss_cctx *cli)
   if ( ret == 0 )
     {
       cb.arg = cli;
-      cb.callback = socksrv_error;
+      cb.callback.error = socksrv_error;
       cb.index = DSPD_CLIENT_CB_ERROR;
       ret = dspd_client_get_index(clptr);
       dspd_stream_ctl(&dspd_dctx,
@@ -348,13 +382,39 @@ static int32_t open_client_stream(struct ss_cctx *cli)
 		      NULL,
 		      0,
 		      &br);
+
+      cb.callback.route_changed = socksrv_route_changed;
+      cb.index = DSPD_CLIENT_CB_ROUTE_CHANGED;
+      dspd_stream_ctl(&dspd_dctx,
+		      ret,
+		      DSPD_SCTL_CLIENT_SETCB,
+		      &cb,
+		      sizeof(cb),
+		      NULL,
+		      0,
+		      &br);
+
     }
   return ret;
 }
 static void close_client_stream(struct ss_cctx *cli, int32_t stream)
 {
   size_t br;
+  struct dspd_client_cb cb;
+  memset(&cb, 0, sizeof(cb));
+  cb.index = DSPD_CLIENT_CB_CLEAR_ALL;
   (void)cli;
+  //If something else has a reference, it should not ever be allowed to
+  //trigger callbacks on a dead context.
+  dspd_stream_ctl(&dspd_dctx,
+		  stream,
+		  DSPD_SCTL_CLIENT_SETCB,
+		  &cb,
+		  sizeof(cb),
+		  NULL,
+		  0,
+		  &br);
+
   //The server retains the client, so disconnect to make sure
   //it is actually released.
   dspd_stream_ctl(&dspd_dctx, 
@@ -574,6 +634,8 @@ static int32_t socksrv_req_defaultdev(struct dspd_rctx *context,
     ret = dspd_req_reply_err(context, 0, ret);
   return ret;
 }
+
+
 static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				uint32_t             req,
 				const void          *inbuf,
@@ -2593,6 +2655,28 @@ int client_pipe_event(void *data,
   int32_t dev;
   if ( event->msg == MSG_EVENT_FLAGS )
     {
+      if ( event->arg & DSPD_REQ_FLAG_ROUTE_CHANGED )
+	{
+	  if ( cli->playback_device > 0 && cli->playback_stream > 0 )
+	    {
+	      size_t br;
+	      bool retain = true;
+	      int32_t ret = dspd_stream_ctl(&dspd_dctx,
+					    cli->playback_stream,
+					    DSPD_SCTL_CLIENT_GETDEV,
+					    &retain,
+					    sizeof(retain),
+					    &dev,
+					    sizeof(dev),
+					    &br);
+	      if ( ret == 0 && br == sizeof(dev) )
+		{
+		  dspd_daemon_unref(cli->playback_stream);
+		  cli->playback_stream = dev;
+		}
+	    }
+	}
+
       dev = event->arg >> 32;
       if ( dev >= 0 )
 	{
@@ -2631,7 +2715,8 @@ static bool client_destructor(void *data,
   dspd_mutex_unlock(&cli->lock);
   if ( cli->stream >= 0 )
     close_client_stream(cli, cli->stream);
-  
+
+
   if ( cli->playback_stream >= 0 )
     close_client_stream(cli, cli->playback_stream);
 
@@ -2659,6 +2744,17 @@ static bool client_destructor(void *data,
     }
   socksrv_eq_realloc(&cli->eventq, 0, 0, 0);
   dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
+  if ( cli->prev == NULL )
+    {
+      assert(cli->server->client_list == cli);
+      cli->server->client_list = cli->next;
+    } else
+    {
+      cli->prev->next = cli->next;
+    }
+  if ( cli->next )
+    cli->next->prev = cli->prev;
+  
   free(cli);
   return true;
 }
@@ -2707,6 +2803,7 @@ static struct ss_cctx *new_socksrv_client(int fd, struct cbpoll_ctx *cbctx, stru
       free(ctx);
       return NULL;
     }
+
   ctx->ctl_stream = -1;
   ctx->stream = -1;
   ctx->device = -1;
@@ -2897,7 +2994,7 @@ static int eventfd_event(void *data,
   for ( i = 0; i < server->vfd_index; i++ )
     {
       client = server->virtual_fds[i];
-      if ( client != NULL && client != (struct ss_cctx*)UINTPTR_MAX )
+      if ( client != NULL && client != (struct ss_cctx*)UINTPTR_MAX && client->fifo != NULL )
 	{
 	  ret = dspd_aio_fifo_test_events(client->fifo, client->cbpfd->events);
 	  if ( ret )
@@ -2965,6 +3062,7 @@ static int listen_pipe_event(void *data,
 		  if ( (size_t)cli->fifo->master->slot >= server->vfd_index )
 		    server->vfd_index = cli->fifo->master->slot + 1;
 		}
+	      add_client_to_list(server, cli);
 	    }
 	}
     } else if ( event->msg == SOCKSRV_INSERT_FD )

@@ -75,4 +75,5 @@ bool dspd_dict_test_value(const struct dspd_dict *sect,
 			    const char *key,
 			    const char *value);
 const char *dspd_dict_value_for_key(const struct dspd_dict *sect, const char *key);
+
 #endif

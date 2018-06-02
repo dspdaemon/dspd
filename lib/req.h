@@ -15,7 +15,7 @@
 //some events were dropped.
 #define DSPD_REQ_FLAG_OVERFLOW 64
 
-
+#define DSPD_REQ_FLAG_ROUTE_CHANGED 128
 
 struct dspd_req {
   uint32_t len;    //Length of entire packet
