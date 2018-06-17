@@ -90,6 +90,19 @@ struct cbpoll_fd {
   const struct cbpoll_fd_ops *ops;
 };
 
+struct dspd_cbtimer;
+typedef void (*dspd_cbtimer_cb_t)(struct cbpoll_ctx *ctx, 
+				  struct dspd_cbtimer *timer,
+				  void *arg, 
+				  dspd_time_t timeout);
+
+struct dspd_cbtimer {
+  dspd_cbtimer_cb_t callback;
+  void *arg;
+  dspd_time_t timeout;
+  struct dspd_cbtimer *prev, *next;
+};
+
 struct dspd_aio_ctx;
 struct cbpoll_ctx {
   int epfd;
@@ -116,6 +129,10 @@ struct cbpoll_ctx {
   size_t               aio_idx;
   struct dspd_aio_fifo_eventfd eventfd;
   bool wake_self;
+
+  struct dspd_cbtimer *cbtimer_objects;
+  struct dspd_cbtimer *pending_cbtimer_list;
+  struct dspd_cbtimer **cbtimer_dispatch_list;
 };
 
 int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events);
@@ -151,6 +168,7 @@ void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 				   int64_t arg);
 #define CBPOLL_FLAG_TIMER 1
 #define CBPOLL_FLAG_AIO_FIFO 2
+#define CBPOLL_FLAG_CBTIMER 4
 int32_t cbpoll_init(struct cbpoll_ctx *ctx, 
 		    int32_t  flags,
 		    uint32_t max_fds);
@@ -171,5 +189,13 @@ void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout)
 
 int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
 void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
+
+dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t);
+void dspd_cbtimer_set(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer, dspd_time_t timeout);
+void dspd_cbtimer_delete(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer);
+void dspd_cbtimer_cancel(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer);
+struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx, 
+				      dspd_cbtimer_cb_t callback,
+				      void *arg);
 
 #endif

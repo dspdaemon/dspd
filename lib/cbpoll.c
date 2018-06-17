@@ -1,6 +1,7 @@
 /*
  *  CBPOLL - epoll event loop
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -47,6 +48,8 @@ static bool eventfd_destructor(void *data,
 			       struct cbpoll_ctx *context,
 			       int index,
 			       int fd);
+static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout);
+
 static int32_t find_fdata(struct cbpoll_ctx *ctx, int fd)
 {
   size_t i;
@@ -559,6 +562,37 @@ static const struct cbpoll_fd_ops eventfd_ops = {
   .destructor = eventfd_destructor,
 };
 
+static void destroy(struct cbpoll_ctx *ctx)
+{
+  dspd_mutex_destroy(&ctx->wq.lock);
+  dspd_cond_destroy(&ctx->wq.cond);
+  close(ctx->epfd);
+  ctx->epfd = -1;
+  close(ctx->event_pipe[0]);
+  close(ctx->event_pipe[1]);
+  ctx->event_pipe[0] = -1;
+  ctx->event_pipe[1] = -1;
+  if ( ctx->wq.fifo )
+    dspd_fifo_delete(ctx->wq.fifo);
+  free(ctx->fdata);
+  ctx->fdata = NULL;
+  free(ctx->events);
+  ctx->events = NULL;
+  if ( ctx->timer.fd >= 0 )
+    dspd_timer_destroy(&ctx->timer);
+  free(ctx->pending_timers);
+  ctx->pending_timers = NULL;
+  close(ctx->eventfd.fd);
+  free(ctx->aio_list);
+  ctx->aio_list = NULL;
+  free(ctx->cbtimer_objects);
+  ctx->cbtimer_objects = NULL;
+  free(ctx->pending_cbtimer_list);
+  ctx->pending_cbtimer_list = NULL;
+  free(ctx->cbtimer_dispatch_list);
+  ctx->cbtimer_dispatch_list = NULL;
+}
+
 int32_t cbpoll_init(struct cbpoll_ctx *ctx, 
 		    int32_t  flags,
 		    uint32_t max_fds)
@@ -635,8 +669,23 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
 
       ctx->pending_timers = calloc(ctx->max_fd, sizeof(*ctx->pending_timers));
       if ( ! ctx->pending_timers )
-	goto out;
-
+	{
+	  ret = -ENOMEM;
+	  goto out;
+	}
+    }
+  if ( flags & CBPOLL_FLAG_CBTIMER )
+    {
+      ctx->pending_cbtimer_list = calloc(ctx->max_fd, sizeof(ctx->pending_cbtimer_list[0]));
+      ctx->cbtimer_objects = calloc(ctx->max_fd, sizeof(ctx->cbtimer_objects[0]));
+      ctx->cbtimer_dispatch_list = calloc(ctx->max_fd, sizeof(ctx->cbtimer_dispatch_list[0]));
+      if ( ! (ctx->pending_cbtimer_list && 
+	      ctx->cbtimer_objects &&
+	      ctx->cbtimer_dispatch_list) )
+	{
+	  ret = -ENOMEM;
+	  goto out;
+	}
     }
   if ( flags & CBPOLL_FLAG_AIO_FIFO )
     {
@@ -648,25 +697,11 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
       if ( ! ctx->aio_list )
 	goto out;
     }
-
-  return 0;
+  ret = 0;
 
  out:
-  dspd_mutex_destroy(&ctx->wq.lock);
-  dspd_cond_destroy(&ctx->wq.cond);
-  close(ctx->epfd);
-  close(ctx->event_pipe[0]);
-  close(ctx->event_pipe[1]);
-  if ( ctx->wq.fifo )
-    dspd_fifo_delete(ctx->wq.fifo);
-  free(ctx->fdata);
-  free(ctx->events);
-  if ( ctx->timer.fd >= 0 )
-    dspd_timer_destroy(&ctx->timer);
-  free(ctx->pending_timers);
-  close(ctx->eventfd.fd);
-  free(ctx->aio_list);
-  
+  if ( ret < 0 )
+    destroy(ctx);
   return ret;
 }
 
@@ -723,6 +758,8 @@ void cbpoll_destroy(struct cbpoll_ctx *ctx)
   evt.msg = 0;
   evt.arg = 0;
   cbpoll_send_event(ctx, &evt);
+  dspd_thread_join(&ctx->thread, NULL);
+  destroy(ctx);
 }
 
 void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,
@@ -837,6 +874,8 @@ static int timer_fd_event(void *data,
 		}
 	    }	    
 	}
+      if ( context->pending_cbtimer_list )
+	cbtimer_dispatch(context, dspd_get_time());
       if ( newtimeout != context->next_timeout )
 	{
 	  //Timeout changed
@@ -983,3 +1022,98 @@ static int eventfd_event(void *data,
   context->aio_idx = aio_idx + 1;
   return 0;
 }
+
+struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx, 
+				      dspd_cbtimer_cb_t callback,
+				      void *arg)
+{
+  struct dspd_cbtimer *ret = NULL;
+  size_t i;
+  if ( ctx->cbtimer_objects )
+    {
+      for ( i = 0; i < ctx->max_fd; i++ )
+	{
+	  if ( ctx->cbtimer_objects[i].callback == NULL )
+	    {
+	      ret = &ctx->cbtimer_objects[i];
+	      ret->callback = callback;
+	      ret->arg = arg;
+	      break;
+	    }
+	}
+    }
+  return ret;
+}
+
+void dspd_cbtimer_cancel(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer)
+{
+  if ( timer->prev )
+    timer->prev->next = timer->next;
+  else if ( timer == ctx->pending_cbtimer_list )
+    ctx->pending_cbtimer_list = timer->next;
+  if ( timer->next )
+    timer->next->prev = timer->prev;
+  timer->timeout = 0;
+  timer->next = NULL;
+  timer->prev = NULL;
+}
+
+void dspd_cbtimer_delete(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer)
+{
+  dspd_cbtimer_cancel(ctx, timer);
+  memset(timer, 0, sizeof(*timer));
+}
+
+void dspd_cbtimer_set(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer, dspd_time_t timeout)
+{
+  struct dspd_cbtimer *t, **prev = &ctx->pending_cbtimer_list;
+  timer->next = NULL;
+  timer->prev = NULL;
+  timer->timeout = timeout;
+  for ( t = ctx->pending_cbtimer_list; t; t = t->next )
+    {
+      if ( t->timeout >= timer->timeout )
+	{
+	  timer->next = t;
+	  timer->prev = t->prev;
+	  t->prev = timer;
+	  break;
+	}
+      prev = &t->next;
+    }
+  *prev = timer;
+  if ( ctx->next_timeout < timeout || ctx->next_timeout == 0 )
+    {
+      ctx->next_timeout = timeout;
+      ctx->timeout_changed = true;
+    }
+}
+
+dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t)
+{
+  return t->timeout;
+}
+
+static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout)
+{
+  size_t count = 0, i;
+  struct dspd_cbtimer *t;
+  for ( t = ctx->pending_cbtimer_list; t; t = t->next )
+    {
+      if ( t->timeout <= timeout )
+	{
+	  DSPD_ASSERT(t->callback != NULL);
+	  ctx->cbtimer_dispatch_list[count] = t;
+	  count++;
+	} else
+	{
+	  break;
+	}
+    }
+  for ( i = 0; i < count; i++ )
+    {
+      t = ctx->cbtimer_dispatch_list[i];
+      t->callback(ctx, t, t->arg, timeout);
+    }
+}
+

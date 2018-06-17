@@ -54,6 +54,7 @@ int main(int argc, char **argv)
     }
   dspd_time_init();
   dspd_enable_assert_log();
+
   struct dspd_dict *modules = dspd_dict_find_section(dspd_dctx.config, "MODULES");
 
   if ( modules )
