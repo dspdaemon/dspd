@@ -277,7 +277,7 @@ static void dspd_dev_config_set_latency(struct dspd_pcm_device *dev, uint32_t *c
 	break;
     }
 
-  // assert(latency != 32);
+  // DSPD_ASSERT(latency != 32);
   //fprintf(stderr, "SETL %d FROM %d\n", i, latency);
 
   //Use only first 5 bits.
@@ -1175,7 +1175,7 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 		{
 		  goto out;
 		}
-	      assert(dev->playback.status->appl_ptr <= orig_ptr);
+	      DSPD_ASSERT(dev->playback.status->appl_ptr <= orig_ptr);
 	   
 	      frames = orig_ptr - dev->playback.status->appl_ptr;
 	      if ( frames > 0 )
@@ -1189,7 +1189,7 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 	    }
 	}
     }
-  assert(dev->playback.status->appl_ptr == orig_ptr);
+  DSPD_ASSERT(dev->playback.status->appl_ptr == orig_ptr);
   if ( client_space > 0 )
     {
       //Can't go beyond the current segment.
@@ -1228,7 +1228,7 @@ static bool process_client_playback(struct dspd_pcm_device *dev,
 
   
  
-  assert(dev->playback.status->appl_ptr == orig_ptr);
+  DSPD_ASSERT(dev->playback.status->appl_ptr == orig_ptr);
   return true;
 
  out:
@@ -1836,7 +1836,7 @@ static void schedule_playback_wake(void *userdata)
 	      //from very low to very high and when a deadline is missed
 	      //but it did not quite underrun.
 	      len = dev->playback.status->fill;
-	      assert(len <= dev->playback.status->space);
+	      DSPD_ASSERT(len <= dev->playback.status->space);
 	    }
 	  
 	  if ( dev->playback.glitch && dev->playback.status && 
@@ -2183,8 +2183,8 @@ static void sigbus_handler(int sig, siginfo_t *signinfo, void *context)
   if ( dev->current_exception )
     siglongjmp(dev->sbh_except, 1);
 
-  assert(dev);
-  assert(dev->current_client >= 0);
+  DSPD_ASSERT(dev);
+  DSPD_ASSERT(dev->current_client >= 0);
   siglongjmp(dev->sbh_env, 1);
 }
 static void *dspd_dev_thread(void *arg)
@@ -2839,7 +2839,7 @@ void dspd_pcm_device_delete(struct dspd_pcm_device *dev)
 
 void dspd_pcm_device_delete_ex(struct dspd_pcm_device *dev, bool closedev)
 {
-  assert(dev);
+  DSPD_ASSERT(dev);
   dspd_scheduler_abort(dev->sched);
   dspd_sched_trigger(dev->sched);
   dspd_mutex_destroy(&dev->reg_lock);
@@ -3455,7 +3455,7 @@ static int32_t server_irqinfo(struct dspd_rctx *context,
     {
       irq = outbuf;
     }
-  assert(irq64 || irq);
+  DSPD_ASSERT(irq64 || irq);
   do {
     icount = AO_load(&dev->irq_count);
     acount = AO_load(&dev->ack_count);

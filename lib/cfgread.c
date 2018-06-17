@@ -1,6 +1,8 @@
 /*
  *  CFGREAD - Configuration file reader
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
+ *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
  *   published by the Free Software Foundation; either version 2.1 of
@@ -29,7 +31,7 @@
 #include <stdbool.h>
 #include <assert.h>
 #include "cfgread.h"
-
+#include "util.h"
 void dspd_dict_dump(const struct dspd_dict *sect)
 {
   struct dspd_kvpair *curr;
@@ -296,9 +298,9 @@ struct dspd_dict *dspd_dict_find_section(struct dspd_dict *sect, const char *nam
   struct dspd_dict *curr, *prev = sect;
   for ( curr = sect; curr; curr = curr->next )
     {
-      assert(curr->next != prev);
-      assert(curr->next != sect);
-      assert(curr->next != curr);
+      DSPD_ASSERT(curr->next != prev);
+      DSPD_ASSERT(curr->next != sect);
+      DSPD_ASSERT(curr->next != curr);
       if ( curr->name != NULL && strcmp(curr->name, name) == 0 )
 	break;
       prev = curr;

@@ -224,7 +224,7 @@ static void client_destructor(void *obj)
   if ( cli->vctrl_registered )
     dspd_daemon_vctrl_unregister(cli->index, cli->index, NULL);
 
-  assert(cli->alloc);
+  DSPD_ASSERT(cli->alloc);
   if ( cli->syncgroup )
     {
       dspd_sg_remove(cli->syncgroup, cli->index);
@@ -1216,12 +1216,12 @@ static void playback_xfer(void                            *dev,
       cli->playback.dev_appl_ptr += count;
     } 
     
-  assert(offset <= frames);
+  DSPD_ASSERT(offset <= frames);
 
   if ( dspd_dctx.debug && offset < frames )
     fprintf(stderr, "CLIENT PLAYBACK XRUN: wanted %lu got %lu\n", (long)offset, (long)frames);
 
-  assert(cli->playback.dev_appl_ptr == (optr+offset));
+  DSPD_ASSERT(cli->playback.dev_appl_ptr == (optr+offset));
   //  if ( status->tstamp == cli->playback.last_hw_tstamp )
   //return;
   
@@ -1612,7 +1612,7 @@ static uint32_t capture_src_xfer(struct dspd_client *cli, float32 *buf, size_t f
 
       //fwrite(ptr, c * sizeof(*buf) * cli->capture.params.channels, 1, fp);
 
-      assert(c <= count);
+      DSPD_ASSERT(c <= count);
       if ( ret != 0 )
 	{
 	  break;

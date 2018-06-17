@@ -1,6 +1,7 @@
 /*
  *  SCHEDULER - An event scheduler
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -39,7 +40,7 @@
 #include <pthread.h>
 #include "scheduler.h"
 #include "thread.h"
-
+#include "util.h"
 
 
 void dspd_sched_trigger(struct dspd_scheduler *sch)
@@ -54,11 +55,11 @@ void dspd_sched_trigger(struct dspd_scheduler *sch)
 	{
 	  if  ( ret >= 0 )
 	    {
-	      assert(ret == sizeof(val));
+	      DSPD_ASSERT(ret == sizeof(val));
 	    }
 	  if ( errno != EINTR )
 	    {
-	      assert(errno == EAGAIN);
+	      DSPD_ASSERT(errno == EAGAIN);
 	      break;
 	    }
 	}
@@ -87,7 +88,7 @@ static void event_callback(void *udata, int32_t fd, void *fdata, uint32_t events
   struct dspd_scheduler *sch = fdata;
   uint64_t val;
   int ret;
-  assert((events & (EPOLLERR|EPOLLRDHUP|EPOLLHUP)) == 0);
+  DSPD_ASSERT((events & (EPOLLERR|EPOLLRDHUP|EPOLLHUP)) == 0);
   //Clear trigger value before reading.
   //This makes the race condition settle out after 1 spurious wakeup.
   //In most cases it results in a single wakeup from a single trigger
@@ -97,7 +98,7 @@ static void event_callback(void *udata, int32_t fd, void *fdata, uint32_t events
       ret = read(fd, &val, sizeof(val));
       if ( ret < 0 )
 	{
-	  assert(errno == EAGAIN || errno == EINTR);
+	  DSPD_ASSERT(errno == EAGAIN || errno == EINTR);
 	} else if ( ret == sizeof(val) )
 	{
 	  AO_CLEAR(&sch->eventfd_triggered);
@@ -142,7 +143,7 @@ struct dspd_scheduler *dspd_scheduler_new(const struct dspd_scheduler_ops *ops, 
   sch->timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
   if ( sch->timerfd < 0 )
     goto out;
-  assert(sch->timerfd > 0 );
+  DSPD_ASSERT(sch->timerfd > 0 );
   if ( sch->ops->timer_event )
     {
       if ( dspd_scheduler_add_fd(sch, sch->timerfd, EPOLLIN, sch, timer_callback) < 0 )
@@ -154,9 +155,9 @@ struct dspd_scheduler *dspd_scheduler_new(const struct dspd_scheduler_ops *ops, 
     }
   sch->udata = udata;
 
-  assert(sch->ops);
-  assert(sch->ops->wake);
-  assert(sch->ops->sleep);
+  DSPD_ASSERT(sch->ops);
+  DSPD_ASSERT(sch->ops->wake);
+  DSPD_ASSERT(sch->ops->sleep);
 
   return sch;
 
@@ -235,7 +236,7 @@ static void process_fds(struct dspd_scheduler *sch, int32_t nevents)
   for ( i = 0; i < nevents; i++ )
     {
       evt = &sch->evts[i];
-      assert(evt->data.u32 < sch->nfds);
+      DSPD_ASSERT(evt->data.u32 < sch->nfds);
       sfd = &sch->fds[evt->data.u32];
       if ( sfd->callback )
 	sfd->callback(sch->udata, sfd->fd, sfd->ptr, evt->events);
@@ -308,8 +309,8 @@ void *dspd_scheduler_run(void *arg)
       if ( ret < 0 )
 	break;
       process_fds(sch, ret);
-      assert(sch->ops);
-      assert(sch->ops->wake);
+      DSPD_ASSERT(sch->ops);
+      DSPD_ASSERT(sch->ops->wake);
       sch->ops->wake(sch->udata);
     }
   if ( sch->abort )

@@ -221,14 +221,14 @@ static void vctrl_remove_notify(struct dspd_vctrl_list *list,
 				struct dspd_vctrl *ctrl)
 {
   struct dspd_vctrl_callback *curr;
-  assert(ctrl->flags & DSPD_VCTRL_REMOVED);
+  DSPD_ASSERT(ctrl->flags & DSPD_VCTRL_REMOVED);
   if ( ctrl->playback >= 0 )
     {
-      assert(list->ctrl_pointers[ctrl->playback] != ctrl);
+      DSPD_ASSERT(list->ctrl_pointers[ctrl->playback] != ctrl);
     }
   if ( ctrl->capture >= 0 )
     {
-      assert(list->ctrl_pointers[ctrl->capture] != ctrl);
+      DSPD_ASSERT(list->ctrl_pointers[ctrl->capture] != ctrl);
     }
   for ( curr = list->callbacks; curr; curr = curr->next )
     {
@@ -268,7 +268,7 @@ static void *vctrl_thread(void *p)
 	  for ( i = 0; i < list->ctrl_count; i++ )
 	    {
 	      ctrl = list->ctrl_list[i];
-	      assert(ctrl);
+	      DSPD_ASSERT(ctrl);
 	      if ( ctrl->flags & VCTRL_EVENTS )
 		{
 		  vctrl_notify(list, ctrl);
@@ -433,7 +433,7 @@ static int32_t vctrl_register(struct dspd_vctrl_list *list,
       ctrl->flags |= DSPD_PCM_SBIT_CAPTURE;
       list->ctrl_pointers[capture] = ctrl;
     }
-  assert(list->ctrl_count < ARRAY_SIZE(list->ctrl_list));
+  DSPD_ASSERT(list->ctrl_count < ARRAY_SIZE(list->ctrl_list));
   list->ctrl_list[list->ctrl_count] = ctrl;
   ctrl->index = list->ctrl_count;
   list->ctrl_count++;
@@ -485,15 +485,15 @@ static bool unreg(struct dspd_vctrl_list *list, int32_t stream, const uint64_t *
 	  //the dispatch thread wakes up.
 	  if ( ctrl->playback >= 0 )
 	    {
-	      assert(list->ctrl_pointers[ctrl->playback] == ctrl);
+	      DSPD_ASSERT(list->ctrl_pointers[ctrl->playback] == ctrl);
 	      list->ctrl_pointers[ctrl->playback] = NULL;
 	    }
 	  if ( ctrl->capture >= 0 )
 	    {
-	      assert(list->ctrl_pointers[ctrl->capture] == ctrl);
+	      DSPD_ASSERT(list->ctrl_pointers[ctrl->capture] == ctrl);
 	      list->ctrl_pointers[ctrl->capture] = NULL;
 	    }
-	  assert(j < ARRAY_SIZE(list->removed_list));
+	  DSPD_ASSERT(j < ARRAY_SIZE(list->removed_list));
 	  ret = true;
 	} else
 	{
@@ -521,7 +521,7 @@ static int32_t vctrl_unregister(struct dspd_vctrl_list *list,
       ret = 0;
   if ( ret == 0 )
     {
-      assert(list->ctrl_count >= 0);
+      DSPD_ASSERT(list->ctrl_count >= 0);
       list->mixer_tstamp = dspd_get_time();
       vctrl_wake(list);
     }

@@ -135,8 +135,8 @@ static void cc_free(struct dspd_ctl_client *cli, void *ptr)
   if ( (size_t)ptr >= (size_t)cli->alloc_list && (size_t)ptr < max_addr )
     {
       idx = ((size_t)ptr - (size_t)cli->alloc_list) / sizeof(cli->alloc_list[0]);
-      assert(idx < cli->alloc_count);
-      assert(dspd_test_bit(cli->alloc_mask, idx) != 0);
+      DSPD_ASSERT(idx < cli->alloc_count);
+      DSPD_ASSERT(dspd_test_bit(cli->alloc_mask, idx) != 0);
       dspd_clr_bit(cli->alloc_mask, idx);
     } else
     {
@@ -222,7 +222,7 @@ static struct dspd_cc_elem *find_elem(struct dspd_ctl_client *cli, size_t index)
 static int32_t submit_io(struct dspd_ctl_client *cli, struct dspd_cc_aio_op *op)
 {
   int32_t ret;
-  assert(op->op.complete != NULL);
+  DSPD_ASSERT(op->op.complete != NULL);
   ret = dspd_aio_submit(cli->ioctx, &op->op);
   //The op is freed here if completing synchronously due to no callback or an error
   //starting the operation.  Otherwise, the op should be freed in the callback.
@@ -246,7 +246,7 @@ static int32_t submit_io(struct dspd_ctl_client *cli, struct dspd_cc_aio_op *op)
 	    }
 	  if ( ret == 0 || ret == -EINPROGRESS )
 	    ret = op->op.error;
-	  assert(op->op.error <= 0);
+	  DSPD_ASSERT(op->op.error <= 0);
 	  free_op(op);
 	} else
 	{
@@ -694,7 +694,7 @@ int32_t dspd_ctlcli_refresh_count(struct dspd_ctl_client *cli, uint32_t *count, 
       ret = -EAGAIN;
     } else
     {
-      assert(op->error <= 0);
+      DSPD_ASSERT(op->error <= 0);
       memset(op, 0, sizeof(*op));
       cli->retry_refresh = false;
       op->stream = cli->device;
@@ -1082,7 +1082,7 @@ int32_t dspd_ctlcli_init(struct dspd_ctl_client *cli,
 
 void dspd_ctlcli_bind(struct dspd_ctl_client *cli, struct dspd_aio_ctx *aio, int32_t device)
 {
-  assert(cli->ioctx == NULL);
+  DSPD_ASSERT(cli->ioctx == NULL);
   cli->device = device;
   cli->ioctx = aio;
   dspd_aio_get_event_cb(aio, &cli->prevcb, &cli->prevarg);
@@ -1135,7 +1135,7 @@ void dspd_ctlcli_destroy(struct dspd_ctl_client *cli)
 	    {
 	      if ( cli->pending_ops[i]->busy )
 		dspd_aio_cancel(cli->ioctx, &cli->pending_ops[i]->op, false);
-	      assert(cli->pending_ops[i]->busy == false);
+	      DSPD_ASSERT(cli->pending_ops[i]->busy == false);
 	      free(cli->pending_ops[i]);
 	    }
 	}

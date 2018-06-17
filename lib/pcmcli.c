@@ -177,11 +177,11 @@ static int32_t submit_io(struct dspd_pcmcli *client,
     {
       if ( inbuf != NULL && inbuf != client->input )
 	{
-	  assert(inbufsize <= sizeof(client->input));
+	  DSPD_ASSERT(inbufsize <= sizeof(client->input));
 	  memcpy(client->input, inbuf, inbufsize);
 	  inbuf = client->input;
 	}
-      assert(outbuf != client->output || outbufsize <= sizeof(client->output));
+      DSPD_ASSERT(outbuf != client->output || outbufsize <= sizeof(client->output));
       memset(&client->pending_op, 0, sizeof(client->pending_op));
       client->pending_op.stream = -1;
       client->pending_op.req = req;
@@ -692,7 +692,7 @@ ssize_t dspd_pcmcli_write_bytes(struct dspd_pcmcli *client,
       //Fill remaining frame bytes if necessary
       if ( client->playback.frame_off > 0 && client->playback.frame_off < client->playback.stream.framesize )
 	{
-	  assert(client->playback.frame_buf != NULL);
+	  DSPD_ASSERT(client->playback.frame_buf != NULL);
 	  n = client->playback.stream.framesize - client->playback.frame_off;
 	  if ( n > bytes )
 	    n = bytes;
@@ -706,7 +706,7 @@ ssize_t dspd_pcmcli_write_bytes(struct dspd_pcmcli *client,
       //Write the buffer if it is full.
       if ( client->playback.frame_off == client->playback.stream.framesize )
 	{
-	  assert(client->playback.frame_buf != NULL);
+	  DSPD_ASSERT(client->playback.frame_buf != NULL);
 	  ret = dspd_pcmcli_write_frames(client, client->playback.frame_buf, 1);
 	  if ( ret == 1 )
 	    {
@@ -740,7 +740,7 @@ ssize_t dspd_pcmcli_write_bytes(struct dspd_pcmcli *client,
 	      offset += n;
 	    }
 	}
-      assert(offset <= bytes);
+      DSPD_ASSERT(offset <= bytes);
       if ( offset > 0 )
 	ret = offset;
       if ( ret == 0 )
@@ -846,7 +846,7 @@ ssize_t dspd_pcmcli_read_bytes(struct dspd_pcmcli *client,
       //buffer is only used if a partial frame must be filled.
       if ( client->capture.frame_off > 0 )
 	{
-	  assert(client->capture.frame_buf != NULL);
+	  DSPD_ASSERT(client->capture.frame_buf != NULL);
 	  n = client->capture.stream.framesize - client->capture.frame_off;
 	  if ( n > bytes )
 	    n = bytes;
@@ -860,7 +860,7 @@ ssize_t dspd_pcmcli_read_bytes(struct dspd_pcmcli *client,
       n = (bytes - offset) / client->capture.stream.framesize;
       if ( n > 0 )
 	{
-	  assert(client->capture.frame_off == 0);
+	  DSPD_ASSERT(client->capture.frame_off == 0);
 	  ret = dspd_pcmcli_stream_read(&client->capture.stream, 
 					(char*)data + offset,
 					n);
@@ -1649,7 +1649,7 @@ int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t fl
       ret = dspd_pcmcli_stream_init(&client->capture.stream, DSPD_PCM_SBIT_CAPTURE);
       if ( ret == 0 )
 	{
-	  assert(client->capture.stream.stream_flags == DSPD_PCM_SBIT_CAPTURE);
+	  DSPD_ASSERT(client->capture.stream.stream_flags == DSPD_PCM_SBIT_CAPTURE);
 	  if ( flags & DSPD_PCMCLI_BYTE_MODE )
 	    {
 	      client->capture.frame_buf = calloc(DSPD_CHMAP_LAST, sizeof(uint64_t));
@@ -2682,7 +2682,7 @@ int32_t dspd_pcmcli_hw_params_set_bufsize(struct dspd_pcmcli *client,
   else if ( size < minsize)
     size = minsize;
   params->bufsize = size / t;
-  assert(params->fragsize > 0 && params->min_latency > 0);
+  DSPD_ASSERT(params->fragsize > 0 && params->min_latency > 0);
   
   n = params->bufsize / params->fragsize;
   if ( n < MIN_FRAGMENTS )

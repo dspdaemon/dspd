@@ -42,10 +42,10 @@ static void check_io_count(struct dspd_aio_ctx *_ctx)
       if ( ctx->pending_ops[i] )
 	{
 	  c++;
-	  assert(ctx->pending_ops[i]->error != -EINPROGRESS);
+	  DSPD_ASSERT(ctx->pending_ops[i]->error != -EINPROGRESS);
 	}
     }
-  assert(c == (size_t)ctx->pending_ops_count);
+  DSPD_ASSERT(c == (size_t)ctx->pending_ops_count);
 }
 #else
 #define check_io_count(ctx)
@@ -128,7 +128,7 @@ int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx,
   op = (struct dspd_async_op*)ctx->data;
   pkt = (struct dspd_cli_info_pkt*)&ctx->data[sizeof(*op)];
   ctx->datalen = sizeof(*op) + sizeof(*pkt);
-  assert(ctx->datalen <= sizeof(ctx->data));
+  DSPD_ASSERT(ctx->datalen <= sizeof(ctx->data));
   memset(op, 0, sizeof(*op));
   memset(pkt, 0, sizeof(*pkt));
  
@@ -220,9 +220,9 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   op->reserved = (uint64_t)(index & 0xFFFFU) << 16U;
   ctx->pending_ops[index] = op;
   ctx->output_pending = true;
-  assert(ctx->pending_ops_count >= 0);
+  DSPD_ASSERT(ctx->pending_ops_count >= 0);
   ctx->pending_ops_count++;
-  assert(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
+  DSPD_ASSERT(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
   check_io_count(ctx);
   ctx->ops->poll_async(ctx->ops_arg, dspd_aio_block_directions(ctx));
 }
@@ -379,7 +379,7 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->req_out.rdata.rlen = op->outbufsize;
 	      ctx->req_out.tag = create_tag(ctx, op->tag, p);
 	      op->reserved |= (uint64_t)ctx->seq_out;
-	      assert(((op->reserved >> 16U) & 0xFFFFU) == p);
+	      DSPD_ASSERT(((op->reserved >> 16U) & 0xFFFFU) == p);
 	      ctx->cnt_out = 1;
 	      ctx->iov_out[0].iov_base = &ctx->req_out;
 	      ctx->iov_out[0].iov_len = sizeof(ctx->req_out);
@@ -424,11 +424,11 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 
   check_io_count(ctx);
 
-  assert(ctx->pending_ops_count >= 0);
+  DSPD_ASSERT(ctx->pending_ops_count >= 0);
   if ( op->reserved & DSPD_AIO_DATABUF )
     {
       //This op uses the internal data buffer.
-      assert(ctx->datalen > 0);
+      DSPD_ASSERT(ctx->datalen > 0);
       ctx->datalen = 0;
     }
   if ( op->complete )
@@ -506,9 +506,9 @@ int32_t dspd_aio_send(struct dspd_aio_ctx *ctx)
   struct dspd_async_op *op;
   while ( find_next_op(ctx) )
     {
-      assert(ctx->current_op >= 0);
+      DSPD_ASSERT(ctx->current_op >= 0);
       op = ctx->pending_ops[ctx->current_op];
-      assert(op != NULL);
+      DSPD_ASSERT(op != NULL);
       if ( ctx->req_out.flags & (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED) )
 	ret = dspd_aio_send_cmsg(ctx);
       else
@@ -589,7 +589,7 @@ static int32_t recv_async_event(struct dspd_aio_ctx *ctx)
 	{
 	  o = ctx->off_in - sizeof(ctx->req_in);
 	  ret = ctx->ops->read(ctx->ops_arg, &ctx->buf_in[o], ctx->req_in.len - ctx->off_in);
-	  assert(ret != 0);
+	  DSPD_ASSERT(ret != 0);
 	  if ( ret > 0 )
 	    {
 	      ctx->off_in += ret;
@@ -623,7 +623,7 @@ static ssize_t find_pending_op(struct dspd_aio_ctx *ctx)
 	{
 	  if ( (op->reserved & 0xFFFFU) == seq && op->tag == usertag )
 	    {
-	      assert(((op->reserved >> 16U) & 0xFFFFU) == index);
+	      DSPD_ASSERT(((op->reserved >> 16U) & 0xFFFFU) == index);
 	      ret = index;
 	    }
 	}
@@ -644,7 +644,7 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
   if ( ctx->op_in >= 0 )
     {
       op = ctx->pending_ops[ctx->op_in];
-      assert(op != NULL);
+      DSPD_ASSERT(op != NULL);
       ptr = op->outbuf;
       maxlen = op->outbufsize;
     } else
@@ -706,7 +706,7 @@ static int32_t recv_reply(struct dspd_aio_ctx *ctx)
 	}
     } else
     {
-      assert(ctx->off_in == ctx->req_in.len);
+      DSPD_ASSERT(ctx->off_in == ctx->req_in.len);
       ret = 0;
     }
   if ( ctx->off_in == ctx->req_in.len )
@@ -854,7 +854,7 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
 	  if ( ctx->op_in >= 0 )
 	    {
 	      op = ctx->pending_ops[ctx->op_in];
-	      assert(op != NULL);
+	      DSPD_ASSERT(op != NULL);
 	      op->error = ret;
 	      op->xfer = 0;
 	      io_complete(ctx, op);
@@ -1148,8 +1148,8 @@ void dspd_aio_get_event_cb(struct dspd_aio_ctx *ctx, dspd_aio_event_cb_t *async_
 
 static void dspd_aio_fifo_destroy(struct dspd_aio_fifo_master *master)
 {
-  assert(master->client == NULL);
-  assert(master->server == NULL);
+  DSPD_ASSERT(master->client == NULL);
+  DSPD_ASSERT(master->server == NULL);
   dspd_fifo_delete(master->rx);
   dspd_fifo_delete(master->tx);
   dspd_fifo_delete(master->txoob);
@@ -1498,7 +1498,7 @@ void dspd_aio_fifo_close(void *arg)
       ctx->master->server = NULL;
     } else
     {
-      assert(ctx != ctx->master->server && ctx != ctx->master->client);
+      DSPD_ASSERT(ctx != ctx->master->server && ctx != ctx->master->client);
     }
   while ( dspd_fifo_read(ctx->rxoob, &msg, 1) == 1 )
     close(msg.fd);

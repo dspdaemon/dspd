@@ -77,12 +77,12 @@ void test_playback(struct dspd_pcmcli *cli, const struct dspd_cli_params *params
 	 max_fill,
 	 avgfill,
 	 avgdelay);
-  assert(min_delay > 0);
-  assert(max_delay > 0);
-  assert(min_fill > 0);
-  assert(max_fill > 0);
-  assert(max_delay <= (params->bufsize*2));
-  assert(max_fill <= params->bufsize);
+  DSPD_ASSERT(min_delay > 0);
+  DSPD_ASSERT(max_delay > 0);
+  DSPD_ASSERT(min_fill > 0);
+  DSPD_ASSERT(max_fill > 0);
+  DSPD_ASSERT(max_delay <= (params->bufsize*2));
+  DSPD_ASSERT(max_fill <= params->bufsize);
 
 }
 
@@ -134,7 +134,7 @@ int main(int argc, char **argv)
   ret = dspd_pcmcli_new(&cli, DSPD_PCM_SBIT_PLAYBACK, 0);
   if ( ret < 0 )
     err_exit(ret);
-  assert(cli != NULL);
+  DSPD_ASSERT(cli != NULL);
   memset(&op, 0, sizeof(op));
 
 
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
     err_exit(ret);
   
   devinfo = dspd_pcmcli_device_info(cli, DSPD_PCM_SBIT_PLAYBACK);
-  assert(devinfo != NULL);
+  DSPD_ASSERT(devinfo != NULL);
   printf("%s\n", devinfo->desc);
 
   printf("Setting info...");
@@ -186,7 +186,7 @@ int main(int argc, char **argv)
 
 
   FILE *fp = fopen(FILENAME, "r");
-  assert(fp);
+  DSPD_ASSERT(fp);
 
   printf("Testing playback:\n");
   test_playback(cli, &params, fp, params.rate);

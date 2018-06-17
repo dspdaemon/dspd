@@ -5,6 +5,7 @@
 #include <sys/uio.h>
 #include <stdarg.h>
 #include <errno.h>
+
 struct dspd_ll {
   void           *pointer;
   struct dspd_ll *prev, *next;
@@ -105,4 +106,10 @@ static inline bool dspd_tmperr(int err)
 
 #define dspd_fatal_err(_e) (!dspd_tmperr(_e))
 bool dspd_devname_cmp(const char *devname, const char *str);
+
+
+
+void dspd_enable_assert_log(void);
+void _dspd_assert(const char *expr, const char *file, unsigned int line);
+#define DSPD_ASSERT(e) ((void) ((e) ? ((void)0) : _dspd_assert (#e, __FILE__, __LINE__)))
 #endif

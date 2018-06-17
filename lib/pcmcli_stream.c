@@ -411,7 +411,7 @@ ssize_t dspd_pcmcli_stream_write(struct dspd_pcmcli_stream *stream,
 	      ret = -EAGAIN;
 	      break;
 	    }
-	  assert(l <= (len - offset));
+	  DSPD_ASSERT(l <= (len - offset));
 	  if ( data )
 	    {
 	      stream->playback_conv(data+(offset*stream->framesize), 

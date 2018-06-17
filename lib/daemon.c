@@ -771,7 +771,7 @@ static struct dspd_dict *generate_modules_list(void)
 		{
 		  strlcpy(name, &namelist[i]->d_name[4U], sizeof(name));
 		  p = strrchr(name, '.');
-		  assert(p != NULL);
+		  DSPD_ASSERT(p != NULL);
 		  *p = 0;
 		  if ( ! dspd_dict_set_value(dict, name, namelist[i]->d_name, true) )
 		    {
@@ -1100,7 +1100,7 @@ int dspd_daemon_init(int argc, char **argv)
 	}
     }
   
-  assert(dspd_dctx.modules_dir != NULL);
+  DSPD_ASSERT(dspd_dctx.modules_dir != NULL);
   if ( ! dspd_dict_find_section(dspd_dctx.config, "MODULES") )
     {
       struct dspd_dict *curr;
@@ -1186,7 +1186,7 @@ int dspd_daemon_init(int argc, char **argv)
       ret = -ENOMEM;
       goto out;
     }
-  assert(dspd_dctx.objects != NULL);
+  DSPD_ASSERT(dspd_dctx.objects != NULL);
   
 
   dspd_slist_entry_set_used(dspd_dctx.objects, 0, true);
@@ -1567,7 +1567,7 @@ int dspd_daemon_hotplug_add(const struct dspd_dict *dict)
 	  if ( dspd_dict_insert_value(kvs, DSPD_HOTPLUG_SLOT, "0000") )
 	    {
 	      p = dspd_dict_find_pair(kvs, DSPD_HOTPLUG_SLOT);
-	      assert(p);
+	      DSPD_ASSERT(p);
 	      r = sh->callbacks->add(sh->arg, dict);
 	      if ( r >= 0 && r < DSPD_MAX_OBJECTS )
 		{
@@ -2112,9 +2112,9 @@ int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags)
 
 void dspd_daemon_unref(uint32_t stream)
 {
-  assert(stream < DSPD_MAX_OBJECTS);
+  DSPD_ASSERT(stream < DSPD_MAX_OBJECTS);
   dspd_slist_entry_wrlock(dspd_dctx.objects, stream);
-  assert(dspd_slist_refcnt(dspd_dctx.objects, stream) > 0);
+  DSPD_ASSERT(dspd_slist_refcnt(dspd_dctx.objects, stream) > 0);
   dspd_slist_unref(dspd_dctx.objects, stream);
   dspd_slist_entry_rw_unlock(dspd_dctx.objects, stream);
 }
@@ -2353,7 +2353,7 @@ static int32_t daemon_reply_buf(struct dspd_rctx *rctx,
 				const void *buf, 
 				size_t len)
 {
-  assert(len <= rctx->outbufsize);
+  DSPD_ASSERT(len <= rctx->outbufsize);
   if ( buf != rctx->outbuf )
     memcpy(rctx->outbuf, buf, len);
   rctx->bytes_returned = len;

@@ -225,15 +225,15 @@ int dspd_load_modules(struct dspd_module_list **l,
     {
       if ( list->modules != NULL )
 	{
-	  assert(tail->next == NULL);
+	  DSPD_ASSERT(tail->next == NULL);
 	  tail->next = list->modules;
-	  assert(list->modules->prev == NULL);
+	  DSPD_ASSERT(list->modules->prev == NULL);
 	  list->modules->prev = tail;
 	}
       list->modules = head;
     } else
     {
-      assert(list->modules == NULL);
+      DSPD_ASSERT(list->modules == NULL);
     }
   
 
@@ -291,7 +291,7 @@ void dspd_module_list_destroy(struct dspd_module_list *list)
 	  free(m->name);
 	  free(m->file);
 	}
-      assert(prev != curr);
+      DSPD_ASSERT(prev != curr);
       free(prev);
       prev = curr;
     }

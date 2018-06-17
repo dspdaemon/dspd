@@ -1,6 +1,7 @@
 /*
  *  WQ - Work queue
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -29,7 +30,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include "wq.h"
-
+#include "util.h"
 int dspd_wq_new(struct dspd_wq **wq)
 {
   struct dspd_wq *w = calloc(1, sizeof(struct dspd_wq));
@@ -107,11 +108,11 @@ bool dspd_queue_work(struct dspd_wq *wq, const struct dspd_wq_item *item)
   ssize_t ret;
   bool result = true;
   int e;
-  assert(item->len >= sizeof(*item) && item->len <= DSPD_WQ_ITEM_MAX_DATA);
+  DSPD_ASSERT(item->len >= sizeof(*item) && item->len <= DSPD_WQ_ITEM_MAX_DATA);
   while ( (ret = write(wq->pipe[1], item, item->len)) != item->len )
     {
       e = errno;
-      assert(ret <= 0);
+      DSPD_ASSERT(ret <= 0);
       if ( (ret == 0) ||
 	   (ret < 0 && e != EINTR && e != EAGAIN && e != EWOULDBLOCK) )
 	{

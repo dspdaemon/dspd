@@ -22,7 +22,6 @@ static int mainthread_loop(int argc,
 
 int main(int argc, char **argv)
 {
-  struct dspd_dict *sect;
   char **names, **files;
   size_t i;
   int ret = 0;
@@ -54,7 +53,7 @@ int main(int argc, char **argv)
       return 1;
     }
   dspd_time_init();
-
+  dspd_enable_assert_log();
   struct dspd_dict *modules = dspd_dict_find_section(dspd_dctx.config, "MODULES");
 
   if ( modules )

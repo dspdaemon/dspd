@@ -797,7 +797,7 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
       ret *= -1;
       return ret;
     }
-  assert(map->addr);
+  DSPD_ASSERT(map->addr);
 
   
   //Find sections and set up objects
@@ -843,7 +843,7 @@ int32_t dspd_rclient_attach(struct dspd_rclient *client,
       ret *= -1;
       goto out;
     }
-  assert(stream->fifo.data == addr.addr);
+  DSPD_ASSERT(stream->fifo.data == addr.addr);
 
   if ( addr.length < dspd_fifo_size(params->bufsize,
 				    params->channels * sizeof(float)) )

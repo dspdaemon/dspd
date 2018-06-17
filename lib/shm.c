@@ -151,7 +151,7 @@ static void assign_sections(struct dspd_shm_header *hdr,
       offset += (l * SHM_ALIGN);
     }
   // for ( i = 0; i < naddr; i++ )
-  //  assert(hdr->sections[i].section_id == addr[i].section_id);
+  //  DSPD_ASSERT(hdr->sections[i].section_id == addr[i].section_id);
 }
 
 /*

@@ -1,6 +1,7 @@
 /*
  *  OBJLIST - a mostly nonblocking object list
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -31,6 +32,7 @@
 #include "objlist.h"
 #include "atomic.h"
 #include "req.h"
+#include "util.h"
 
 #ifndef KL_FUTEX
 #define KL_PTHREADS
@@ -469,7 +471,7 @@ void dspd_slist_entry_rw_unlock(struct dspd_slist *list, uint32_t entry)
   struct dspd_slist_entry *e = &list->entries[entry];
   int ret;
   ret = pthread_rwlock_unlock(&e->rwlock);
-  assert(ret == 0);
+  DSPD_ASSERT(ret == 0);
 }
 
 

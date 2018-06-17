@@ -119,9 +119,9 @@ static const struct cbpoll_fd_ops msgpipe_fd_ops = {
 void cbpoll_unref(struct cbpoll_ctx *ctx, int index)
 {
   struct cbpoll_fd *fd;
-  assert((size_t)index < ctx->max_fd);
+  DSPD_ASSERT((size_t)index < ctx->max_fd);
   fd = &ctx->fdata[index];
-  assert(fd->refcnt);
+  DSPD_ASSERT(fd->refcnt);
   fd->refcnt--;
   if ( fd->refcnt == 0 )
     {
@@ -157,9 +157,9 @@ void cbpoll_unref(struct cbpoll_ctx *ctx, int index)
 void cbpoll_ref(struct cbpoll_ctx *ctx, int index)
 {
   struct cbpoll_fd *fd;
-  assert((size_t)index < ctx->max_fd);
+  DSPD_ASSERT((size_t)index < ctx->max_fd);
   fd = &ctx->fdata[index];
-  assert(fd->refcnt);
+  DSPD_ASSERT(fd->refcnt);
   fd->refcnt++;
 }
 
@@ -346,9 +346,9 @@ static void *async_work_thread(void *p)
 	{
 	  if ( len == 0 )
 	    break;
-	  assert(work->index < ctx->max_fd);
+	  DSPD_ASSERT(work->index < ctx->max_fd);
 	  fd = &ctx->fdata[work->index];
-	  assert(fd->fd == work->fd);
+	  DSPD_ASSERT(fd->fd == work->fd);
 	  ctx->wq.extra_data = work->extra_data;
 	  work->callback(ctx,
 			 fd->data,
@@ -372,7 +372,7 @@ int32_t cbpoll_send_event(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt)
 	  err = -EPIPE;
 	  break;
 	}
-      assert(ret < 0);
+      DSPD_ASSERT(ret < 0);
       if ( errno != EAGAIN && errno != EINTR && errno != EWOULDBLOCK )
 	{
 	  err = -errno;
@@ -387,7 +387,7 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk)
   int32_t written;
   struct cbpoll_fd *fd;
   written = dspd_fifo_write(ctx->wq.fifo, wrk, 1);
-  assert(written >= 0);
+  DSPD_ASSERT(written >= 0);
   if ( written == 0 )
     {
       if ( ctx->wq.overflow.fd < 0 )
@@ -412,8 +412,8 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk)
 int32_t cbpoll_get_events(struct cbpoll_ctx *ctx, int32_t index)
 {
   struct cbpoll_fd *f = &ctx->fdata[index];
-  assert(index < ctx->max_fd);
-  assert(f->refcnt);
+  DSPD_ASSERT(index < ctx->max_fd);
+  DSPD_ASSERT(f->refcnt);
   return f->events;
 }
 
@@ -424,12 +424,12 @@ int32_t cbpoll_set_events(struct cbpoll_ctx *ctx,
   struct cbpoll_fd *f = &ctx->fdata[index];
   int32_t ret;
   struct epoll_event evt;
-  assert(index < ctx->max_fd);
+  DSPD_ASSERT(index < ctx->max_fd);
   if ( f->events != events || 
        (f->events & EPOLLONESHOT) || 
        (events & EPOLLONESHOT) )
     {
-      assert(f->refcnt);
+      DSPD_ASSERT(f->refcnt);
       if ( f->fd >= 0 )
 	{
 	  evt.events = events;
@@ -764,8 +764,8 @@ struct cbpoll_fd *cbpoll_get_fdata(struct cbpoll_ctx *ctx, int32_t index)
 
 void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout)
 {
-  assert(index < ctx->max_fd && ctx->pending_timers != NULL);
-  assert(ctx->fdata[index].ops->timer_event);
+  DSPD_ASSERT(index < ctx->max_fd && ctx->pending_timers != NULL);
+  DSPD_ASSERT(ctx->fdata[index].ops->timer_event);
   if ( ctx->pending_timers[index] != timeout )
     {
       if ( ctx->next_timeout > timeout || ctx->next_timeout == 0 )
@@ -781,7 +781,7 @@ void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout)
 
 void cbpoll_cancel_timer(struct cbpoll_ctx *ctx, size_t index)
 {
-  assert(index < ctx->max_fd && ctx->pending_timers != NULL);
+  DSPD_ASSERT(index < ctx->max_fd && ctx->pending_timers != NULL);
   //The timer may still fire one time.  After that it will be canceled for real.
   ctx->pending_timers[index] = 0;
 }

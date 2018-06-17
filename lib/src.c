@@ -1,6 +1,7 @@
 /*
  *  SRC - Sample Rate Conversion
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -26,6 +27,7 @@
 #include <errno.h>
 #include <assert.h>
 #include "src.h"
+#include "util.h"
 struct dspd_bcr_params {
   const float  *inbuf;
   unsigned int  in_size;
@@ -60,7 +62,7 @@ static void process_compress(struct dspd_bcr_state * __restrict st,
 			     size_t * __restrict gen)
 {
   unsigned int len = *gen, o = 0, i = 0, c, imax;
-  assert(st->channels);
+  DSPD_ASSERT(st->channels);
   len *= st->channels;
   imax = (*used) * st->channels;
   if ( st->cont )
@@ -114,7 +116,7 @@ static void process_expand(struct dspd_bcr_state * __restrict st,
   int o = 0, i = 0;
   double val;
   int c;
-  assert(st->channels);
+  DSPD_ASSERT(st->channels);
   mx *= st->channels;
   len *= st->channels;
   switch(st->cont)

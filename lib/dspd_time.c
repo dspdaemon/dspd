@@ -1,6 +1,7 @@
 /*
  *  DSPD_TIME - Timers
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -34,7 +35,7 @@
 #include <atomic_ops.h>
 #include <stdbool.h>
 #include "dspd_time.h"
-
+#include "util.h"
 static volatile AO_TS_t lock = AO_TS_INITIALIZER;
 static volatile AO_t init = 0;
 static clockid_t clockid = -1;
@@ -148,7 +149,7 @@ int dspd_timer_init(struct dspd_timer *tmr)
 int dspd_timer_new(struct dspd_timer **tmr)
 {
   int ret;
-  assert(tmr);
+  DSPD_ASSERT(tmr);
   *tmr = malloc(sizeof(struct dspd_timer));
   if ( ! *tmr )
     return -errno;
@@ -217,7 +218,7 @@ int dspd_timer_getexp(struct dspd_timer *tmr, dspd_time_t *exp)
 
 int dspd_timer_getpollfd(struct dspd_timer *tmr, struct pollfd *pfd)
 {
-  assert(tmr);
+  DSPD_ASSERT(tmr);
   if ( tmr->fd <= 0 )
     return -EINVAL;
   pfd->fd = tmr->fd;

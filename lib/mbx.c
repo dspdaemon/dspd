@@ -1,6 +1,7 @@
 /*
  *  MBX - Memory Buffer eXchange  (lock free atomic memory blocks)
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -25,6 +26,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include "mbx.h"
+#include "util.h"
 
 /*
   Calculate the size of a MBX data buffer.
@@ -51,13 +53,13 @@ int dspd_mbx_init(struct dspd_mbx_header *mbx,
   else
     mbx->data = addr;
   mbx->blocksize = blocksize;
-  assert(mbx->blocksize);
+  DSPD_ASSERT(mbx->blocksize);
   mbx->flags |= DSPD_MBX_FLAG_INIT;
   for ( i = 0; i < DSPD_MBX_BLOCKS; i++ )
     dspd_ts_clear(&mbx->data->locks[i].lock);
-  assert(mbx->blocksize);
+  DSPD_ASSERT(mbx->blocksize);
   dspd_mbx_reset(mbx);
-  assert(mbx->blocksize);
+  DSPD_ASSERT(mbx->blocksize);
   return 0;
 }
 

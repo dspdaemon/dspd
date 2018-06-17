@@ -104,7 +104,7 @@ void dspd_translate_parameters(const struct dspd_cli_params *input,
       frame_bytes = dspd_get_pcm_format_size(out.format);
     }
   frame_bytes *= out.channels;
-  assert(frame_bytes);
+  DSPD_ASSERT(frame_bytes);
   sample_time = 1000000000 / out.rate;
   sample_time_input = 1000000000 / out.rate;
   if ( output->xflags & DSPD_CLI_XFLAG_BYTES )
@@ -153,7 +153,7 @@ void dspd_translate_parameters(const struct dspd_cli_params *input,
       t1 = out.latency * sample_time;
       t2 = input->min_latency * sample_time_input;
       n = t1 / t2;
-      assert(n > 0);
+      DSPD_ASSERT(n > 0);
       out.latency = ((n * input->min_latency) * sample_time_input) / sample_time;
       n = out.fragsize / out.latency;
       out.fragsize = n * out.latency;
@@ -645,4 +645,41 @@ bool dspd_devname_cmp(const char *devname, const char *str)
       ret = true;
     }
   return ret;
+}
+
+static bool enable_assert_log = false;
+void dspd_enable_assert_log(void)
+{
+  enable_assert_log = true;
+}
+void _dspd_assert(const char *expr, const char *file, unsigned int line)
+{
+  char buf[1024UL];
+  int len, offset = 0, ret;
+  int fd = -1;
+  snprintf(buf, sizeof(buf), "/tmp/dspd-fail-%d.log", getpid());
+  if ( enable_assert_log )
+    fd = creat(buf, 0644);
+  len = snprintf(buf, sizeof(buf), "%s:%u: failed assertion `%s'\n", file, line, expr);
+  if ( fd >= 0 )
+    {
+      while ( offset < len )
+	{
+	  ret = write(fd, &buf[offset], len - offset);
+	  if ( ret <= 0 )
+	    break;
+	  offset += ret;
+	}
+    }
+  offset = 0;
+  while ( offset < len )
+    {
+      ret = write(2, &buf[offset], len - offset);
+      if ( ret <= 0 )
+        break;
+      offset += ret;
+    }
+  if ( fd != 2 )
+    close(fd);
+  abort();
 }

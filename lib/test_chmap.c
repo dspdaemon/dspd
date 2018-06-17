@@ -6,20 +6,20 @@ void test_chmap_get_default(void)
   size_t j;
   const char *name;
   printf("Testing default channel maps...\n");
-  assert(dspd_pcm_chmap_get_default(0UL) == NULL);
+  DSPD_ASSERT(dspd_pcm_chmap_get_default(0UL) == NULL);
   for ( i = 1; i <= DSPD_CHMAP_LAST; i++ )
     {
       map = dspd_pcm_chmap_get_default(i);
       if ( map )
 	{
 	  printf("%d: ", i);
-	  assert(map->ichan == 0);
-	  assert(map->ochan == 0);
+	  DSPD_ASSERT(map->ichan == 0);
+	  DSPD_ASSERT(map->ochan == 0);
 	  for ( j = 0; j < map->count; j++ )
 	    {
 	      name = dspd_pcm_chmap_channel_name(map->pos[j], true);
-	      assert(name != NULL);
-	      assert(strcmp(name, "UNKNOWN") != 0);
+	      DSPD_ASSERT(name != NULL);
+	      DSPD_ASSERT(strcmp(name, "UNKNOWN") != 0);
 	      printf("%s ", name);
 	    }
 	  printf("\n");
@@ -37,7 +37,7 @@ void test_chmap_test(void)
   struct dspd_pcm_chmap_container badmap, goodmap;
   printf("Testing channel map verification...");
   bigmap = dspd_pcm_chmap_get_default(8UL);
-  assert(bigmap != NULL);
+  DSPD_ASSERT(bigmap != NULL);
 
   for ( i = 2; i <= 6UL; i++ )
     {
@@ -48,18 +48,18 @@ void test_chmap_test(void)
 	  if ( ret != 0 )
 	    {
 	      fprintf(stderr, "dspd_pcm_chmap_test(ch=%ld): %d\n", (long)i, ret);
-	      assert(ret == 0);
+	      DSPD_ASSERT(ret == 0);
 	    }
 	}
     }
 
   //Test a map with a channel that is not present
   monomap = dspd_pcm_chmap_get_default(1);
-  assert(dspd_pcm_chmap_test(monomap, bigmap) == -EBADSLT);
+  DSPD_ASSERT(dspd_pcm_chmap_test(monomap, bigmap) == -EBADSLT);
   
   //Test an invalid channel map
   memset(&badmap, 0, sizeof(badmap));
-  assert(dspd_pcm_chmap_test(&badmap.map, bigmap) == -EINVAL);
+  DSPD_ASSERT(dspd_pcm_chmap_test(&badmap.map, bigmap) == -EINVAL);
   
 
   //Make sure the struct layout is good
@@ -70,9 +70,9 @@ void test_chmap_test(void)
   for ( i = 0; i < badmap.map.count; i++ )
     {
       //If this one fails then a mistake was made in the headers.
-      assert(&badmap.map.pos[i] == &badmap.pos[i]);
+      DSPD_ASSERT(&badmap.map.pos[i] == &badmap.pos[i]);
       //If this one fails then the compiler must be broken
-      assert(badmap.map.pos[i] == badmap.pos[i]);
+      DSPD_ASSERT(badmap.map.pos[i] == badmap.pos[i]);
     }
 
 
@@ -94,7 +94,7 @@ void test_chmap_test(void)
 	  if ( ret != 1 )
 	    {
 	      fprintf(stderr, "dspd_pcm_chmap_test(ch=%ld): %d\n", (long)i, ret);
-	      assert(ret == 1);
+	      DSPD_ASSERT(ret == 1);
 	    }
 	}
     }
@@ -114,7 +114,7 @@ void test_chmap_test(void)
   if ( ret != -ECHRNG )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == -ECHRNG);
+      DSPD_ASSERT(ret == -ECHRNG);
     }
   
   memset(&badmap, 0, sizeof(badmap));
@@ -130,7 +130,7 @@ void test_chmap_test(void)
   if ( ret != -ECHRNG )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == -ECHRNG);
+      DSPD_ASSERT(ret == -ECHRNG);
     }
 
   memset(&badmap, 0, sizeof(badmap));
@@ -144,7 +144,7 @@ void test_chmap_test(void)
   if ( ret != -ECHRNG )
     {
       fprintf(stderr, "Error!!! %d\n", ret);
-      assert(ret == -ECHRNG);
+      DSPD_ASSERT(ret == -ECHRNG);
     }
 
 
@@ -159,7 +159,7 @@ void test_chmap_test(void)
   if ( ret != -ECHRNG )
     {
       fprintf(stderr, "Error!!!!! %d\n", ret);
-      assert(ret == -ECHRNG);
+      DSPD_ASSERT(ret == -ECHRNG);
     }
 
 
@@ -168,7 +168,7 @@ void test_chmap_test(void)
   if ( ret != -EINVAL )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == -EINVAL);
+      DSPD_ASSERT(ret == -EINVAL);
     }
 
   badmap.map.flags = DSPD_CHMAP_MATRIX;
@@ -176,7 +176,7 @@ void test_chmap_test(void)
   if ( ret != -EINVAL )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == -EINVAL);
+      DSPD_ASSERT(ret == -EINVAL);
     }
 
   printf("OK\n");
@@ -209,13 +209,13 @@ void test_chmap_sizeof(void)
   for ( i = 1; i <= DSPD_CHMAP_LAST; i++ )
     {
       len = dspd_pcm_chmap_sizeof(i, 0);
-      assert(len > 0); 
-      assert(len > sizeof(*map));
+      DSPD_ASSERT(len > 0); 
+      DSPD_ASSERT(len > sizeof(*map));
       p = calloc(1, len+sizeof(intptr_t));
       addr = (size_t*)&p[len];
       map = (struct dspd_pcm_chmap*)p;
       fill_chmap(map, i);
-      assert(*addr == 0UL);
+      DSPD_ASSERT(*addr == 0UL);
       free(map);
 
       len = dspd_pcm_chmap_sizeof(i, DSPD_CHMAP_MULTI);
@@ -223,7 +223,7 @@ void test_chmap_sizeof(void)
       addr = (size_t*)&p[len];
       map = (struct dspd_pcm_chmap*)p;
       fill_chmap(map, i * 2);
-      assert(*addr == 0UL);
+      DSPD_ASSERT(*addr == 0UL);
       free(map);
     }
   printf("OK\n");
@@ -242,13 +242,13 @@ void test_chmap_index(void)
   for ( i = DSPD_CHMAP_UNKNOWN; i <= DSPD_CHMAP_LAST; i++ )
     {
       name = dspd_pcm_chmap_channel_name(i, true);
-      assert(name != NULL);
+      DSPD_ASSERT(name != NULL);
       index = dspd_pcm_chmap_index(name);
-      assert(index >= DSPD_CHMAP_UNKNOWN && index <= DSPD_CHMAP_LAST);
+      DSPD_ASSERT(index >= DSPD_CHMAP_UNKNOWN && index <= DSPD_CHMAP_LAST);
       if ( index != (ssize_t)i )
 	{
 	  fprintf(stderr, "name='%s' index=%ld i=%ld\n", name, (long)index, (long)i);
-	  assert(index == (ssize_t)i);
+	  DSPD_ASSERT(index == (ssize_t)i);
 	}
     }
   printf("OK\n");
@@ -273,28 +273,28 @@ void test_chmap_from_string(void)
       if ( ! map )
 	continue;
       ret = dspd_pcm_chmap_to_string(map, buf, sizeof(buf));
-      assert(ret >= 0);
+      DSPD_ASSERT(ret >= 0);
       memset(&m, 0, sizeof(m));
       m.map.count = i;
       ret = dspd_pcm_chmap_from_string(buf, &m);
-      assert(ret >= 0);
+      DSPD_ASSERT(ret >= 0);
       ret = dspd_pcm_chmap_to_string(&m.map, buf2, sizeof(buf2));
-      assert(ret >= 0);
-      assert(strcmp(buf2, buf) == 0);
+      DSPD_ASSERT(ret >= 0);
+      DSPD_ASSERT(strcmp(buf2, buf) == 0);
     }
 
   //Test invalid buffer size
   map = dspd_pcm_chmap_get_default(2UL);
-  assert(map != NULL);
+  DSPD_ASSERT(map != NULL);
   memset(buf, 0, sizeof(buf));
   ret = dspd_pcm_chmap_to_string(map, buf, 1);
-  assert(ret == -ENOSPC);
-  assert(buf[1] == 0);
+  DSPD_ASSERT(ret == -ENOSPC);
+  DSPD_ASSERT(buf[1] == 0);
   
   //Test matrix conversions
   memset(&m, 0, sizeof(m));
   ret = dspd_pcm_chmap_from_string("0=>0,1=>1", &m);
-  assert(ret == 0);
+  DSPD_ASSERT(ret == 0);
   printf("OK\n");
   
 
@@ -313,9 +313,9 @@ void test_chmap_translate(void)
 
   //Stereo to mono
   in = dspd_pcm_chmap_get_default(2UL);
-  assert(in->count > 0);
+  DSPD_ASSERT(in->count > 0);
   out = dspd_pcm_chmap_get_default(1UL);
-  assert(out->count > 0);
+  DSPD_ASSERT(out->count > 0);
   memset(&m, 0, sizeof(m));
   m.map.count = 2UL;
   m.map.ichan = m.map.count;
@@ -323,17 +323,17 @@ void test_chmap_translate(void)
   if ( ret != 0 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 0);
+      DSPD_ASSERT(ret == 0);
     }
-  assert(m.map.ichan > 0);
-  assert(m.map.ochan > 0);
-  assert(m.map.count > 0);
-  assert(m.map.flags & DSPD_CHMAP_MATRIX);
+  DSPD_ASSERT(m.map.ichan > 0);
+  DSPD_ASSERT(m.map.ochan > 0);
+  DSPD_ASSERT(m.map.count > 0);
+  DSPD_ASSERT(m.map.flags & DSPD_CHMAP_MATRIX);
   ret = dspd_pcm_chmap_test(&m.map, out);
   if ( ret != 1 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 1);
+      DSPD_ASSERT(ret == 1);
     }
 
 
@@ -347,15 +347,15 @@ void test_chmap_translate(void)
   if ( ret != 0 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 0);
+      DSPD_ASSERT(ret == 0);
     }
-  assert(m.map.flags & DSPD_CHMAP_MATRIX);
+  DSPD_ASSERT(m.map.flags & DSPD_CHMAP_MATRIX);
 
   ret = dspd_pcm_chmap_test(&m.map, out);
   if ( ret != 1 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 1);
+      DSPD_ASSERT(ret == 1);
     }
   
 
@@ -368,19 +368,19 @@ void test_chmap_translate(void)
   if ( ret != 0 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 0);
+      DSPD_ASSERT(ret == 0);
     }
-  assert(m.map.flags & DSPD_CHMAP_MATRIX);
-  assert(m.map.count != 0);
-  assert(m.map.ichan != 0);
-  assert(m.map.ochan != 0);
+  DSPD_ASSERT(m.map.flags & DSPD_CHMAP_MATRIX);
+  DSPD_ASSERT(m.map.count != 0);
+  DSPD_ASSERT(m.map.ichan != 0);
+  DSPD_ASSERT(m.map.ochan != 0);
   
 
   ret = dspd_pcm_chmap_test(&m.map, out);
   if ( ret != 1 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 1);
+      DSPD_ASSERT(ret == 1);
     }
 
   
@@ -398,15 +398,15 @@ void test_chmap_translate(void)
   if ( ret != 0 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 0);
+      DSPD_ASSERT(ret == 0);
     }
-  assert(m.map.flags & DSPD_CHMAP_MATRIX);
+  DSPD_ASSERT(m.map.flags & DSPD_CHMAP_MATRIX);
 
   ret = dspd_pcm_chmap_test(&m.map, out);
   if ( ret != 1 )
     {
       fprintf(stderr, "Error %d\n", ret);
-      assert(ret == 1);
+      DSPD_ASSERT(ret == 1);
     }
   printf("OK\n");
 }

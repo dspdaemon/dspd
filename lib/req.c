@@ -372,7 +372,7 @@ static int32_t send_cmsg(struct dspd_req_ctx *ctx, int32_t fd)
    */
   if ( ctx->txstat.offset > sizeof(*ctx->txpkt) )
     {
-      assert(ctx->txstat.offset <= ctx->txstat.len);
+      DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
       if ( ctx->txstat.offset < ctx->txstat.len )
 	{
 	  ret = ctx->ops->write(ctx->arg,
@@ -430,7 +430,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
 	return ret;
       ctx->txstat.offset += ret;
     }
-  assert(ctx->txstat.offset <= ctx->txstat.len);
+  DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
   if ( ctx->txstat.offset == ctx->txstat.len )
     {
       ret = ctx->txstat.len;
@@ -457,7 +457,7 @@ int32_t dspd_req_reap(struct dspd_req_ctx *ctx, void **buf, size_t *len, int32_t
       ret = -EAGAIN;
     } else
     {
-      assert(ctx->rxpkt);
+      DSPD_ASSERT(ctx->rxpkt);
       *buf = ctx->rxpkt;
       *len = ctx->rxstat.len;
       if ( ctx->rxstat.isfd )

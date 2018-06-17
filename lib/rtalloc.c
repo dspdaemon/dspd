@@ -1,6 +1,7 @@
 /*
  *  RTALLOC - Realtime memory allocator
  *
+ *   Copyright (c) 2018 Tim Smith <dspdaemon _AT_ yandex.com>
  *
  *   This library is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU Lesser General Public License as
@@ -26,6 +27,7 @@
 #include <assert.h>
 #include <stdbool.h>
 #include "rtalloc.h"
+#include "util.h"
 
 bool rtalloc_check_buffer(struct dspd_rtalloc *alloc, void *addr)
 {
@@ -58,9 +60,9 @@ void dspd_rtalloc_shrink(struct dspd_rtalloc *alloc, void *addr, size_t new_size
 
   if ( alloc == NULL )
     return;
-  assert((uintptr_t)addr < alloc->boundary);
+  DSPD_ASSERT((uintptr_t)addr < alloc->boundary);
  
-  assert(first < alloc->pagecount);
+  DSPD_ASSERT(first < alloc->pagecount);
   npages = new_size / alloc->pagesize;
   if ( new_size % alloc->pagesize )
     npages++;
@@ -216,11 +218,11 @@ void dspd_rtalloc_free(struct dspd_rtalloc *alloc, void *addr)
       pg = &alloc->pages[first];
       count = AO_short_load(&pg->count);
       last = first + 1 + count;
-      assert(last <= alloc->pagecount);
+      DSPD_ASSERT(last <= alloc->pagecount);
       AO_CLEAR(&pg->lock);
       for ( i = first + 1; i < last; i++ )
 	{
-	  assert(alloc->pages[i].lock == AO_TS_SET);
+	  DSPD_ASSERT(alloc->pages[i].lock == AO_TS_SET);
 	  AO_CLEAR(&alloc->pages[i].lock);
 	}
     } else
