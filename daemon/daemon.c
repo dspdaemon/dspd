@@ -8,17 +8,7 @@
 
 
 
-static int mainthread_loop(int argc,
-			   char **argv,
-			   struct dspd_daemon_ctx *ctx)
-{
-  while (1)
-    {
-      if ( ! dspd_wq_process(ctx->wq) )
-	break;
-    }
-  return 0;
-}
+
 
 int main(int argc, char **argv)
 {
@@ -74,10 +64,6 @@ int main(int argc, char **argv)
       
     }
   if ( ret == 0 )
-    {
-      dspd_daemon_register_mainthread_loop(mainthread_loop);
-      assert(dspd_dctx.objects != NULL);
-      dspd_daemon_run();
-    }
+    dspd_daemon_run();
   return ret == 0;
 }

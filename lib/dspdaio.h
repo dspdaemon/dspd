@@ -106,6 +106,14 @@ struct dspd_aio_ctx {
   char   data[256];
   size_t datalen;
   bool dead;
+
+  void (*io_submitted)(struct dspd_aio_ctx *ctx, 
+		       const struct dspd_async_op *op,
+		       void *arg);
+  void (*io_completed)(struct dspd_aio_ctx *ctx, 
+		       const struct dspd_async_op *op,
+		       void *arg);
+  void *io_arg;
 };
 
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);

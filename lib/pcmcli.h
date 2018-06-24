@@ -199,4 +199,7 @@ int32_t dspd_pcmcli_get_stream_index(struct dspd_pcmcli *cli, int32_t sbit);
 
 int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli);
 
+			
+				
+
 #endif /* ifdef _DSPD_PCMCLI_H_ */

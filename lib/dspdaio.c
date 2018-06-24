@@ -225,6 +225,8 @@ static void insert_op(struct dspd_aio_ctx *ctx, size_t index, struct dspd_async_
   DSPD_ASSERT(ctx->pending_ops_count <= (ssize_t)ctx->max_ops);
   check_io_count(ctx);
   ctx->ops->poll_async(ctx->ops_arg, dspd_aio_block_directions(ctx));
+  if ( ctx->io_submitted )
+    ctx->io_submitted(ctx, op, ctx->io_arg);
 }
 
 int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
@@ -292,39 +294,45 @@ int32_t dspd_aio_submit(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
 
 int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, bool async)
 {
-  size_t i;
+  size_t i, count = 0;
   int32_t ret = -EINVAL;
+  struct dspd_async_op *o;
   if ( op->error > 0 )
     {
       ret = -ENOENT;
       for ( i = 0; i < ctx->max_ops; i++ )
 	{
-	  if ( ctx->pending_ops[i] == op )
+	  o = ctx->pending_ops[i];
+	  if ( o == op || op == NULL )
 	    {
-	      if ( op->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
+	      if ( o->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
 		{
 		  //If this op is next in line then remove it
 		  if ( (size_t)ctx->current_op == i )
 		    ctx->current_op = -1;
 		  ctx->cancel_pending = true; //Must cancel later
-		  op->error = ECANCELED; //Pending cancellation
+		  o->error = ECANCELED; //Pending cancellation
 		   //Finish cancellation here.
 		  if ( async == false )
 		    {
-		      while ( op->error > 0 )
+		      while ( o->error > 0 )
 			dspd_aio_process(ctx, 0, -1);
 		    }
 		  ret = 0;
 		} else
 		{
 		  ret = -EBUSY;
+		  count++;
 		}
-	      break;
+	      if ( op )
+		break;
 	    }
 	}
       if ( ret == 0 && ctx->io_ready != NULL )
 	ctx->io_ready(ctx, ctx->io_ready_arg);
     }
+  if ( op == NULL )
+    ret = count;
   return ret;
 }
 
@@ -433,6 +441,8 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     }
   if ( op->complete )
     op->complete(ctx, op);
+  if ( ctx->io_completed )
+    ctx->io_completed(ctx, op, ctx->io_arg);
 }
 
 static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)

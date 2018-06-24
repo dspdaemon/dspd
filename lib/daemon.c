@@ -40,6 +40,7 @@
 #include "sslib.h"
 #include "daemon.h"
 #include "syncgroup.h"
+#include "cbpoll.h"
 #ifndef SCHED_ISO
 #define SCHED_ISO 4
 #endif
@@ -832,7 +833,14 @@ int dspd_daemon_init(int argc, char **argv)
       dspd_dctx.rtsvc_policy = SCHED_RR;
     }
 
-  if ( (ret = dspd_wq_new(&dspd_dctx.wq)) )
+  dspd_dctx.main_thread_loop_context = calloc(1, sizeof(*dspd_dctx.main_thread_loop_context));
+  if ( ! dspd_dctx.main_thread_loop_context )
+    {
+      ret = -errno;
+      goto out;
+    }
+
+  if ( (ret = cbpoll_init(dspd_dctx.main_thread_loop_context, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_AIO_FIFO|CBPOLL_FLAG_CBTIMER, DSPD_MAX_OBJECTS * 4UL)) < 0 )
     goto out;
 
   if ( (ret = dspd_sglist_new(&dspd_dctx.syncgroups)) )
@@ -1245,19 +1253,13 @@ int dspd_daemon_init(int argc, char **argv)
   free(pwbuf);
   if ( ret != 0 )
     {
-      //This is where cleanup should happen
+      //This is where cleanup should happen.
+      //It isn't implemented yet because the daemon just exits and everything gets cleaned up anyway.
     }
   return ret;
 }
 
 
-int dspd_daemon_register_mainthread_loop(int (*mainthread_loop)(int argc,
-								char **argv,
-								struct dspd_daemon_ctx *ctx))
-{
-  dspd_dctx.mainthread_loop = mainthread_loop;
-  return 0;
-}
 
 static struct dspd_ll *dspd_daemon_hotplug_last(const struct dspd_hotplug_cb *callbacks,
 						void *arg)
@@ -2047,15 +2049,7 @@ int dspd_daemon_run(void)
 
 
   dspd_log(0, "Starting main thread loop.");
-  if ( ! dspd_dctx.mainthread_loop )
-    {
-      while (1)
-	sleep(1);
-      ret = 0;
-    } else
-    {
-      ret = dspd_dctx.mainthread_loop(dspd_dctx.argc, dspd_dctx.argv, &dspd_dctx);
-    }
+  ret = cbpoll_run(dspd_dctx.main_thread_loop_context);
   return ret;
 }
 
@@ -2511,10 +2505,6 @@ int32_t dspd_get_glitch_correction(void)
   return dspd_dctx.glitch_correction;
 }
 
-bool dspd_daemon_queue_work(const struct dspd_wq_item *item)
-{
-  return dspd_queue_work(dspd_dctx.wq, item);
-}
 
 
 //Dispatch again from inside a handler

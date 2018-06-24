@@ -1019,7 +1019,8 @@ static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
 			   int64_t arg,
 			   int32_t index,
 			   int32_t fd,
-			   int32_t msg)
+			   int32_t msg,
+			   bool async)
 {
   struct sndio_client *cli = data;
   int ret = _amsg_setpar(cli);
@@ -1400,7 +1401,8 @@ static void free_client_cb(struct cbpoll_ctx *ctx,
 			   int64_t arg,
 			   int32_t index,
 			   int32_t fd,
-			   int32_t msg)
+			   int32_t msg,
+			   bool async)
 {
   struct sndio_client *cli = (struct sndio_client*)(intptr_t)arg;
   if ( cli->pclient )
@@ -1511,7 +1513,8 @@ static void create_client_cb(struct cbpoll_ctx *ctx,
 			     int64_t arg,
 			     int32_t index,
 			     int32_t fd,
-			     int32_t msg)
+			     int32_t msg,
+			     bool async)
 {
   struct sndio_ctx *srv = data;
   struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));

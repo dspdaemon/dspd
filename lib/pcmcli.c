@@ -25,6 +25,7 @@ struct pcmcli_stream_data {
   uint64_t                  xfer;
   struct dspd_device_stat   info;
 };
+
 struct dspd_pcmcli {
   struct pcmcli_stream_data playback;
   struct pcmcli_stream_data capture;
@@ -2858,3 +2859,4 @@ int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli)
 {
   return cli->state;
 }
+

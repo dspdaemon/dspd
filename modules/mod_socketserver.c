@@ -2457,7 +2457,8 @@ static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
 				int64_t arg,
 				int32_t index,
 				int32_t fd,
-				int32_t msg)
+				int32_t msg,
+				bool async)
 {
   int32_t ret;
   struct ss_cctx *cli = data;
@@ -2910,7 +2911,8 @@ static void accept_fd(struct cbpoll_ctx *ctx,
 		      int64_t arg,
 		      int32_t index,
 		      int32_t fd,
-		      int32_t msg)
+		      int32_t msg,
+		      bool async)
 {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
@@ -2923,7 +2925,8 @@ static void insert_fd_cb(struct cbpoll_ctx *ctx,
 			 int64_t arg,
 			 int32_t index,
 			 int32_t fd,
-			 int32_t msg)
+			 int32_t msg,
+			 bool async)
 {
   insert_fd(ctx, arg & 0xFFFFFFFF, arg, index, fd, false, !!(arg & 0xFFFFFFFF00000000LL));
 }
@@ -2934,7 +2937,8 @@ static void accept_vfd_cb(struct cbpoll_ctx *ctx,
 			  int64_t arg,
 			  int32_t index,
 			  int32_t fd,
-			  int32_t msg)
+			  int32_t msg,
+			  bool async)
 {
   struct dspd_aio_fifo_ctx *fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)arg;
   insert_fd(ctx, fifo->master->slot, arg, index, fd, true, fifo->master->remote);

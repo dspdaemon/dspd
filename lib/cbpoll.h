@@ -26,7 +26,8 @@ struct cbpoll_work {
 		   int64_t arg,
 		   int32_t index,
 		   int32_t fd,
-		   int32_t msg);
+		   int32_t msg,
+		   bool async);
   char     extra_data[32];
 };
 
@@ -67,6 +68,7 @@ struct cbpoll_fd_ops {
 		      dspd_time_t timeout);
 
 };
+
 struct cbpoll_fd {
   int       fd;
   int       events;
@@ -88,6 +90,7 @@ struct cbpoll_fd {
 #define CBPOLLFD_FLAG_REMOVED 1
   uint32_t  flags;
   const struct cbpoll_fd_ops *ops;
+
 };
 
 struct dspd_cbtimer;
@@ -133,13 +136,15 @@ struct cbpoll_ctx {
   struct dspd_cbtimer *cbtimer_objects;
   struct dspd_cbtimer *pending_cbtimer_list;
   struct dspd_cbtimer **cbtimer_dispatch_list;
+  dspd_mutex_t loop_lock;
+  dspd_mutex_t work_lock;
 };
 
 int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events);
 
 
-void cbpoll_unref(struct cbpoll_ctx *ctx, int index);
-void cbpoll_ref(struct cbpoll_ctx *ctx, int index);
+uint32_t cbpoll_unref(struct cbpoll_ctx *ctx, int index);
+uint32_t cbpoll_ref(struct cbpoll_ctx *ctx, int index);
 uint32_t cbpoll_refcnt(struct cbpoll_ctx *ctx, int index);
 int32_t cbpoll_send_event(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt);
 void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk);
@@ -162,7 +167,8 @@ void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 						 int64_t arg,
 						 int32_t index,
 						 int32_t fd,
-						 int32_t msg));
+						 int32_t msg,
+						 bool async));
 void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 				   int32_t index,
 				   int64_t arg);
@@ -198,4 +204,59 @@ struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx,
 				      dspd_cbtimer_cb_t callback,
 				      void *arg);
 
+
+
+//Client management for servers
+//The general pattern is something like: get incoming client, shut off listening fd, accept in create(),
+//then activate the listening fd again in success().
+
+struct cbpoll_client_list;
+struct cbpoll_client_hdr;
+struct cbpoll_client_ops {
+  //async client creation (usually called in work thread)
+  struct cbpoll_client_hdr *(*create)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, int64_t arg);
+  //async client destruction (usually called in work thread)
+  void (*destroy)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
+
+  //Completion callbacks
+
+  //client success (called in event loop thread)
+  bool (*success)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
+  //client fail (usually called in event loop thread)
+  void (*fail)(struct cbpoll_ctx *ctx, struct cbpoll_client_list *list, int32_t cli, int32_t index, int32_t fd);
+
+  void (*work_complete)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
+  void (*do_work)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
+};
+
+//header for client struct (make this the first member)
+struct cbpoll_client_hdr {
+  int32_t fd;
+  ssize_t index;
+  ssize_t fd_index;
+  struct cbpoll_client_list *list;
+  struct cbpoll_client_ops *ops;
+  dspd_ts_t busy;
+};
+
+struct cbpoll_client_list {
+  struct cbpoll_client_ops *ops;
+  struct cbpoll_client_hdr **clients;
+  size_t max_clients;
+  void *data;
+};
+
+//accept a new fd
+int32_t cbpoll_accept(struct cbpoll_ctx *ctx, 
+		      struct cbpoll_client_list *list,
+		      int32_t fd, //usually fd of listening socket or accepted socket
+		      size_t index, //index of listening fd
+		      int64_t arg); //arbitrary data
+
+//generic destructor that runs asynchronously
+bool cbpoll_async_destructor_cb(void *data,
+				struct cbpoll_ctx *context,
+				int index,
+				int fd);
+int32_t cbpoll_queue_client_work(struct cbpoll_ctx *ctx, size_t index);
 #endif

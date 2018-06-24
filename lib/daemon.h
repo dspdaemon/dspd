@@ -118,13 +118,14 @@ struct dspd_rcb;
 struct dspd_aio_ctx;
 struct dspd_aio_fifo_ops;
 struct dspd_vctrl_list;
+struct cbpoll_ctx;
 struct dspd_daemon_ctx {
   uint32_t magic;
   struct dspd_module_list *modules;
   int argc;
   char **argv;
   char  *path;
-  int (*mainthread_loop)(int argc, char **argv, struct dspd_daemon_ctx *ctx);
+
   struct dspd_hotplug      hotplug;
   struct dspd_slist      *objects;
 
@@ -145,7 +146,7 @@ struct dspd_daemon_ctx {
 
   char *modules_dir;
   
-  struct dspd_wq *wq;
+
   struct dspd_sglist *syncgroups;
 
   int debug;
@@ -167,14 +168,15 @@ struct dspd_daemon_ctx {
 			 bool                        remote);
   
   struct dspd_vctrl_list *vctrl;
+
+  struct cbpoll_ctx *main_thread_loop_context;
+  
 };
 
 
 extern struct dspd_daemon_ctx dspd_dctx;
 int dspd_daemon_init(int argc, char **argv);
-int dspd_daemon_register_mainthread_loop(int (*mainthread_loop)(int argc,
-								char **argv,
-								struct dspd_daemon_ctx *ctx));
+
 int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
 				 void *arg);
 int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
