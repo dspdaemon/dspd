@@ -842,6 +842,8 @@ int dspd_daemon_init(int argc, char **argv)
 
   if ( (ret = cbpoll_init(dspd_dctx.main_thread_loop_context, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_AIO_FIFO|CBPOLL_FLAG_CBTIMER, DSPD_MAX_OBJECTS * 4UL)) < 0 )
     goto out;
+  if ( (ret = cbpoll_set_name(dspd_dctx.main_thread_loop_context, "")) < 0 )
+    goto out;
 
   if ( (ret = dspd_sglist_new(&dspd_dctx.syncgroups)) )
     goto out;

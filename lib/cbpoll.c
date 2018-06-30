@@ -257,7 +257,7 @@ static void *cbpoll_thread(void *p)
   struct cbpoll_fd *fdata;
   if ( ! ctx->name )
     set_thread_name("dspdcbpoll");
-  else
+  else if ( strlen(ctx->name) > 0 )
     set_thread_name(ctx->name);
 
   while ( AO_load(&ctx->abort) == 0 )
@@ -371,7 +371,7 @@ static void *async_work_thread(void *p)
   struct cbpoll_work *work;
   struct cbpoll_fd *fd;
   uint32_t len;
-  if ( ctx->name )
+  if ( ctx->name != NULL && strlen(ctx->name) > 0 )
     {
       char buf[256];
       sprintf(buf, "%s-wq", ctx->name);

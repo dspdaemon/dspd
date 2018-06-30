@@ -357,6 +357,7 @@ static int32_t send_cmsg(struct dspd_req_ctx *ctx, int32_t fd)
 	  if ( fd < 0 )
 	    memcpy(&fd, &buf[ctx->hdrlen], sizeof(fd));
 	  ret = ctx->ops->sendfd(ctx->arg, fd, &iov);
+	  DSPD_ASSERT(ret <= (ssize_t)iov.iov_len);
 	} else
 	{
 	  //Must be cred
@@ -381,6 +382,7 @@ static int32_t send_cmsg(struct dspd_req_ctx *ctx, int32_t fd)
 	  if ( ret <= 0 )
 	    return ret;
 	  ctx->txstat.offset += ret;
+	  DSPD_ASSERT((size_t)ret <= ctx->txstat.offset);
 	  if ( ctx->txstat.offset == ctx->txstat.len )
 	    ret = ctx->txstat.len;
 	  else
