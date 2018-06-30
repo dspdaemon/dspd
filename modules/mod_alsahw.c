@@ -1153,7 +1153,8 @@ static void alsahw_destructor(void *handle)
 	c = oh->stream_index;
     }
   dspd_daemon_vctrl_unregister(p, c, &hdl->hotplug_event_id);
-  alsahw_mixer_list_remove(hdl->params.name, hdl->hotplug_event_id);
+  if ( hdl->params.name && hdl->hotplug_event_id )
+    alsahw_mixer_list_remove(hdl->params.name, hdl->hotplug_event_id);
   destroy_ctl(hdl);
   if ( hdl->handle )
     snd_pcm_close(hdl->handle);

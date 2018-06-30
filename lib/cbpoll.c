@@ -119,13 +119,19 @@ static const struct cbpoll_fd_ops msgpipe_fd_ops = {
 };
 
 
-uint32_t cbpoll_unref(struct cbpoll_ctx *ctx, int index)
+static uint32_t _cbpoll_unref(struct cbpoll_ctx *ctx, int index, bool recursive)
 {
   struct cbpoll_fd *fd;
   DSPD_ASSERT((size_t)index < ctx->max_fd);
   fd = &ctx->fdata[index];
   DSPD_ASSERT(fd->refcnt);
   fd->refcnt--;
+  if ( fd->ops->refcnt_changed )
+    fd->ops->refcnt_changed(fd->data, ctx, index, fd->fd, fd->refcnt);
+  if ( recursive == true && fd->associated_context >= 0 )
+    if ( _cbpoll_unref(ctx, fd->associated_context, false) == 0 )
+      fd->associated_context = -1;
+    
   if ( fd->refcnt == 0 )
     {
       if ( (fd->flags & CBPOLLFD_FLAG_REMOVED) == 0 && fd->fd >= 0 )
@@ -154,17 +160,53 @@ uint32_t cbpoll_unref(struct cbpoll_ctx *ctx, int index)
       fd->ops = NULL;
       if ( ctx->pending_timers != NULL )
 	cbpoll_cancel_timer(ctx, index);
+      if ( fd->associated_context >= 0 && fd->associated_context == index )
+	ctx->fdata[fd->associated_context].associated_context = -1;
+      fd->associated_context = -1;
     }
   return fd->refcnt;
 }
-uint32_t cbpoll_ref(struct cbpoll_ctx *ctx, int index)
+
+uint32_t cbpoll_unref(struct cbpoll_ctx *ctx, int index)
+{
+  return _cbpoll_unref(ctx, index, true);
+}
+
+static uint32_t _cbpoll_ref(struct cbpoll_ctx *ctx, int index, bool recursive)
 {
   struct cbpoll_fd *fd;
+  uint32_t refcnt;
   DSPD_ASSERT((size_t)index < ctx->max_fd);
   fd = &ctx->fdata[index];
   DSPD_ASSERT(fd->refcnt);
   fd->refcnt++;
+  if ( fd->ops->refcnt_changed )
+    fd->ops->refcnt_changed(fd->data, ctx, index, fd->fd, fd->refcnt);
+  if ( recursive == true && fd->associated_context >= 0 )
+    {
+      refcnt = _cbpoll_ref(ctx, fd->associated_context, false);
+      (void)refcnt;
+      DSPD_ASSERT(refcnt > 1U);
+    }
   return fd->refcnt;
+}
+
+uint32_t cbpoll_ref(struct cbpoll_ctx *ctx, int index)
+{
+  return _cbpoll_ref(ctx, index, true);
+}
+
+void cbpoll_link(struct cbpoll_ctx *ctx, int index1, int index2)
+{
+  struct cbpoll_fd *fd1, *fd2;
+  DSPD_ASSERT(index1 >= 0 && index2 >= 0);
+  DSPD_ASSERT(index1 <= (int)ctx->max_fd && index2 <= (int)ctx->max_fd);
+  fd1 = &ctx->fdata[index1];
+  fd2 = &ctx->fdata[index2];
+  DSPD_ASSERT(fd1->associated_context < 0 && fd2->associated_context < 0);
+  DSPD_ASSERT(fd1->refcnt > 0 && fd2->refcnt > 0);
+  fd1->associated_context = index2;
+  fd2->associated_context = index1;
 }
 
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index)
@@ -614,6 +656,7 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
 {
   int32_t ret;
   struct pollfd pfd;
+  size_t i;
   memset(ctx, 0, sizeof(*ctx));
   ctx->epfd = -1;
   ctx->event_pipe[0] = -1;
@@ -658,6 +701,9 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
       ret = -errno;
       goto out;
     }
+  for ( i = 0; i < max_fds; i++ )
+    ctx->fdata[i].associated_context = -1;
+  
 
   if ( pipe2(ctx->event_pipe, O_CLOEXEC) < 0 )
     {
@@ -985,7 +1031,7 @@ static void io_completed_cb(struct dspd_aio_ctx *ctx,
   cbpoll_unref(cbctx, ctx->slot);
 }
 
-int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
+int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int32_t associated_context)
 {
   int32_t fd, ret = -EINVAL;
   size_t i;
@@ -997,6 +1043,11 @@ int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
 	{
 	  dspd_aio_set_ready_cb(aio, aio_fd_ready, context);
 	  aio->slot = ret;
+	  if ( associated_context >= 0 )
+	    cbpoll_link(context, aio->slot, associated_context);
+	  aio->io_submitted = io_submitted_cb;
+	  aio->io_completed = io_completed_cb;
+	  aio->io_arg = context;
 	}
     } else
     {
@@ -1009,19 +1060,15 @@ int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
 		  context->aio_list[i] = aio;
 		  if ( context->aio_idx <= i )
 		    context->aio_idx = i + 1;
-		  aio->slot = i;
 		  dspd_aio_set_ready_cb(aio, aio_fifo_ready, context);
+		  if ( associated_context >= 0 )
+		    aio->slot = associated_context;
+		  else
+		    aio->slot = -1;
 		  ret = i;
 		}
 	    }
 	}
-    }
-  if ( ret >= 0 )
-    {
-      aio->io_submitted = io_submitted_cb;
-      aio->io_completed = io_completed_cb;
-      aio->io_arg = context;
-      cbpoll_ref(context, aio->slot);
     }
   return ret;
 }
@@ -1091,6 +1138,7 @@ struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx,
 	      ret = &ctx->cbtimer_objects[i];
 	      ret->callback = callback;
 	      ret->arg = arg;
+	      ret->cbpoll = ctx;
 	      break;
 	    }
 	}
@@ -1098,32 +1146,34 @@ struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx,
   return ret;
 }
 
-void dspd_cbtimer_cancel(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer)
+void dspd_cbtimer_cancel(struct dspd_cbtimer *timer)
 {
   if ( timer->prev )
     timer->prev->next = timer->next;
-  else if ( timer == ctx->pending_cbtimer_list )
-    ctx->pending_cbtimer_list = timer->next;
+  else if ( timer == timer->cbpoll->pending_cbtimer_list )
+    timer->cbpoll->pending_cbtimer_list = timer->next;
   if ( timer->next )
     timer->next->prev = timer->prev;
   timer->timeout = 0;
+  timer->period = 0;
   timer->next = NULL;
   timer->prev = NULL;
 }
 
-void dspd_cbtimer_delete(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer)
+void dspd_cbtimer_delete(struct dspd_cbtimer *timer)
 {
-  dspd_cbtimer_cancel(ctx, timer);
+  dspd_cbtimer_cancel(timer);
   memset(timer, 0, sizeof(*timer));
 }
 
-void dspd_cbtimer_set(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer, dspd_time_t timeout)
+void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time_t period)
 {
-  struct dspd_cbtimer *t, **prev = &ctx->pending_cbtimer_list;
+  struct dspd_cbtimer *t, **prev = &timer->cbpoll->pending_cbtimer_list;
   timer->next = NULL;
   timer->prev = NULL;
   timer->timeout = timeout;
-  for ( t = ctx->pending_cbtimer_list; t; t = t->next )
+  timer->period = period;
+  for ( t = timer->cbpoll->pending_cbtimer_list; t; t = t->next )
     {
       if ( t->timeout >= timer->timeout )
 	{
@@ -1135,11 +1185,26 @@ void dspd_cbtimer_set(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer, dspd_t
       prev = &t->next;
     }
   *prev = timer;
-  if ( ctx->next_timeout < timeout || ctx->next_timeout == 0 )
+  if ( timer->cbpoll->next_timeout < timeout || timer->cbpoll->next_timeout == 0 )
     {
-      ctx->next_timeout = timeout;
-      ctx->timeout_changed = true;
+      timer->cbpoll->next_timeout = timeout;
+      timer->cbpoll->timeout_changed = true;
     }
+}
+
+void dspd_cbtimer_fire(struct dspd_cbtimer *timer)
+{
+  timer->timeout = timer->cbpoll->last_time;
+  timer->cbpoll->next_timeout = timer->cbpoll->last_time;
+  timer->cbpoll->timeout_changed = true;
+  if ( timer->cbpoll->pending_cbtimer_list == timer )
+    return;
+  if ( timer->prev )
+    timer->prev->next = timer->next;
+  if ( timer->next )
+    timer->next->prev = timer->prev;
+  timer->next = timer->cbpoll->pending_cbtimer_list;
+  timer->cbpoll->pending_cbtimer_list = timer;
 }
 
 dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t)
@@ -1151,6 +1216,7 @@ static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout)
 {
   size_t count = 0, i;
   struct dspd_cbtimer *t;
+  ctx->last_time = timeout;
   for ( t = ctx->pending_cbtimer_list; t; t = t->next )
     {
       if ( t->timeout <= timeout )
@@ -1166,7 +1232,11 @@ static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout)
   for ( i = 0; i < count; i++ )
     {
       t = ctx->cbtimer_dispatch_list[i];
-      t->callback(ctx, t, t->arg, timeout);
+      if ( t->callback(ctx, t, t->arg, timeout) )
+	{
+	  t->timeout += t->period;
+	  dspd_cbtimer_set(t, t->timeout, t->period);
+	}
     }
 }
 
@@ -1306,6 +1376,14 @@ bool cbpoll_async_destructor_cb(void *data,
 {
   struct cbpoll_client_hdr *hdr = data;
   struct cbpoll_work wrk;
+  struct cbpoll_fd *f = &context->fdata[index], *f2;
+  if ( f->associated_context >= 0 )
+    {
+      f2 = &context->fdata[f->associated_context];
+      DSPD_ASSERT(f2->refcnt > 0);
+      if ( f2->data == data )
+	return false;
+    }
   memset(&wrk, 0, sizeof(wrk));
   wrk.index = index;
   wrk.fd = fd;
@@ -1380,3 +1458,71 @@ int32_t cbpoll_queue_client_work(struct cbpoll_ctx *ctx, size_t index)
     }
   return ret;
 }
+
+struct _dspd_pcmcli_timer {
+  struct dspd_cbtimer timer;
+};
+
+static int pcmcli_timer_fire(dspd_pcmcli_timer_t *tmr, bool latch)
+{
+  dspd_cbtimer_fire(&tmr->timer);
+  return 0;
+}
+
+static int pcmcli_timer_reset(dspd_pcmcli_timer_t *tmr)
+{
+  dspd_cbtimer_cancel(&tmr->timer);
+  return 0;
+}
+
+static int pcmcli_timer_get(dspd_pcmcli_timer_t *tmr, dspd_time_t *abstime, uint32_t *per)
+{
+  *abstime = tmr->timer.timeout;
+  *per = tmr->timer.period;
+  return 0;
+}
+
+static int pcmcli_timer_set(dspd_pcmcli_timer_t *tmr, uint64_t abstime, uint32_t per)
+{
+  dspd_cbtimer_set(&tmr->timer, abstime, per);
+  return 0;
+}
+
+static int pcmcli_timer_getpollfd(dspd_pcmcli_timer_t *tmr, struct pollfd *pfd)
+{
+  return -ENOSYS;
+}
+
+static void pcmcli_timer_destroy(dspd_pcmcli_timer_t *tmr)
+{
+  dspd_cbtimer_delete(&tmr->timer);
+}
+
+static struct dspd_pcmcli_timer_ops pcmcli_cbtimer_ops = {
+  .fire = pcmcli_timer_fire,
+  .reset = pcmcli_timer_reset,
+  .get = pcmcli_timer_get,
+  .set = pcmcli_timer_set,
+  .getpollfd = pcmcli_timer_getpollfd,
+  .destroy = pcmcli_timer_destroy
+};
+
+static bool pcmcli_timer_cb(struct cbpoll_ctx *ctx, 
+			    struct dspd_cbtimer *timer,
+			    void *arg, 
+			    dspd_time_t timeout)
+{
+  (void) dspd_pcmcli_process_io(arg, POLLMSG, PCMCLI_TIMER_EVENT);
+  return false;
+}
+
+int32_t cbpoll_set_pcmcli_timer_callbacks(struct cbpoll_ctx *cbpoll, 
+					  struct dspd_pcmcli *pcm)
+{
+  struct dspd_cbtimer *cbt = dspd_cbtimer_new(cbpoll, pcmcli_timer_cb, pcm);
+  if ( ! cbt )
+    return -ENOMEM;
+  dspd_pcmcli_set_timer_callbacks(pcm, &pcmcli_cbtimer_ops, cbt);
+  return 0;
+}
+

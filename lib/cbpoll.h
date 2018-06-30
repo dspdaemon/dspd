@@ -66,6 +66,11 @@ struct cbpoll_fd_ops {
 		      int index,
 		      int fd,
 		      dspd_time_t timeout);
+  void (*refcnt_changed)(void *data, 
+			 struct cbpoll_ctx *context,
+			 int index,
+			 int fd,
+			 uint32_t refcnt);
 
 };
 
@@ -91,10 +96,11 @@ struct cbpoll_fd {
   uint32_t  flags;
   const struct cbpoll_fd_ops *ops;
 
+  int32_t associated_context;
 };
 
 struct dspd_cbtimer;
-typedef void (*dspd_cbtimer_cb_t)(struct cbpoll_ctx *ctx, 
+typedef bool (*dspd_cbtimer_cb_t)(struct cbpoll_ctx *ctx, 
 				  struct dspd_cbtimer *timer,
 				  void *arg, 
 				  dspd_time_t timeout);
@@ -102,7 +108,8 @@ typedef void (*dspd_cbtimer_cb_t)(struct cbpoll_ctx *ctx,
 struct dspd_cbtimer {
   dspd_cbtimer_cb_t callback;
   void *arg;
-  dspd_time_t timeout;
+  struct cbpoll_ctx *cbpoll;
+  dspd_time_t timeout, period;
   struct dspd_cbtimer *prev, *next;
 };
 
@@ -138,6 +145,7 @@ struct cbpoll_ctx {
   struct dspd_cbtimer **cbtimer_dispatch_list;
   dspd_mutex_t loop_lock;
   dspd_mutex_t work_lock;
+  dspd_time_t last_time;
 };
 
 int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events);
@@ -193,18 +201,18 @@ void cbpoll_set_next_timeout(struct cbpoll_ctx *ctx, int32_t timeout);
 void cbpoll_cancel_timer(struct cbpoll_ctx *ctx, size_t index);
 void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout);
 
-int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
+int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int32_t associated_context);
 void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
 
 dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t);
-void dspd_cbtimer_set(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer, dspd_time_t timeout);
-void dspd_cbtimer_delete(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer);
-void dspd_cbtimer_cancel(struct cbpoll_ctx *ctx, struct dspd_cbtimer *timer);
+void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time_t period);
+void dspd_cbtimer_delete(struct dspd_cbtimer *timer);
+void dspd_cbtimer_cancel(struct dspd_cbtimer *timer);
 struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx, 
 				      dspd_cbtimer_cb_t callback,
 				      void *arg);
 
-
+void dspd_cbtimer_fire(struct dspd_cbtimer *timer);
 
 //Client management for servers
 //The general pattern is something like: get incoming client, shut off listening fd, accept in create(),
@@ -259,4 +267,6 @@ bool cbpoll_async_destructor_cb(void *data,
 				int index,
 				int fd);
 int32_t cbpoll_queue_client_work(struct cbpoll_ctx *ctx, size_t index);
+void cbpoll_link(struct cbpoll_ctx *ctx, int index1, int index2);
+
 #endif

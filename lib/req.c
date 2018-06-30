@@ -405,7 +405,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
       ctx->txstat.isfd = !! (ctx->txpkt->flags & PKT_CMSG_FD);
       ctx->txstat.iscred = !! (ctx->txpkt->flags & DSPD_REQ_FLAG_CMSG_CRED);
       ctx->txstat.offset = 0;
-      ctx->txstat.len = (ctx->txpkt->len & (~PKT_CMSG_FD));
+      ctx->txstat.len = ctx->txpkt->len;
       if ( ctx->txstat.len > ctx->txmax ||
 	   ((ctx->txstat.isfd || ctx->txstat.iscred) && ctx->txstat.len == ctx->hdrlen) ||
 	   ctx->txstat.len < ctx->hdrlen ||
@@ -420,6 +420,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
   if ( ctx->txstat.isfd )
     {
       ret = send_cmsg(ctx, ctx->fd_out);
+      DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
     } else if ( ctx->txstat.offset < ctx->txstat.len )
     {
       buf = (char*)ctx->txpkt;
@@ -431,6 +432,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
 	return ret;
       DSPD_ASSERT(ret <= bytes_to_write);
       ctx->txstat.offset += ret;
+      DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
     }
   DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
   if ( ctx->txstat.offset == ctx->txstat.len )

@@ -65,9 +65,32 @@ struct dspd_pcmcli {
   const struct dspd_pcmcli_timer_ops *timer_ops;
   dspd_pcmcli_timer_t                *timer_arg;
 
+  dspd_pcmcli_io_cb_t playback_cb;
+  dspd_pcmcli_io_cb_t capture_cb;
+  void *io_cb_arg;
 };
 
-
+static int32_t do_io(struct dspd_pcmcli *cli)
+{
+  ssize_t err = 0;
+  struct dspd_pcmcli_status s;
+  if ( cli->state >= PCMCLI_STATE_PREPARED )
+    {
+      if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	{
+	  err = dspd_pcmcli_get_status(cli, DSPD_PCM_SBIT_CAPTURE, true, &s);
+	  if ( err == 0 && s.avail > 0 )
+	    err = cli->capture_cb(cli, &s, cli->io_cb_arg);
+	}
+      if ( err == 0 && (cli->streams & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  err = dspd_pcmcli_get_status(cli, DSPD_PCM_SBIT_PLAYBACK, true, &s);
+	  if ( err == 0 && s.avail > 0 )
+	    err = cli->playback_cb(cli, &s, cli->io_cb_arg);
+	}
+    }
+  return err;
+}
 
 
 static int null_timer_reset(dspd_pcmcli_timer_t *tmr)
@@ -2261,7 +2284,7 @@ int32_t dspd_pcmcli_get_device_index(const struct dspd_pcmcli *client,
 
 int32_t dspd_pcmcli_process_io(struct dspd_pcmcli *client, int32_t revents, int32_t timeout)
 {
-  int32_t ret;
+  int32_t ret = 0;
   if ( client->dummy_op )
     {
       client->dummy_op = false;
@@ -2271,9 +2294,15 @@ int32_t dspd_pcmcli_process_io(struct dspd_pcmcli *client, int32_t revents, int3
 	complete_event(client, client->pending_op.error);
     }
   if ( client->conn )
-    ret = dspd_aio_process(client->conn, revents, timeout);
-  else
-    ret = 0;
+    {
+      if ( ! (revents == POLLMSG && timeout == PCMCLI_TIMER_EVENT) )
+	ret = dspd_aio_process(client->conn, revents, timeout);
+      if ( ret == 0 && client->playback_cb && client->capture_cb )
+	ret = do_io(client);
+    } else
+    {
+      ret = 0;
+    }
   return ret;
 }
 
@@ -2860,3 +2889,12 @@ int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli)
   return cli->state;
 }
 
+void dspd_pcmcli_set_pcm_io_callbacks(struct dspd_pcmcli *cli,
+				      dspd_pcmcli_io_cb_t playback_cb,
+				      dspd_pcmcli_io_cb_t capture_cb,
+				      void *arg)
+{
+  cli->playback_cb = playback_cb;
+  cli->capture_cb = capture_cb;
+  cli->io_cb_arg = arg;
+}

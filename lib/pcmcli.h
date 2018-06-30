@@ -7,8 +7,15 @@
 #include "sslib.h"
 #include "pcmcli_stream.h"
 
+#define PCMCLI_TIMER_EVENT -2
+#define PCMCLI_INFINITE -1
 
+
+struct dspd_pcmcli_status;
+struct dspd_pcmcli;
 typedef struct _dspd_pcmcli_timer dspd_pcmcli_timer_t;
+
+typedef ssize_t (*dspd_pcmcli_io_cb_t)(struct dspd_pcmcli *cli, struct dspd_pcmcli_status *status, void *arg);
 
 typedef int (*dspd_pcmcli_timer_fire_t)(dspd_pcmcli_timer_t *tmr, bool latch);
 typedef int (*dspd_pcmcli_timer_reset_t)(dspd_pcmcli_timer_t *tmr);
@@ -104,10 +111,10 @@ int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bi
 void dspd_pcmcli_unbind(struct dspd_pcmcli *client);
 
 int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client, 
-				   const struct dspd_cli_params *hwparams, 
-				   const struct dspd_client_shm *playback_shm,
-				   const struct dspd_client_shm *capture_shm,
-				   bool sync);
+				 const struct dspd_cli_params *hwparams, 
+				 const struct dspd_client_shm *playback_shm,
+				 const struct dspd_client_shm *capture_shm,
+				 bool sync);
 int32_t dspd_pcmcli_get_hwparams(struct dspd_pcmcli *client, struct dspd_cli_params *hwparams);
 int32_t dspd_pcmcli_set_swparams(struct dspd_pcmcli *client, const struct dspd_rclient_swparams *swparams, bool sync, dspd_aio_ccb_t complete, void *data);
 int32_t dspd_pcmcli_get_swparams(struct dspd_pcmcli *client, struct dspd_rclient_swparams *swparams);
@@ -199,7 +206,10 @@ int32_t dspd_pcmcli_get_stream_index(struct dspd_pcmcli *cli, int32_t sbit);
 
 int32_t dspd_pcmcli_get_state(struct dspd_pcmcli *cli);
 
-			
+void dspd_pcmcli_set_pcm_io_callbacks(struct dspd_pcmcli *cli,
+				      dspd_pcmcli_io_cb_t playback_cb,
+				      dspd_pcmcli_io_cb_t capture_cb,
+				      void *arg);
 				
 
 #endif /* ifdef _DSPD_PCMCLI_H_ */
