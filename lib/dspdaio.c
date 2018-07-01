@@ -443,6 +443,8 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     op->complete(ctx, op);
   if ( ctx->io_completed )
     ctx->io_completed(ctx, op, ctx->io_arg);
+  if ( ctx->error == -ESHUTDOWN && ctx->shutdown_cb )
+    ctx->shutdown_cb(ctx, ctx->shutdown_arg);
 }
 
 static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
@@ -1018,6 +1020,20 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
     ret = 0;
   return ret;
 }
+
+void dspd_aio_shutdown(struct dspd_aio_ctx *ctx, 
+		       void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
+		       void *arg)
+{
+  ctx->error = -ESHUTDOWN;
+  ctx->shutdown_cb = shutdown_cb;
+  ctx->shutdown_arg = arg;
+  if ( dspd_aio_cancel(ctx, NULL, true) > 0 )
+    dspd_aio_process(ctx, 0, 0);
+  else
+    ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+}
+
 
 void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 {

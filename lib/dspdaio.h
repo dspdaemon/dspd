@@ -114,6 +114,10 @@ struct dspd_aio_ctx {
 		       const struct dspd_async_op *op,
 		       void *arg);
   void *io_arg;
+
+  void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg);
+  void *shutdown_arg;
+
 };
 
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);
@@ -143,6 +147,9 @@ int32_t dspd_aio_recv_fd(struct dspd_aio_ctx *ctx);
 int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req);
 void dspd_aio_destroy(struct dspd_aio_ctx *ctx);
 void dspd_aio_delete(struct dspd_aio_ctx *ctx);
+void dspd_aio_shutdown(struct dspd_aio_ctx *ctx, 
+		       void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
+		       void *arg);
 int32_t dspd_aio_get_iofd(struct dspd_aio_ctx *aio);
 bool dspd_aio_is_local(struct dspd_aio_ctx *aio);
 struct dspd_aio_fifo_ops;

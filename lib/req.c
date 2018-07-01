@@ -419,6 +419,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
 	ctx->fd_out = -1;
       ctx->txstat.started = 1;
     }
+  DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
   if ( ctx->txstat.isfd )
     {
       ret = send_cmsg(ctx, ctx->fd_out);
@@ -436,7 +437,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
       ctx->txstat.offset += ret;
       DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
     }
-  DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
+  
   if ( ctx->txstat.offset == ctx->txstat.len )
     {
       ret = ctx->txstat.len;

@@ -220,6 +220,7 @@ void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index)
 		NULL);
     }
   fd->flags |= CBPOLLFD_FLAG_REMOVED;
+  fd->flags &= ~CBPOLLFD_FLAG_EVENTS_CHANGED;
   cbpoll_unref(ctx, index);
 }
 
@@ -264,6 +265,7 @@ static void *cbpoll_thread(void *p)
     {
       dspd_mutex_lock(&ctx->loop_lock);
       ctx->dispatch_count = -1;
+      ctx->fdata_idx = -1;
       if ( ctx->sleep )
 	ctx->sleep(ctx->arg, ctx);
 
@@ -289,15 +291,18 @@ static void *cbpoll_thread(void *p)
       dspd_mutex_lock(&ctx->loop_lock);
       ctx->dispatch_count = ret;
       ctx->wq.overflow.callback = NULL;
+      ctx->fdata_idx = -1;
       for ( i = 0; i < ctx->dispatch_count; i++ )
 	{
-	  
 	  ev = &ctx->events[i];
 	  fd = ev->data.u64 & 0xFFFFFFFF;
 	  idx = ev->data.u64 >> 32;
 	  fdata = &ctx->fdata[idx];
 	  if ( fdata->refcnt )
 	    {
+	      //Set the index so that cbpoll_set_events() caches the values for this context.  Setting
+	      //another context passes through as it always did.
+	      ctx->fdata_idx = idx;
 	      if ( fdata->ops->fd_event(fdata->data,
 					ctx,
 					idx,
@@ -317,6 +322,15 @@ static void *cbpoll_thread(void *p)
 		  if ( ctx->wq.overflow.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
 		    cbpoll_unref(ctx, idx);
 		  ctx->wq.overflow.callback = NULL;
+		}
+	      //The idea is to free the user of the callback from caring about system calls made in
+	      //setting the epoll events to wait for.  So, a POLLIN might be requested in on function
+	      //and cancelled in another without making 2 system calls.  A POLLOUT might be needed in
+	      //yet another function so the two will not need to coordinate or cause extra syscalls.
+	      if ( fdata->flags & CBPOLLFD_FLAG_EVENTS_CHANGED )
+		{
+		  ctx->fdata_idx = -1; //make invalid index to commit changes now
+		  cbpoll_set_events(ctx, idx, fdata->events);
 		}
 	    }
 	}
@@ -338,6 +352,7 @@ static void *cbpoll_thread(void *p)
   for ( i = 0; i < ctx->max_fd; i++ )
     {
       fdata = &ctx->fdata[i];
+      ctx->fdata_idx = i;
       if ( fdata->refcnt )
 	{
 	  f = fdata->fd;
@@ -474,32 +489,62 @@ int32_t cbpoll_get_events(struct cbpoll_ctx *ctx, int32_t index)
   return f->events;
 }
 
+int32_t cbpoll_disable_events(struct cbpoll_ctx *ctx, 
+			      int32_t index,
+			      int32_t events)
+{
+  struct cbpoll_fd *f = &ctx->fdata[index];
+  return cbpoll_set_events(ctx, index, f->events & ~events);
+}
+
+int32_t cbpoll_enable_events(struct cbpoll_ctx *ctx, 
+			     int32_t index,
+			     int32_t events)
+{
+  struct cbpoll_fd *f = &ctx->fdata[index];
+  return cbpoll_set_events(ctx, index, f->events | events);
+}
+
 int32_t cbpoll_set_events(struct cbpoll_ctx *ctx, 
 			  int32_t index,
 			  int32_t events)
 {
-  struct cbpoll_fd *f = &ctx->fdata[index];
-  int32_t ret;
+  struct cbpoll_fd *f;
+  int32_t ret = 0;
   struct epoll_event evt;
+  f = &ctx->fdata[index];
   DSPD_ASSERT(index < ctx->max_fd);
   if ( f->events != events || 
+       (f->flags & CBPOLLFD_FLAG_EVENTS_CHANGED) ||
        (f->events & EPOLLONESHOT) || 
        (events & EPOLLONESHOT) )
     {
       DSPD_ASSERT(f->refcnt);
       if ( f->fd >= 0 )
 	{
-	  evt.events = events;
-	  if ( evt.events & (EPOLLIN|EPOLLOUT) )
-	    evt.events |= EPOLLRDHUP;
-	  evt.data.u64 = index;
-	  evt.data.u64 <<= 32;
-	  evt.data.u64 |= f->fd;
-	  ret = epoll_ctl(ctx->epfd, EPOLL_CTL_MOD, f->fd, &evt);
-	  if ( ret < 0 )
-	    ret = -errno;
-	  else
-	    f->events = events;
+	  if ( index == ctx->fdata_idx )
+	    {
+	      f->events = events;
+	      f->flags |= CBPOLLFD_FLAG_EVENTS_CHANGED;
+	    } else
+	    {
+	      evt.events = events;
+	      if ( evt.events & (EPOLLIN|EPOLLOUT) )
+		evt.events |= EPOLLRDHUP;
+	  
+	      evt.data.u64 = index;
+	      evt.data.u64 <<= 32;
+	      evt.data.u64 |= f->fd;
+	      ret = epoll_ctl(ctx->epfd, EPOLL_CTL_MOD, f->fd, &evt);
+	      if ( ret < 0 )
+		{
+		  ret = -errno;
+		} else
+		{
+		  f->events = events;
+		  f->flags &= ~CBPOLLFD_FLAG_EVENTS_CHANGED;
+		}
+	    }
 	} else
 	{
 	  if ( f->ops->set_events )
@@ -512,10 +557,8 @@ int32_t cbpoll_set_events(struct cbpoll_ctx *ctx,
 	      f->events = events;
 	      ret = 0;
 	    }
+	  f->flags &= ~CBPOLLFD_FLAG_EVENTS_CHANGED;
 	}
-    } else
-    {
-      ret = 0;
     }
   return ret;
 }
@@ -663,6 +706,7 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
   ctx->event_pipe[1] = -1;
   ctx->timer.fd = -1;
   ctx->eventfd.fd = -1;
+  ctx->fdata_idx = -1;
   max_fds++; //add 1 for pipe
   if ( flags & CBPOLL_FLAG_TIMER )
     max_fds++;
@@ -1015,21 +1059,40 @@ static void aio_fifo_ready(struct dspd_aio_ctx *ctx, void *arg)
     }
 }
 
-static void io_submitted_cb(struct dspd_aio_ctx *ctx, 
+static void io_submitted_cb(struct dspd_aio_ctx *aio, 
 			    const struct dspd_async_op *op,
 			    void *arg)
 {
   struct cbpoll_ctx *cbctx = arg;
-  cbpoll_ref(cbctx, ctx->slot);
+  cbpoll_ref(cbctx, aio->slot);
+  (void)cbpoll_set_events(cbctx, aio->slot, dspd_aio_block_directions(aio));
 }
 
-static void io_completed_cb(struct dspd_aio_ctx *ctx, 
+static void io_completed_cb(struct dspd_aio_ctx *aio, 
 			    const struct dspd_async_op *op,
 			    void *arg)
 {
   struct cbpoll_ctx *cbctx = arg;
-  cbpoll_unref(cbctx, ctx->slot);
+  cbpoll_unref(cbctx, aio->slot);
+  (void)cbpoll_set_events(cbctx, aio->slot, dspd_aio_block_directions(aio));
 }
+
+static void io_submitted_cb2(struct dspd_aio_ctx *aio, 
+			     const struct dspd_async_op *op,
+			     void *arg)
+{
+  struct cbpoll_ctx *cbctx = arg;
+  cbpoll_ref(cbctx, aio->slot);
+}
+
+static void io_completed_cb2(struct dspd_aio_ctx *aio, 
+			     const struct dspd_async_op *op,
+			     void *arg)
+{
+  struct cbpoll_ctx *cbctx = arg;
+  cbpoll_unref(cbctx, aio->slot);
+}
+
 
 int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int32_t associated_context)
 {
@@ -1062,9 +1125,15 @@ int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int
 		    context->aio_idx = i + 1;
 		  dspd_aio_set_ready_cb(aio, aio_fifo_ready, context);
 		  if ( associated_context >= 0 )
-		    aio->slot = associated_context;
-		  else
-		    aio->slot = -1;
+		    {
+		      aio->slot = associated_context;
+		      aio->io_submitted = io_submitted_cb2;
+		      aio->io_completed = io_completed_cb2;
+		      aio->io_arg = context;
+		    } else
+		    {
+		      aio->slot = -1;
+		    }
 		  ret = i;
 		}
 	    }
@@ -1512,7 +1581,7 @@ static bool pcmcli_timer_cb(struct cbpoll_ctx *ctx,
 			    void *arg, 
 			    dspd_time_t timeout)
 {
-  (void) dspd_pcmcli_process_io(arg, POLLMSG, PCMCLI_TIMER_EVENT);
+  (void) dspd_pcmcli_process_io(arg, POLLMSG, 0);
   return false;
 }
 

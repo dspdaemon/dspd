@@ -93,6 +93,7 @@ struct cbpoll_fd {
   */
   uint32_t  refcnt;
 #define CBPOLLFD_FLAG_REMOVED 1
+#define CBPOLLFD_FLAG_EVENTS_CHANGED 2
   uint32_t  flags;
   const struct cbpoll_fd_ops *ops;
 
@@ -121,6 +122,7 @@ struct cbpoll_ctx {
   void (*wake)(void *arg, struct cbpoll_ctx *context);
   size_t max_fd;
   struct cbpoll_fd   *fdata;
+  ssize_t             fdata_idx;
   struct epoll_event *events;
   volatile AO_t       abort;
   void *arg;
@@ -146,6 +148,7 @@ struct cbpoll_ctx {
   dspd_mutex_t loop_lock;
   dspd_mutex_t work_lock;
   dspd_time_t last_time;
+
 };
 
 int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct epoll_event **events);
@@ -160,6 +163,13 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk);
 int32_t cbpoll_set_events(struct cbpoll_ctx *ctx, 
 			  int32_t index,
 			  int32_t events);
+int32_t cbpoll_disable_events(struct cbpoll_ctx *ctx, 
+			      int32_t index,
+			      int32_t events);
+int32_t cbpoll_enable_events(struct cbpoll_ctx *ctx, 
+			     int32_t index,
+			     int32_t events);
+
 int32_t cbpoll_get_events(struct cbpoll_ctx *ctx, int32_t index);
 int32_t cbpoll_add_fd(struct cbpoll_ctx *ctx, 
 		      int32_t fd,
@@ -228,7 +238,7 @@ struct cbpoll_client_ops {
 
   //Completion callbacks
 
-  //client success (called in event loop thread)
+  //client success (called in event loop thread).  return true to confirm.
   bool (*success)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
   //client fail (usually called in event loop thread)
   void (*fail)(struct cbpoll_ctx *ctx, struct cbpoll_client_list *list, int32_t cli, int32_t index, int32_t fd);

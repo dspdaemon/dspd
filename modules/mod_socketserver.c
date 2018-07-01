@@ -85,8 +85,8 @@ struct ss_cctx {
   struct socksrv_ctl_eq     eventq;
   bool                      retry_event;
   int32_t                   ctl_stream;
-
-
+  int32_t                   work_count;
+  
   struct ss_cctx *prev, *next;
 };
 
@@ -127,7 +127,20 @@ static int socksrv_dispatch_multi_req(struct dspd_rctx *rctx,
 				      void         *outbuf,
 				      size_t        outbufsize);
 
-#define sendreq(cli, fd) dspd_req_send(cli->req_ctx, fd)
+
+static int32_t sendreq(struct ss_cctx *cli, int32_t fd)
+{
+  int32_t ret;
+  if ( cli->work_count == 0 )
+    {
+      ret = dspd_req_send(cli->req_ctx, fd);
+    } else
+    {
+      //      DSPD_ASSERT(pthread_equal(pthread_self(), cli->cbctx->wq.thread.thread));
+      ret = -EINPROGRESS;
+    }
+  return ret;
+}
 
 static inline bool stream_valid(struct ss_cctx *ctx, int32_t stream)
 {
@@ -2485,6 +2498,7 @@ static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
 static int client_async_dispatch(struct ss_cctx *cli)
 {
   //Send to async work thread (increases refcount)
+  cli->work_count++;
   cbpoll_queue_deferred_work(cli->cbctx,
 			     cli->index,
 			     0,
@@ -2607,7 +2621,7 @@ static int client_fd_event(void *data,
 	}
     } else if ( revents & POLLOUT )
     {
-      if ( cli->retry_event ) //Send next event.  Must empty the queue as quickly as possible.
+      if ( cli->retry_event && cli->work_count == 0 ) //Send next event.  Must empty the queue as quickly as possible.
 	return prepare_event_pkt(context, index, cli, true);
       else //Send a request.  May be another async request, but most likely a reply.
 	ret = sendreq(cli, -1);
@@ -2626,7 +2640,7 @@ static int client_fd_event(void *data,
 	      cli->fd_out = -1;
 	    }
 	  //Check for pending events and send them if possible.
-	  if ( cli->event_flags != 0 || socksrv_eq_len(&cli->eventq) > 0 )
+	  if ( (cli->event_flags != 0 || socksrv_eq_len(&cli->eventq) > 0) && cli->work_count == 0 )
 	    return prepare_event_pkt(context, index, cli, true);
 	}
       return cbpoll_set_events(context, index, POLLIN);
@@ -2639,7 +2653,7 @@ static int prepare_events(struct cbpoll_ctx *context, int index, struct ss_cctx 
   //if ( cli->event_sent || (cbpoll_get_events(context, index) & POLLOUT) ||
   //dspd_req_input_pending(cli->req_ctx) )
   //return 0;
-  if ( (cbpoll_get_events(context, index) & POLLOUT) || dspd_req_input_pending(cli->req_ctx) )
+  if ( (cbpoll_get_events(context, index) & POLLOUT) || dspd_req_input_pending(cli->req_ctx) || cli->work_count > 0 )
     return 0;
   return prepare_event_pkt(context, index, cli, true);
 }
@@ -2694,13 +2708,20 @@ int client_pipe_event(void *data,
 	      ret = prepare_events(context, index, cli);
 	    }
 	}
-    } else
+    } else if ( event->msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
     {
-     
+      //Returning from async work implies sending a reply in the current implementation.  That means
+      //any async events that were deferred will have a chance to go out in a timely manner. 
+      cli->work_count--;
+      DSPD_ASSERT(cli->work_count >= 0);
       ret = event->arg >> 32;
       events = event->arg & 0xFFFFFFFF;
       if ( ret == 0 )
 	ret = cbpoll_set_events(context, index, events);
+    } else
+    {
+      //No other messages are supported.
+      DSPD_ASSERT(event->msg == CBPOLL_PIPE_MSG_DEFERRED_WORK || event->msg == MSG_EVENT_FLAGS);
     }
   return ret;
 }

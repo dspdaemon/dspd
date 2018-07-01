@@ -7,8 +7,6 @@
 #include "sslib.h"
 #include "pcmcli_stream.h"
 
-#define PCMCLI_TIMER_EVENT -2
-#define PCMCLI_INFINITE -1
 
 
 struct dspd_pcmcli_status;
@@ -71,7 +69,7 @@ enum {
   PCMCLI_STATE_LAST = PCMCLI_STATE_DISCONNECTED
 
 };
-int32_t dspd_pcmcli_get_next_wakeup(struct dspd_pcmcli *client, uint32_t *avail, int32_t *streams, dspd_time_t *next);
+int32_t dspd_pcmcli_get_next_wakeup(struct dspd_pcmcli *client, const uint32_t *avail, int32_t *streams, dspd_time_t *next);
 int32_t dspd_pcmcli_wait(struct dspd_pcmcli *client, int32_t streams, uint32_t avail, bool async);
 void dspd_pcmcli_restore_wait(struct dspd_pcmcli *client);
 

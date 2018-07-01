@@ -68,27 +68,53 @@ struct dspd_pcmcli {
   dspd_pcmcli_io_cb_t playback_cb;
   dspd_pcmcli_io_cb_t capture_cb;
   void *io_cb_arg;
+
+  int32_t paused_timers;
 };
 
 static int32_t do_io(struct dspd_pcmcli *cli)
 {
   ssize_t err = 0;
   struct dspd_pcmcli_status s;
+  int32_t paused_timers = cli->paused_timers;
   if ( cli->state >= PCMCLI_STATE_PREPARED )
     {
       if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
 	{
 	  err = dspd_pcmcli_get_status(cli, DSPD_PCM_SBIT_CAPTURE, true, &s);
 	  if ( err == 0 && s.avail > 0 )
-	    err = cli->capture_cb(cli, &s, cli->io_cb_arg);
+	    {
+	      err = cli->capture_cb(cli, &s, cli->io_cb_arg);
+	      if ( err > 0 )
+		{
+		  err = 0;
+		  cli->paused_timers &= ~DSPD_PCM_SBIT_CAPTURE;
+		} else if ( err == 0 || err == -EAGAIN )
+		{
+		  cli->paused_timers |= DSPD_PCM_SBIT_CAPTURE;
+		}
+		
+	    }
 	}
       if ( err == 0 && (cli->streams & DSPD_PCM_SBIT_PLAYBACK) )
 	{
 	  err = dspd_pcmcli_get_status(cli, DSPD_PCM_SBIT_PLAYBACK, true, &s);
 	  if ( err == 0 && s.avail > 0 )
-	    err = cli->playback_cb(cli, &s, cli->io_cb_arg);
+	    {
+	      err = cli->playback_cb(cli, &s, cli->io_cb_arg);
+	      if ( err > 0 )
+		{
+		  err = 0;
+		  cli->paused_timers &= ~DSPD_PCM_SBIT_PLAYBACK;
+		} else if ( err == 0 || err == -EAGAIN )
+		{
+		  cli->paused_timers |= DSPD_PCM_SBIT_PLAYBACK;
+		}
+	    }
 	}
     }
+  if ( cli->paused_timers != paused_timers && err == 0 )
+    err = dspd_pcmcli_wait(cli, cli->streams & (~cli->paused_timers), 0, true);
   return err;
 }
 
@@ -263,7 +289,7 @@ static int32_t complete_io(struct dspd_pcmcli *client, int32_t lastresult, dspd_
 }
 
 
-int32_t dspd_pcmcli_get_next_wakeup(struct dspd_pcmcli *client, uint32_t *avail, int32_t *streams, dspd_time_t *next)
+int32_t dspd_pcmcli_get_next_wakeup(struct dspd_pcmcli *client, const uint32_t *avail, int32_t *streams, dspd_time_t *next)
 {
   dspd_time_t t1 = 0, t2 = 0;
   int32_t ret = -EBADFD, r1, r2;
@@ -291,58 +317,82 @@ int32_t dspd_pcmcli_get_next_wakeup(struct dspd_pcmcli *client, uint32_t *avail,
     {
       ret = 0;
       (*streams) = 0;
-      r1 = dspd_pcmcli_stream_get_next_wakeup(&client->playback.stream, NULL, avail_min, &t1);
-      r2 = dspd_pcmcli_stream_get_next_wakeup(&client->capture.stream, NULL, avail_min, &t2);
+      if ( ! (client->paused_timers & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  r1 = dspd_pcmcli_stream_get_next_wakeup(&client->playback.stream, NULL, avail_min, &t1);
+	} else
+	{
+	  r1 = PCMCS_WAKEUP_NONE;
+	  t1 = UINT64_MAX;
+	}
+      if ( ! (client->paused_timers & DSPD_PCM_SBIT_CAPTURE) )
+	{
+	  r2 = dspd_pcmcli_stream_get_next_wakeup(&client->capture.stream, NULL, avail_min, &t2);
+	} else
+	{
+	  r2 = PCMCS_WAKEUP_NONE;
+	  t2 = UINT64_MAX;
+	}
       if ( r1 == PCMCS_WAKEUP_NOW )
 	{
 	  //Already time to wake up
 	  r1 = 0;
 	  ret = 0;
 	  (*streams) |= DSPD_PCM_SBIT_PLAYBACK;
-	} else if ( r1 == PCMCS_WAKEUP_NONE )
-	{
-	  //Nothing to wait on
-	  r1 = 0;
-	  ret = 0;
 	}
       if ( r2 == PCMCS_WAKEUP_NOW )
 	{
 	  r2 = 0;
 	  ret = 0;
 	  (*streams) |= DSPD_PCM_SBIT_CAPTURE;
-	} else if ( r2 == PCMCS_WAKEUP_NONE )
-	{
-	  r2 = 0;
-	  ret = 0;
 	}
       if ( r1 < 0 )
 	ret = r1;
       else if ( r2 < 0 )
 	ret = r2;
-      *next = MIN(t1, t2);
+      if ( r1 != PCMCS_WAKEUP_NONE && r2 != PCMCS_WAKEUP_NONE )
+	*next = MIN(t1, t2);
+      else if ( r1 == PCMCS_WAKEUP_NONE )
+	*next = t2;
+      else
+	*next = t1;
     } else if ( ((*streams) & client->streams) == DSPD_PCM_SBIT_PLAYBACK )
     {
       (*streams) = 0;
-      ret = dspd_pcmcli_stream_get_next_wakeup(&client->playback.stream, NULL, avail_min, next);
-      if ( ret == PCMCS_WAKEUP_NOW )
+      if ( ! (client->paused_timers & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  ret = dspd_pcmcli_stream_get_next_wakeup(&client->playback.stream, NULL, avail_min, next);
+	  if ( ret == PCMCS_WAKEUP_NOW )
+	    {
+	      ret = 0;
+	      (*streams) = DSPD_PCM_SBIT_PLAYBACK;
+	    } else if ( ret == PCMCS_WAKEUP_NONE )
+	    {
+	      ret = 0;
+	    }
+	} else
 	{
 	  ret = 0;
-	  (*streams) = DSPD_PCM_SBIT_PLAYBACK;
-	} else if ( ret == PCMCS_WAKEUP_NONE )
-	{
-	  ret = 0;
+	  *next = UINT64_MAX;
 	}
     } else if ( ((*streams) & client->streams) == DSPD_PCM_SBIT_CAPTURE )
-    {
+    { 
       (*streams) = 0;
-      ret = dspd_pcmcli_stream_get_next_wakeup(&client->capture.stream, NULL, avail_min, next);
-      if ( ret == PCMCS_WAKEUP_NOW )
+      if ( ! (client->paused_timers & DSPD_PCM_SBIT_CAPTURE) )
+	{
+	  ret = dspd_pcmcli_stream_get_next_wakeup(&client->capture.stream, NULL, avail_min, next);
+	  if ( ret == PCMCS_WAKEUP_NOW )
+	    {
+	      ret = 0;
+	      (*streams) = DSPD_PCM_SBIT_CAPTURE;
+	    } else if ( ret == PCMCS_WAKEUP_NONE )
+	    {
+	      ret = 0;
+	    }
+	} else
 	{
 	  ret = 0;
-	  (*streams) = DSPD_PCM_SBIT_CAPTURE;
-	} else if ( ret == PCMCS_WAKEUP_NONE )
-	{
-	  ret = 0;
+	  *next = UINT64_MAX;
 	}
     } else
     {
@@ -619,6 +669,7 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
       ret = -EBADF;
     } else
     {
+      client->paused_timers &= ~DSPD_PCM_SBIT_PLAYBACK;
       if ( client->no_xrun == true || (ret = dspd_pcmcli_stream_check_xrun(&client->playback.stream)) == 0 )
 	{
 	  offset = 0;
@@ -805,6 +856,7 @@ ssize_t dspd_pcmcli_read_frames(struct dspd_pcmcli *client,
     } else
     {
       bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING);
+      client->paused_timers &= ~DSPD_PCM_SBIT_CAPTURE;
       if ( client->no_xrun == true || (ret = dspd_pcmcli_stream_check_xrun(&client->capture.stream)) == 0 )
 	{
 	  offset = 0;
@@ -2295,10 +2347,10 @@ int32_t dspd_pcmcli_process_io(struct dspd_pcmcli *client, int32_t revents, int3
     }
   if ( client->conn )
     {
-      if ( ! (revents == POLLMSG && timeout == PCMCLI_TIMER_EVENT) )
-	ret = dspd_aio_process(client->conn, revents, timeout);
-      if ( ret == 0 && client->playback_cb && client->capture_cb )
+      if ( (revents & POLLMSG) == POLLMSG && client->playback_cb && client->capture_cb )
 	ret = do_io(client);
+      if ( revents == 0 || (revents & ~POLLMSG) != 0 )
+	ret = dspd_aio_process(client->conn, revents, timeout);
     } else
     {
       ret = 0;
