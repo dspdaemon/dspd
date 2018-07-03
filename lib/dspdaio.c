@@ -1207,9 +1207,17 @@ static void dspd_aio_fifo_destroy(struct dspd_aio_fifo_master *master)
 }
 static int32_t aio_fifo_ready(struct dspd_aio_fifo_ctx *ctx)
 {
-  if ( ctx->master->server || ctx->master->client )
-    return 0;
-  return -ECONNABORTED;
+  if ( ctx == ctx->master->client )
+    {
+      //If the client made the server close the connection, then you screwed
+      //up really bad.
+      DSPD_ASSERT(ctx->master->server);
+    }
+  //if ( ctx->master->server || ctx->master->client )
+  //return 0;
+  //return -ECONNABORTED;
+  DSPD_ASSERT(ctx->master->server || ctx->master->client);
+  return 0;
 }
 static bool dspd_aio_fifo_full(struct dspd_aio_fifo_ctx *ctx, size_t len)
 {
