@@ -86,7 +86,7 @@ struct ss_cctx {
   bool                      retry_event;
   int32_t                   ctl_stream;
   int32_t                   work_count;
-  
+  bool                      eof;
   struct ss_cctx *prev, *next;
 };
 
@@ -2516,6 +2516,7 @@ static int client_dispatch_packet(struct ss_cctx *cli)
 	ret = cbpoll_set_events(cli->cbctx, cli->index, EPOLLOUT);
     } else if ( req->stream < 0 && cli->pkt_cmd == DSPD_SOCKSRV_REQ_QUIT )
     {
+      cli->eof = true;
       ret = -1; //Disconnect 
     } else
     {
@@ -2723,13 +2724,23 @@ int client_pipe_event(void *data,
   return ret;
 }
 
-static bool client_destructor(void *data,
-			      struct cbpoll_ctx *context,
-			      int index,
-			      int fd)
+static void delete_client(struct ss_cctx *cli, int32_t fd)
 {
-  struct ss_cctx *cli = data;
-
+  static const struct dspd_req dead_req = { .len = 0 };
+  size_t offset = 0;
+  ssize_t ret;
+  while ( offset < sizeof(dead_req) )
+    {
+      if ( fd >= 0 )
+	ret = write(fd, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
+      else if ( cli->fifo )
+	ret = dspd_aio_fifo_write(cli->fifo, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
+      else
+	break;
+      if ( ret <= 0 )
+	break;
+    }
+  
   dspd_mutex_lock(&cli->lock);
   cli->fd = -1;
   dspd_mutex_unlock(&cli->lock);
@@ -2760,22 +2771,27 @@ static bool client_destructor(void *data,
   if ( cli->fifo )
     {
       cli->server->virtual_fds[cli->fifo->master->slot] = NULL;
+      DSPD_ASSERT(cli->eof == true);
       dspd_aio_fifo_close(cli->fifo);
     }
   socksrv_eq_realloc(&cli->eventq, 0, 0, 0);
-  dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
+  
   if ( cli->prev == NULL )
-    {
-      assert(cli->server->client_list == cli);
-      cli->server->client_list = cli->next;
-    } else
-    {
-      cli->prev->next = cli->next;
-    }
+    cli->server->client_list = cli->next;
+  else
+    cli->prev->next = cli->next;
   if ( cli->next )
     cli->next->prev = cli->prev;
-  
-  free(cli);
+}
+
+static bool client_destructor(void *data,
+			      struct cbpoll_ctx *context,
+			      int index,
+			      int fd)
+{
+  struct ss_cctx *cli = data;
+  dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
+  delete_client(cli, fd);
   return true;
 }
 static int client_vfd_set_events(void *data, 
@@ -3059,11 +3075,11 @@ static int listen_pipe_event(void *data,
 	  i = cbpoll_add_fd(context, cli->fd, EPOLLIN, &socksrv_client_ops, cli);
 	  if ( i < 0 )
 	    {
-	      close(cli->fd);
-	      dspd_req_ctx_delete(cli->req_ctx);
-	      if ( cli->fifo )
-		dspd_aio_fifo_close(cli->fifo);
-	      free(cli);
+	      cli->eof = true;
+	      int f = cli->fd;
+	      delete_client(cli, f);
+	      if ( f >= 0 )
+		close(f);
 	    } else
 	    {
 	      cli->index = i;

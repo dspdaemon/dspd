@@ -574,9 +574,22 @@ static int32_t recv_header(struct dspd_aio_ctx *ctx)
 	{
 	  ctx->off_in += ret;
 	  if ( ctx->off_in == sizeof(ctx->req_in) )
-	    ret = 0;
-	  else
-	    ret = -EINPROGRESS;
+	    {
+	      //If the server sends an EOF then it is a protocol 
+	      if ( ctx->req_in.len < sizeof(ctx->req_in) )
+		{
+		  if ( ctx->req_in.len == 0 )
+		    ret = -ECONNABORTED;
+		  else
+		    ret = -EPROTO;
+		} else
+		{
+		  ret = 0;
+		}
+	    } else
+	    {
+	      ret = -EINPROGRESS;
+	    }
 	} else if ( ret == 0 )
 	{
 	  ret = -EIO;
@@ -762,9 +775,9 @@ uint32_t dspd_aio_revents(struct dspd_aio_ctx *ctx)
   return ret;
 }
 
-int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
+static int32_t recv_payload(struct dspd_aio_ctx *ctx)
 {
-  ssize_t ret;
+  ssize_t ret = 0;
   void *buf;
   size_t len;
   struct dspd_async_op *op = NULL;
@@ -772,107 +785,114 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
   void *ptr;
   size_t buflen;
   uint32_t flags;
-  ret = recv_header(ctx);
+  if ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT )
+    ret = recv_async_event(ctx);
+  else
+    ret = recv_reply(ctx);
   if ( ret == 0 )
     {
-      if ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT )
-	ret = recv_async_event(ctx);
+      if ( ctx->op_in >= 0 )
+	op = ctx->pending_ops[ctx->op_in];
       else
-	ret = recv_reply(ctx);
-      if ( ret == 0 )
+	op = NULL;
+      if ( ctx->req_in.len > sizeof(ctx->req_in) )
 	{
-	  if ( ctx->op_in >= 0 )
-	    op = ctx->pending_ops[ctx->op_in];
+	  if ( op != NULL && op->outbuf != NULL )
+	    buf = op->outbuf;
 	  else
-	    op = NULL;
-	  if ( ctx->req_in.len > sizeof(ctx->req_in) )
+	    buf = ctx->buf_in;
+	  len = ctx->req_in.len - sizeof(ctx->req_in);
+	} else
+	{
+	  len = 0;
+	  buf = NULL;
+	}
+	  
+      flags = ctx->req_in.flags & 0xFFFFU;
+      if ( (flags ^ ctx->event_flags) != 0 )
+	{
+	  ctx->event_flags |= flags;
+	  if ( ctx->event_flags_changed )
+	    ctx->event_flags_changed(ctx->event_flags_changed_arg, &ctx->event_flags);
+
+	  if ( ctx->event_flags & DSPD_REQ_FLAG_POLLIN )
+	    ctx->revents |= POLLIN;
+	  if ( ctx->event_flags & DSPD_REQ_FLAG_POLLOUT )
+	    ctx->revents |= POLLOUT;
+	  if ( ctx->event_flags & DSPD_REQ_FLAG_POLLPRI )
+	    ctx->revents |= POLLPRI;
+	  if ( ctx->event_flags & DSPD_REQ_FLAG_POLLHUP )
+	    ctx->revents |= POLLHUP;
+	}
+
+
+      //It is possible to have event flags carried by a regular reply.
+      if ( ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT ||
+	     (ctx->req_in.flags & (0xFFFF ^ DSPD_REQ_FLAG_ERROR)) != 0 ) &&
+	   ctx->async_event != NULL )
+	{
+
+	  if ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT && len >= sizeof(*evt) )
 	    {
-	      if ( op != NULL && op->outbuf != NULL )
-		buf = op->outbuf;
-	      else
-		buf = ctx->buf_in;
-	      len = ctx->req_in.len - sizeof(ctx->req_in);
+	      evt = buf;
+	      ptr = (char*)buf + sizeof(*evt);
+	      buflen = len - sizeof(*evt);
 	    } else
 	    {
-	      len = 0;
-	      buf = NULL;
+	      evt = NULL;
+	      ptr = buf;
+	      buflen = len;
 	    }
-	  
-	  flags = ctx->req_in.flags & 0xFFFFU;
-	  if ( (flags ^ ctx->event_flags) != 0 )
-	    {
-	      ctx->event_flags |= flags;
-	      if ( ctx->event_flags_changed )
-		ctx->event_flags_changed(ctx->event_flags_changed_arg, &ctx->event_flags);
-
-	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLIN )
-		ctx->revents |= POLLIN;
-	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLOUT )
-		ctx->revents |= POLLOUT;
-	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLPRI )
-		ctx->revents |= POLLPRI;
-	      if ( ctx->event_flags & DSPD_REQ_FLAG_POLLHUP )
-		ctx->revents |= POLLHUP;
-	    }
-
-
-	  //It is possible to have event flags carried by a regular reply.
-	  if ( ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT ||
-		 (ctx->req_in.flags & (0xFFFF ^ DSPD_REQ_FLAG_ERROR)) != 0 ) &&
-	       ctx->async_event != NULL )
-	    {
-
-	      if ( ctx->req_in.cmd == DSPD_DCTL_ASYNC_EVENT && len >= sizeof(*evt) )
-		{
-		  evt = buf;
-		  ptr = (char*)buf + sizeof(*evt);
-		  buflen = len - sizeof(*evt);
-		} else
-		{
-		  evt = NULL;
-		  ptr = buf;
-		  buflen = len;
-		}
-	      ctx->async_event(ctx,
-			       ctx->async_event_arg,
-			       ctx->req_in.cmd,
-			       ctx->req_in.stream,
-			       ctx->req_in.flags,
-			       evt,
-			       ptr,
-			       buflen);
-	    }
-	  if ( op != NULL )
-	    {
-	      if ( ctx->req_in.flags & DSPD_REQ_FLAG_ERROR )
-		{
-		  op->error = ctx->req_in.rdata.err;
-		  if ( op->error > 0 )
-		    op->error *= -1;
-		} else
-		{
-		  op->error = 0;
-		}
-	      if ( ctx->local == true && len == 0 && ctx->req_in.bytes_returned >= 0 )
-		op->xfer = ctx->req_in.bytes_returned; //Server thread wrote directly to client buffer
-	      else
-		op->xfer = len;
-	      io_complete(ctx, op);
-	    }
-	  ctx->off_in = 0;
-	} else if ( ret != -EINPROGRESS )
+	  ctx->async_event(ctx,
+			   ctx->async_event_arg,
+			   ctx->req_in.cmd,
+			   ctx->req_in.stream,
+			   ctx->req_in.flags,
+			   evt,
+			   ptr,
+			   buflen);
+	}
+      if ( op != NULL )
 	{
-
-	  if ( ctx->op_in >= 0 )
+	  if ( ctx->req_in.flags & DSPD_REQ_FLAG_ERROR )
 	    {
-	      op = ctx->pending_ops[ctx->op_in];
-	      DSPD_ASSERT(op != NULL);
-	      op->error = ret;
-	      op->xfer = 0;
-	      io_complete(ctx, op);
+	      op->error = ctx->req_in.rdata.err;
+	      if ( op->error > 0 )
+		op->error *= -1;
+	    } else
+	    {
+	      op->error = 0;
 	    }
+	  if ( ctx->local == true && len == 0 && ctx->req_in.bytes_returned >= 0 )
+	    op->xfer = ctx->req_in.bytes_returned; //Server thread wrote directly to client buffer
+	  else
+	    op->xfer = len;
+	  io_complete(ctx, op);
+	}
+      ctx->off_in = 0;
+    } else if ( ret != -EINPROGRESS )
+    {
+
+      if ( ctx->op_in >= 0 )
+	{
+	  op = ctx->pending_ops[ctx->op_in];
+	  DSPD_ASSERT(op != NULL);
+	  op->error = ret;
+	  op->xfer = 0;
+	  io_complete(ctx, op);
 	}
     }
+  return ret;
+}
+
+int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
+{
+  int32_t ret;
+  ret = recv_header(ctx);
+  if ( ret == 0 )
+    ret = recv_payload(ctx);
+  if ( ctx->error == 0 && ret < 0 )
+    ctx->error = ret;
   return ret;
 }
 
@@ -1086,7 +1106,8 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 	All of the requests should be completed (canceled or otherwise) or otherwise dead (connection lost).
 	If the requests have been completed then there should be buffer space for one header.  If the connection
 	is lost then sending more data will cause an error.  If this aio connection exists within the deamon
-	process then the server is not allowed to close the connection so the only option is to quit cleanly.
+	process then the server is not allowed to close the connection unless it failed to find a free
+	slot so the only option is to quit cleanly.
       */
       while ( offset < sizeof(quit_req) )
 	{
@@ -1207,15 +1228,6 @@ static void dspd_aio_fifo_destroy(struct dspd_aio_fifo_master *master)
 }
 static int32_t aio_fifo_ready(struct dspd_aio_fifo_ctx *ctx)
 {
-  if ( ctx == ctx->master->client )
-    {
-      //If the client made the server close the connection, then you screwed
-      //up really bad.
-      DSPD_ASSERT(ctx->master->server);
-    }
-  //if ( ctx->master->server || ctx->master->client )
-  //return 0;
-  //return -ECONNABORTED;
   DSPD_ASSERT(ctx->master->server || ctx->master->client);
   return 0;
 }
@@ -1461,6 +1473,8 @@ ssize_t dspd_aio_fifo_readv(void *arg, struct iovec *iov, size_t iovcnt)
   
   if ( bytes > 0 )
     ret = bytes;
+  else if ( ctx->master->server == NULL || ctx->master->client == NULL )
+    ret = -ECONNABORTED;
   else if ( ret == 0 && bytes == 0 )
     ret = -EAGAIN;
   return ret;
@@ -1475,6 +1489,8 @@ ssize_t dspd_aio_fifo_writev(void *arg, struct iovec *iov, size_t iovcnt)
   int32_t ret = 0;
   struct iovec *v = iov;
   struct dspd_aio_fifo_ctx *ctx = arg;
+ 
+
   for ( i = 0; i < iovcnt; i++ )
     {
       v = &iov[i];
@@ -1492,6 +1508,12 @@ ssize_t dspd_aio_fifo_writev(void *arg, struct iovec *iov, size_t iovcnt)
   //Loop while the context is still connected and no data was written.
   while ( (ret = aio_fifo_ready(ctx)) == 0 )
     {
+      if ( ctx->master->server == NULL || ctx->master->client == NULL )
+	{
+	  ret = -ECONNABORTED;
+	  break;
+	}
+
       //Write as much as possible before waking the other end
       for ( i = 0; i < iovcnt; i++ )
 	{
@@ -1732,9 +1754,8 @@ void dspd_aio_fifo_poll_async(void *arg, uint32_t events)
 static int32_t dspd_aio_fifo_ptevent_wake(struct dspd_aio_fifo_ctx *ctx, void *arg)
 {
   struct dspd_aio_fifo_ptevent *evt = arg;
-  (void)ctx;
-
-  if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET )
+  if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET ||
+       ctx->master->client == NULL || ctx->master->server == NULL )
     {
       pthread_mutex_lock(evt->lock);
       pthread_cond_broadcast(evt->cond);
@@ -1760,6 +1781,8 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
 	  pthread_mutex_lock(evt->lock);
 	  while ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET )
 	    {
+	      if ( ctx->master->server == NULL || ctx->master->client == NULL )
+		break;
 	      if ( pthread_cond_timedwait(evt->cond, evt->lock, &ts) != 0 )
 		break;
 	    }
@@ -1767,7 +1790,11 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
 	{
 	  pthread_mutex_lock(evt->lock);
 	  while ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET )
-	    pthread_cond_wait(evt->cond, evt->lock);
+	    {
+	      if ( ctx->master->server == NULL || ctx->master->client == NULL )
+		break;
+	      pthread_cond_wait(evt->cond, evt->lock);
+	    }
 	}
       pthread_mutex_unlock(evt->lock);
     }
@@ -1788,7 +1815,8 @@ static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *a
   int ret = 0;
   (void)ctx;
 
-  if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET )
+  if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET ||
+       ctx->master->client == NULL || ctx->master->server == NULL )
     {
       while ( write(evt->fd, &val, sizeof(val)) < 0 )
 	{
