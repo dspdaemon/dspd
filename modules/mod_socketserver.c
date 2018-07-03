@@ -2467,10 +2467,7 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
 }
 static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
 				void *data,
-				int64_t arg,
-				int32_t index,
-				int32_t fd,
-				int32_t msg,
+				struct cbpoll_work *wrk,
 				bool async)
 {
   int32_t ret;
@@ -2491,7 +2488,7 @@ static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
     }
  
   //Send the results back (decreases refcount on poll thread)
-  cbpoll_deferred_work_complete(ctx, index, a);
+  cbpoll_deferred_work_complete(ctx, wrk->index, a);
 }
 
 
@@ -2732,6 +2729,7 @@ static bool client_destructor(void *data,
 			      int fd)
 {
   struct ss_cctx *cli = data;
+
   dspd_mutex_lock(&cli->lock);
   cli->fd = -1;
   dspd_mutex_unlock(&cli->lock);
@@ -2929,40 +2927,31 @@ static void insert_fd(struct cbpoll_ctx *ctx,
 
 static void accept_fd(struct cbpoll_ctx *ctx,
 		      void *data,
-		      int64_t arg,
-		      int32_t index,
-		      int32_t fd,
-		      int32_t msg,
+		      struct cbpoll_work *wrk,
 		      bool async)
 {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
   int32_t newfd;
-  newfd = accept4(fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-  insert_fd(ctx, newfd, arg, index, fd, false, true);
+  newfd = accept4(wrk->fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+  insert_fd(ctx, newfd, wrk->arg, wrk->index, wrk->fd, false, true);
 }
 static void insert_fd_cb(struct cbpoll_ctx *ctx,
 			 void *data,
-			 int64_t arg,
-			 int32_t index,
-			 int32_t fd,
-			 int32_t msg,
+			 struct cbpoll_work *wrk,
 			 bool async)
 {
-  insert_fd(ctx, arg & 0xFFFFFFFF, arg, index, fd, false, !!(arg & 0xFFFFFFFF00000000LL));
+  insert_fd(ctx, wrk->arg & 0xFFFFFFFF, wrk->arg, wrk->index, wrk->fd, false, !!(wrk->arg & 0xFFFFFFFF00000000LL));
 }
 
 
 static void accept_vfd_cb(struct cbpoll_ctx *ctx,
 			  void *data,
-			  int64_t arg,
-			  int32_t index,
-			  int32_t fd,
-			  int32_t msg,
+			  struct cbpoll_work *wrk,
 			  bool async)
 {
-  struct dspd_aio_fifo_ctx *fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)arg;
-  insert_fd(ctx, fifo->master->slot, arg, index, fd, true, fifo->master->remote);
+  struct dspd_aio_fifo_ctx *fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)wrk->arg;
+  insert_fd(ctx, fifo->master->slot, wrk->arg, wrk->index, wrk->fd, true, fifo->master->remote);
 }
 
 static int listen_fd_event(void *data, 
@@ -3015,7 +3004,7 @@ static int eventfd_event(void *data,
       //server->vfd_ops->wait(NULL, &server->eventfd, 0);
       server->vfd_ops->reset(NULL, &server->eventfd);
     }    
-  
+  //fprintf(stderr, "EVENTFD\n");
   for ( i = 0; i < server->vfd_index; i++ )
     {
       client = server->virtual_fds[i];
@@ -3426,7 +3415,7 @@ static struct dspd_hotplug_cb socksrv_hotplug = {
 };
 
 
-static int socksrv_init(void *daemon, void **context)
+static int socksrv_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   struct ss_sctx *sctx;
   int ret;
@@ -3462,7 +3451,7 @@ static int socksrv_init(void *daemon, void **context)
     goto out;
   fd = sctx->fd;
   dspd_daemon_set_ipc_perm("/var/run/dspd/dspd.sock");
-  ret = listen(sctx->fd, sctx->max_virtual_fds);
+  ret = listen(sctx->fd, SOMAXCONN);
   if ( ret < 0 )
     goto out;
   
@@ -3542,7 +3531,7 @@ static int socksrv_init(void *daemon, void **context)
   return ret;
 }
 
-static void socksrv_close(void *daemon, void **context)
+static void socksrv_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }

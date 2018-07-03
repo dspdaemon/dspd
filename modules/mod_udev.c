@@ -551,7 +551,7 @@ static void start_udev_thread(void *arg)
   ctx->thread_result = pthread_create(&ctx->thread, NULL, udev_thread, arg);
 }
 
-static int udev_init(void *daemon, void **context)
+static int udev_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   struct dspd_dict *cfg;
   char *p;
@@ -586,7 +586,7 @@ static int udev_init(void *daemon, void **context)
   return 0;
 }
 
-static void udev_close(void *daemon, void **context)
+static void udev_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   if ( hpctx.thread_result == 0 )
     {

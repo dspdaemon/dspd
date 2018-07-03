@@ -10,7 +10,7 @@
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../sndio/dspd_sndio.h"
-static int sndiod_init(void *daemon, void **context)
+static int sndiod_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   struct sndio_ctx *ctx;
   struct dspd_sndio_params params;
@@ -59,7 +59,7 @@ static int sndiod_init(void *daemon, void **context)
     }
   return 0;
 }
-static void sndiod_close(void *daemon, void **context)
+static void sndiod_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   if ( *context )
     {

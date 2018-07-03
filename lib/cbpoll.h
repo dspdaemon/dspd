@@ -20,13 +20,11 @@ struct cbpoll_work {
   uint32_t index;
   int32_t  fd;
   int32_t  msg;
+  int32_t  pad;
   int64_t  arg;
   void (*callback)(struct cbpoll_ctx *ctx,
 		   void *data,
-		   int64_t arg,
-		   int32_t index,
-		   int32_t fd,
-		   int32_t msg,
+		   struct cbpoll_work *wrk,
 		   bool async);
   char     extra_data[32];
 };
@@ -37,7 +35,6 @@ struct cbpoll_wq {
   dspd_mutex_t              lock;
   dspd_thread_t             thread;
   struct cbpoll_work        overflow;
-  void                     *extra_data;
 };
 
 struct cbpoll_fd_ops {
@@ -176,16 +173,13 @@ int32_t cbpoll_add_fd(struct cbpoll_ctx *ctx,
 		      int32_t events,
 		      const struct cbpoll_fd_ops *ops,
 		      void *arg);
-void *cbpoll_get_extra_data(struct cbpoll_ctx *ctx);
+
 void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 				int32_t index,
 				int64_t arg,
 				void (*callback)(struct cbpoll_ctx *ctx,
 						 void *data,
-						 int64_t arg,
-						 int32_t index,
-						 int32_t fd,
-						 int32_t msg,
+						 struct cbpoll_work *wrk,
 						 bool async));
 void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 				   int32_t index,
@@ -213,6 +207,10 @@ void cbpoll_set_timer(struct cbpoll_ctx *ctx, size_t index, dspd_time_t timeout)
 
 int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int32_t associated_context);
 void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
+int32_t cbpoll_aio_new(struct cbpoll_ctx *cbpoll, 
+		       struct dspd_aio_ctx **aio,
+		       const char *addr,
+		       void *context);
 
 dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t);
 void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time_t period);

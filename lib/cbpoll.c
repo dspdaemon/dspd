@@ -314,10 +314,7 @@ static void *cbpoll_thread(void *p)
 		{
 		  ctx->wq.overflow.callback(ctx,
 					    fdata->data,
-					    ctx->wq.overflow.arg,
-					    ctx->wq.overflow.index,
-					    ctx->wq.overflow.fd,
-					    ctx->wq.overflow.msg,
+					    &ctx->wq.overflow,
 					    false);
 		  if ( ctx->wq.overflow.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
 		    cbpoll_unref(ctx, idx);
@@ -375,10 +372,6 @@ static void *cbpoll_thread(void *p)
 
 
 
-void *cbpoll_get_extra_data(struct cbpoll_ctx *ctx)
-{
-  return ctx->wq.extra_data;
-}
 
 static void *async_work_thread(void *p)
 {
@@ -418,14 +411,9 @@ static void *async_work_thread(void *p)
 	    break;
 	  DSPD_ASSERT(work->index < ctx->max_fd);
 	  fd = &ctx->fdata[work->index];
-	  DSPD_ASSERT(fd->fd == work->fd);
-	  ctx->wq.extra_data = work->extra_data;
 	  work->callback(ctx,
 			 fd->data,
-			 work->arg,
-			 work->index,
-			 work->fd,
-			 work->msg,
+			 work,
 			 true);
 	  dspd_fifo_rcommit(ctx->wq.fifo, 1);
 	}
@@ -469,10 +457,7 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk)
 	  fd = &ctx->fdata[wrk->index];
 	  wrk->callback(ctx,
 			fd->data,
-			wrk->arg,
-			wrk->index,
-			wrk->fd,
-			wrk->msg,
+			wrk,
 			false);
 	  if ( wrk->msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
 	    cbpoll_unref(ctx, wrk->index);
@@ -619,10 +604,7 @@ void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 				int64_t arg,
 				void (*callback)(struct cbpoll_ctx *ctx,
 						 void *data,
-						 int64_t arg,
-						 int32_t index,
-						 int32_t fd,
-						 int32_t msg,
+						 struct cbpoll_work *wrk,
 						 bool async))
 {
   struct cbpoll_work work;
@@ -1093,6 +1075,29 @@ static void io_completed_cb2(struct dspd_aio_ctx *aio,
   cbpoll_unref(cbctx, aio->slot);
 }
 
+int32_t cbpoll_aio_new(struct cbpoll_ctx *cbpoll, 
+		       struct dspd_aio_ctx **aio,
+		       const char *addr,
+		       void *context)
+{
+  struct dspd_aio_ctx *c;
+  int32_t ret;
+  ret = dspd_aio_new(&c, DSPD_AIO_DEFAULT);
+  if ( ret == 0 )
+    {
+      if ( context )
+	ret = dspd_aio_connect(c, NULL, context, &dspd_aio_fifo_eventfd_ops, &cbpoll->eventfd);
+      else
+	ret = dspd_aio_connect(c, addr, context, NULL, NULL);
+      if ( ret < 0 )
+	dspd_aio_delete(c);
+      else
+	*aio = c;
+    }
+  return ret;
+}
+
+
 
 int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int32_t associated_context)
 {
@@ -1124,17 +1129,20 @@ int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int
 		  if ( context->aio_idx <= i )
 		    context->aio_idx = i + 1;
 		  dspd_aio_set_ready_cb(aio, aio_fifo_ready, context);
+		  aio->aio_index = i;
 		  if ( associated_context >= 0 )
 		    {
 		      aio->slot = associated_context;
 		      aio->io_submitted = io_submitted_cb2;
 		      aio->io_completed = io_completed_cb2;
 		      aio->io_arg = context;
+		      cbpoll_ref(context, aio->slot);
 		    } else
 		    {
 		      aio->slot = -1;
 		    }
 		  ret = i;
+		  break;
 		}
 	    }
 	}
@@ -1144,9 +1152,16 @@ int32_t cbpoll_add_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio, int
 
 void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio)
 {
-  if ( context->aio_list )
-    context->aio_list[aio->slot] = NULL;
-  cbpoll_unref(context, aio->slot);
+  if ( context->aio_list != NULL && aio->aio_index >= 0 )
+    {
+      context->aio_list[aio->aio_index] = NULL;
+      aio->aio_index = -1;
+    }
+  if ( aio->slot >= 0 )
+    {
+      cbpoll_unref(context, aio->slot);
+      aio->slot = -1;
+    }
 }
 
 static bool eventfd_destructor(void *data,
@@ -1342,26 +1357,23 @@ static void fail_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt)
 
 static void accept_cb(struct cbpoll_ctx *ctx,
 		      void *data,
-		      int64_t arg,
-		      int32_t index,
-		      int32_t fd,
-		      int32_t msg,
+		      struct cbpoll_work *wrk,
 		      bool async)
 {
   struct cbpoll_pipe_event evt;
-  struct accept_data *d = data;
+  struct accept_data *d = (struct accept_data*)wrk->extra_data;
   struct cbpoll_client_hdr *ptr;
   struct cbpoll_client_hdr hdr;
   memset(&hdr, 0, sizeof(hdr));
   memset(&evt, 0, sizeof(evt));
-  hdr.fd = fd;
+  hdr.fd = wrk->fd;
   hdr.index = d->index;
   hdr.fd_index = d->fd_index;
   hdr.list = d->list;
   hdr.ops = d->list->ops;
   dspd_ts_clear(&hdr.busy);
-  ptr = d->list->ops->create(ctx, &hdr, arg);
-  evt.fd = fd;
+  ptr = d->list->ops->create(ctx, &hdr, wrk->arg);
+  evt.fd = wrk->fd;
   evt.index = d->fd_index;
   evt.stream = d->index;
   evt.msg = CBPOLL_PIPE_MSG_CALLBACK;
@@ -1375,7 +1387,7 @@ static void accept_cb(struct cbpoll_ctx *ctx,
       evt.callback = insert_cb;
       evt.arg = (uintptr_t)ptr;
     }
-  if ( async )
+  if ( ! async )
     {
       evt.callback(ctx, &evt);
     } else if ( cbpoll_send_event(ctx, &evt) < 0 )
@@ -1428,13 +1440,10 @@ int32_t cbpoll_accept(struct cbpoll_ctx *ctx,
 
 static void destroy_cb(struct cbpoll_ctx *ctx,
 		       void *data,
-		       int64_t arg,
-		       int32_t index,
-		       int32_t fd,
-		       int32_t msg,
+		       struct cbpoll_work *wrk,
 		       bool async)
 {
-  struct cbpoll_client_hdr *hdr = (struct cbpoll_client_hdr*)(uintptr_t)arg;
+  struct cbpoll_client_hdr *hdr = (struct cbpoll_client_hdr*)(uintptr_t)wrk->arg;
   hdr->ops->destroy(ctx, hdr);
 }
 
@@ -1474,24 +1483,21 @@ static void work_complete_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *e
 
 static void work_cb(struct cbpoll_ctx *ctx,
 		    void *data,
-		    int64_t arg,
-		    int32_t index,
-		    int32_t fd,
-		    int32_t msg,
+		    struct cbpoll_work *wrk,
 		    bool async)
 {
-  struct cbpoll_client_hdr *hdr = (struct cbpoll_client_hdr*)(uintptr_t)arg;
+  struct cbpoll_client_hdr *hdr = (struct cbpoll_client_hdr*)(uintptr_t)wrk->arg;
   struct cbpoll_pipe_event evt;
   memset(&evt, 0, sizeof(evt));
   dspd_ts_clear(&hdr->busy);
   dspd_mutex_lock(&ctx->work_lock);
   hdr->ops->do_work(ctx, hdr);
   dspd_mutex_unlock(&ctx->work_lock);
-  evt.fd = fd;
-  evt.index = index;
+  evt.fd = wrk->fd;
+  evt.index = wrk->index;
   evt.stream = -1;
   evt.msg = CBPOLL_PIPE_MSG_CALLBACK;
-  evt.arg = (uintptr_t)arg;
+  evt.arg = (uintptr_t)wrk->arg;
   evt.callback = work_complete_cb;
   if ( async )
     {

@@ -168,14 +168,14 @@ static struct dspd_src_ops speex_ops = {
   .get_default_quality = speex_get_default_quality,
 };
 
-static int ssrc_init(void *daemon, void **context)
+static int ssrc_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   if ( dspd_src_init(&speex_ops) == 0 )
     dspd_log(0, "Installed speex samplerate conversion");
   return 0;
 }
 
-static void ssrc_close(void *daemon, void **context)
+static void ssrc_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }

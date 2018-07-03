@@ -19,7 +19,7 @@
 //hotplug event generators
 #define DSPD_MOD_INIT_PRIO_HOTPLUG _MAKEPRIO(1U)
 
-
+struct dspd_daemon_ctx;
 
 struct dspd_mod_cb {
   uint32_t    compat_version;
@@ -28,8 +28,8 @@ struct dspd_mod_cb {
   //priority then they are loaded in the order they appear in the module list.
   uint32_t    init_priority;
   const char *desc;
-  int (*init)(void *daemon, void **context);
-  void (*close)(void *daemon, void **context);
+  int (*init)(struct dspd_daemon_ctx *daemon, void **context);
+  void (*close)(struct dspd_daemon_ctx *daemon, void **context);
 	       
 };
 struct dspd_ll;
@@ -41,7 +41,7 @@ struct dspd_module {
   void                     *context;
 };
 
-struct dspd_daemon_ctx;
+
 struct dspd_module_list {
   pthread_rwlock_t  lock;
   uint32_t          count;

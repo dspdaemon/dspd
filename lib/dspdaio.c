@@ -1014,6 +1014,7 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   ctx->user_max_ops = max_req;
   ctx->iofd = -1;
   ctx->magic = DSPD_OBJ_TYPE_AIO;
+  ctx->aio_index = -1;
   if ( ! ctx->pending_ops )
     ret = -ENOMEM;
   else
@@ -1040,6 +1041,12 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
   size_t i;
   struct dspd_async_op *op;
   int32_t ret = -ECANCELED;
+  static const struct dspd_req quit_req = {
+    .len = sizeof(struct dspd_req),
+    .cmd = DSPD_SOCKSRV_REQ_QUIT,
+    .stream = -1
+  };
+  size_t offset = 0;
   if ( ! ctx )
     return;
   check_io_count(ctx);
@@ -1074,6 +1081,22 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 		}
 	    }
 	}
+
+      /*
+	All of the requests should be completed (canceled or otherwise) or otherwise dead (connection lost).
+	If the requests have been completed then there should be buffer space for one header.  If the connection
+	is lost then sending more data will cause an error.  If this aio connection exists within the deamon
+	process then the server is not allowed to close the connection so the only option is to quit cleanly.
+      */
+      while ( offset < sizeof(quit_req) )
+	{
+	  ssize_t r = ctx->ops->write(ctx->ops_arg, ((const char*)&quit_req)+offset, sizeof(quit_req) - offset);
+	  if ( r == 0 || (r < 0 && r != -EAGAIN && r != -EINTR) )
+	    break;
+	  offset += r;
+	  usleep(1);
+	}
+
       if ( ctx->ops->close )
 	ctx->ops->close(ctx->ops_arg);
       if ( ctx->io_dead )
@@ -1184,7 +1207,7 @@ static void dspd_aio_fifo_destroy(struct dspd_aio_fifo_master *master)
 }
 static int32_t aio_fifo_ready(struct dspd_aio_fifo_ctx *ctx)
 {
-  if ( ctx->master->server && ctx->master->client )
+  if ( ctx->master->server || ctx->master->client )
     return 0;
   return -ECONNABORTED;
 }
@@ -1239,10 +1262,10 @@ int32_t dspd_aio_fifo_new(struct dspd_aio_fifo_ctx *ctx[2],
 	  ret = dspd_fifo_new(&master->tx, len, 1, NULL);
 	  if ( ret == 0 )
 	    {
-	      ret = dspd_fifo_new(&master->txoob, max_req, sizeof(struct dspd_aio_fifo_oob_msg), NULL);
+	      ret = dspd_fifo_new(&master->txoob, max_req+1, sizeof(struct dspd_aio_fifo_oob_msg), NULL);
 	      if ( ret == 0 )
 		{
-		  ret = dspd_fifo_new(&master->rxoob, max_req, sizeof(struct dspd_aio_fifo_oob_msg), NULL);
+		  ret = dspd_fifo_new(&master->rxoob, max_req+1, sizeof(struct dspd_aio_fifo_oob_msg), NULL);
 		  if ( ret == 0 )
 		    {
 		      master->slot = -1;
@@ -1333,7 +1356,7 @@ int32_t dspd_aio_fifo_sendfd(void *arg, int32_t fd, struct iovec *data)
   uint32_t len;
   int32_t ret;
   struct dspd_aio_fifo_ctx *ctx = arg;
-  ret = dspd_fifo_len(ctx->txoob, &len);
+  ret = dspd_fifo_space(ctx->txoob, &len);
   if ( ret == 0 )
     {
       //Too many requests pending or is the other end not taking the file descriptors?
@@ -1528,7 +1551,7 @@ void dspd_aio_fifo_close(void *arg)
     }
   while ( dspd_fifo_read(ctx->rxoob, &msg, 1) == 1 )
     close(msg.fd);
-  ctx->ops->wake(ctx, ctx->arg);
+  ctx->peer->ops->wake(ctx, ctx->peer->arg);
   destroy = ctx->master->client == NULL && ctx->master->server == NULL;
   pthread_mutex_unlock(&ctx->master->lock);
   if ( destroy )
@@ -1765,7 +1788,6 @@ static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *a
 	  if ( ret != -EINTR && ret != -EWOULDBLOCK && ret != -EAGAIN )
 	    break;
 	}
-
     }
   return ret;
 }

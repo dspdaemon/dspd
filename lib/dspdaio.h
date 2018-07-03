@@ -118,6 +118,7 @@ struct dspd_aio_ctx {
   void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg);
   void *shutdown_arg;
 
+  int32_t aio_index;
 };
 
 int32_t dspd_aio_sock_new(intptr_t sv[2], ssize_t max_req, int32_t flags, bool local);
@@ -216,7 +217,7 @@ struct dspd_aio_fifo_oob_msg {
 
 struct dspd_aio_fifo_master {
   struct dspd_fifo_header           *rx, *tx;
-  //Out of band messages.  This should work because the ordering will be the same and
+  //Out of band messages.  This should work because the ordering will be the same as
   //the in band messages.
   struct dspd_fifo_header           *txoob, *rxoob;
   pthread_mutex_t                    lock;

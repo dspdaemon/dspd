@@ -117,13 +117,13 @@ static void *aiotest_thread(void *p)
 }
 
 static pthread_t aiothread;
-static int aiotest_init(void *daemon, void **context)
+static int aiotest_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   pthread_create(&aiothread, NULL, aiotest_thread, daemon);
   return 0;
 }
 
-static void aiotest_close(void *daemon, void **context)
+static void aiotest_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }

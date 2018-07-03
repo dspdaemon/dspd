@@ -1016,10 +1016,7 @@ static int _amsg_setpar(struct sndio_client *cli)
 
 static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
 			   void *data,
-			   int64_t arg,
-			   int32_t index,
-			   int32_t fd,
-			   int32_t msg,
+			   struct cbpoll_work *wrk,
 			   bool async)
 {
   struct sndio_client *cli = data;
@@ -1031,10 +1028,10 @@ static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
   else
     evt.arg = CLIENT_MSG_ERROR;
   evt.msg = CBPOLL_PIPE_MSG_DEFERRED_WORK;
-  evt.fd = fd;
-  evt.index = index;
+  evt.fd = wrk->fd;
+  evt.index = wrk->index;
   if ( cbpoll_send_event(ctx, &evt) < 0 )
-    shutdown(fd, SHUT_RDWR);
+    shutdown(wrk->fd, SHUT_RDWR);
 }
 
 static int amsg_setpar(struct sndio_client *cli)
@@ -1398,13 +1395,10 @@ static int client_fd_event(void *data,
 
 static void free_client_cb(struct cbpoll_ctx *ctx,
 			   void *data,
-			   int64_t arg,
-			   int32_t index,
-			   int32_t fd,
-			   int32_t msg,
+			   struct cbpoll_work *wrk,
 			   bool async)
 {
-  struct sndio_client *cli = (struct sndio_client*)(intptr_t)arg;
+  struct sndio_client *cli = (struct sndio_client*)(intptr_t)wrk->arg;
   if ( cli->pclient )
     dspd_rclient_delete(cli->pclient);
   if ( cli->cclient != NULL && cli->cclient != cli->pclient )
@@ -1510,20 +1504,17 @@ static int listen_pipe_event(void *data,
 
 static void create_client_cb(struct cbpoll_ctx *ctx,
 			     void *data,
-			     int64_t arg,
-			     int32_t index,
-			     int32_t fd,
-			     int32_t msg,
+			     struct cbpoll_work *wrk,
 			     bool async)
 {
   struct sndio_ctx *srv = data;
   struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));
-  int32_t newfd = arg & 0xFFFFFFFF;
-  int32_t sio_idx = arg >> 32U;
+  int32_t newfd = wrk->arg & 0xFFFFFFFF;
+  int32_t sio_idx = wrk->arg >> 32U;
   struct cbpoll_pipe_event evt;
   memset(&evt, 0, sizeof(evt));
-  evt.fd = fd;
-  evt.index = index;
+  evt.fd = wrk->fd;
+  evt.index = wrk->index;
 
   if ( cli != NULL )
     {
@@ -2115,13 +2106,13 @@ int32_t dspd_sndio_start(struct sndio_ctx *ctx)
     return ret;
   if ( ctx->fd >= 0 )
     {
-      ret = listen(ctx->fd, MAX_CLIENTS);
+      ret = listen(ctx->fd, SOMAXCONN);
       if ( ret < 0 )
 	return -errno;
     }
   for ( i = 0; i < ctx->tcp_nfds; i++ )
     {
-      ret = listen(ctx->tcp_fds[i], MAX_CLIENTS);
+      ret = listen(ctx->tcp_fds[i], SOMAXCONN);
       if ( ret < 0 )
 	return -errno;
     }
@@ -2137,13 +2128,13 @@ int32_t dspd_sndio_run(struct sndio_ctx *ctx)
   size_t i;
   if ( ctx->fd >= 0 )
     {
-      ret = listen(ctx->fd, MAX_CLIENTS);
+      ret = listen(ctx->fd, SOMAXCONN);
       if ( ret < 0 )
 	return -errno;
     }
   for ( i = 0; i < ctx->tcp_nfds; i++ )
     {
-      ret = listen(ctx->tcp_fds[i], MAX_CLIENTS);
+      ret = listen(ctx->tcp_fds[i], SOMAXCONN);
       if ( ret < 0 )
 	return -errno;
     }

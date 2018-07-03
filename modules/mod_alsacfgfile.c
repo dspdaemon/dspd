@@ -113,7 +113,7 @@ static void trigger_hotplug_events(void *arg)
     }
 }
 
-static int cfgfile_init(void *daemon, void **context)
+static int cfgfile_init(struct dspd_daemon_ctx *daemon, void **context)
 {
 
   config_sections = dspd_read_config("mod_alsacfgfile", true);
@@ -128,7 +128,7 @@ static int cfgfile_init(void *daemon, void **context)
   return 0;
 }
 
-static void cfgfile_close(void *daemon, void **context)
+static void cfgfile_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }

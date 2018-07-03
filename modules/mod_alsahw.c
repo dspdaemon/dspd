@@ -3065,7 +3065,7 @@ static struct dspd_hotplug_cb alsahw_hotplug = {
   .remove = alsahw_remove,
 };
 
-static int alsahw_init(void *daemon, void **context)
+static int alsahw_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   int ret = dspd_daemon_hotplug_register(&alsahw_hotplug, NULL);
   if ( ret != 0 )
@@ -3084,7 +3084,7 @@ static int alsahw_init(void *daemon, void **context)
 
 }
 
-static void alsahw_close(void *daemon, void **context)
+static void alsahw_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }

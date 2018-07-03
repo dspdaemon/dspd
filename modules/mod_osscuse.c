@@ -495,13 +495,10 @@ struct cdev_open_req {
 
 static void free_client_cb(struct cbpoll_ctx *ctx,
 			   void *data,
-			   int64_t arg,
-			   int32_t index,
-			   int32_t fd,
-			   int32_t msg,
+			   struct cbpoll_work *wrk,
 			   bool async)
 {
-  struct oss_cdev_client *cli = (struct oss_cdev_client*)(intptr_t)arg;
+  struct oss_cdev_client *cli = (struct oss_cdev_client*)(intptr_t)wrk->arg;
   size_t br;
   if ( cli->ops && cli->ops->free )
     {
@@ -653,16 +650,13 @@ static bool check_mode(mode_t mode, int sbits)
 
 static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 				 void *data,
-				 int64_t arg,
-				 int32_t index,
-				 int32_t fd,
-				 int32_t msg,
+				 struct cbpoll_work *wrk,
 				 bool async)
 {
   struct oss_cdev_client *cli;
   struct oss_dsp_cdev *dev = data;
-  struct cdev_open_req *req = cbpoll_get_extra_data(ctx);
-  int32_t slot = arg, device_index;
+  struct cdev_open_req *req = (struct cdev_open_req*)wrk->extra_data;
+  int32_t slot = wrk->arg, device_index;
   int err = 0;
   size_t pgsize = 256, pgcount, n;
   size_t br;
@@ -2522,7 +2516,7 @@ static struct dspd_hotplug_cb oss_hotplug = {
 };
 
 
-static void oc_close(void *daemon, void **context)
+static void oc_close(struct dspd_daemon_ctx *daemon, void **context)
 {
 
 }
@@ -2670,7 +2664,7 @@ int osscuse_create_cdev(int devnum,
 
 
 #define MAXIO 65536
-static int oc_init(void *daemon, void **context)
+static int oc_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   int ret = dspd_daemon_hotplug_register(&oss_hotplug, NULL);
   const char *val;

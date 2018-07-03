@@ -182,14 +182,14 @@ static struct dspd_src_ops src_ops = {
   .set_default_quality = src_set_default_quality,
 };
 
-static int lsr_init(void *daemon, void **context)
+static int lsr_init(struct dspd_daemon_ctx *daemon, void **context)
 {
   if ( dspd_src_init(&src_ops) == 0 )
     dspd_log(0, "Installed libsamplerate samplerate conversion");
   return 0;
 }
 
-static void lsr_close(void *daemon, void **context)
+static void lsr_close(struct dspd_daemon_ctx *daemon, void **context)
 {
   
 }
