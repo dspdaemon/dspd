@@ -2724,7 +2724,7 @@ int client_pipe_event(void *data,
   return ret;
 }
 
-static void delete_client(struct ss_cctx *cli, int32_t fd)
+static void destroy_client(struct ss_cctx *cli, int32_t fd)
 {
   static const struct dspd_req dead_req = { .len = 0 };
   size_t offset = 0;
@@ -2739,6 +2739,7 @@ static void delete_client(struct ss_cctx *cli, int32_t fd)
 	break;
       if ( ret <= 0 )
 	break;
+      offset += ret;
     }
   
   dspd_mutex_lock(&cli->lock);
@@ -2791,7 +2792,8 @@ static bool client_destructor(void *data,
 {
   struct ss_cctx *cli = data;
   dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
-  delete_client(cli, fd);
+  destroy_client(cli, fd);
+  free(cli);
   return true;
 }
 static int client_vfd_set_events(void *data, 
@@ -3076,10 +3078,10 @@ static int listen_pipe_event(void *data,
 	  if ( i < 0 )
 	    {
 	      cli->eof = true;
-	      int f = cli->fd;
-	      delete_client(cli, f);
-	      if ( f >= 0 )
-		close(f);
+	      destroy_client(cli, cli->fd);
+	      if ( cli->fd >= 0 )
+		close(cli->fd);
+	      free(cli);
 	    } else
 	    {
 	      cli->index = i;
