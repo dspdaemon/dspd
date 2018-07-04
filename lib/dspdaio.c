@@ -891,7 +891,7 @@ int32_t dspd_aio_recv(struct dspd_aio_ctx *ctx)
   ret = recv_header(ctx);
   if ( ret == 0 )
     ret = recv_payload(ctx);
-  if ( ctx->error == 0 && ret < 0 )
+  if ( ctx->error == 0 && ret < 0 && ret != -EAGAIN && ret != -EINVAL && ret != -EINPROGRESS )
     ctx->error = ret;
   return ret;
 }
@@ -1755,7 +1755,7 @@ static int32_t dspd_aio_fifo_ptevent_wake(struct dspd_aio_fifo_ctx *ctx, void *a
 {
   struct dspd_aio_fifo_ptevent *evt = arg;
   if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET ||
-       ctx->master->client == NULL || ctx->master->server == NULL )
+       (ctx != NULL && (ctx->master->client == NULL || ctx->master->server == NULL)) )
     {
       pthread_mutex_lock(evt->lock);
       pthread_cond_broadcast(evt->cond);
@@ -1781,7 +1781,7 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
 	  pthread_mutex_lock(evt->lock);
 	  while ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET )
 	    {
-	      if ( ctx->master->server == NULL || ctx->master->client == NULL )
+	      if ( ctx != NULL && (ctx->master->server == NULL || ctx->master->client == NULL) )
 		break;
 	      if ( pthread_cond_timedwait(evt->cond, evt->lock, &ts) != 0 )
 		break;
@@ -1791,7 +1791,7 @@ static int32_t dspd_aio_fifo_ptevent_wait(struct dspd_aio_fifo_ctx *ctx, void *a
 	  pthread_mutex_lock(evt->lock);
 	  while ( dspd_ts_load(&evt->tsval) != DSPD_TS_SET )
 	    {
-	      if ( ctx->master->server == NULL || ctx->master->client == NULL )
+	      if ( ctx != NULL && (ctx->master->server == NULL || ctx->master->client == NULL) )
 		break;
 	      pthread_cond_wait(evt->cond, evt->lock);
 	    }
@@ -1816,7 +1816,7 @@ static int32_t dspd_aio_fifo_eventfd_wake(struct dspd_aio_fifo_ctx *ctx, void *a
   (void)ctx;
 
   if ( dspd_test_and_set(&evt->tsval) != DSPD_TS_SET ||
-       ctx->master->client == NULL || ctx->master->server == NULL )
+       (ctx != NULL && (ctx->master->client == NULL || ctx->master->server == NULL)) )
     {
       while ( write(evt->fd, &val, sizeof(val)) < 0 )
 	{
