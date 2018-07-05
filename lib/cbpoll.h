@@ -4,6 +4,8 @@
 #include <stdint.h>
 struct cbpoll_ctx;
 
+#define CBPOLL_ERRMASK (EPOLLRDHUP|EPOLLHUP|EPOLLERR)
+
 #define CBPOLL_PIPE_MSG_DEFERRED_WORK 1
 #define CBPOLL_PIPE_MSG_CALLBACK      2
 #define CBPOLL_PIPE_MSG_USER          1000
@@ -13,6 +15,7 @@ struct cbpoll_pipe_event {
   int32_t stream;
   int32_t msg;
   int64_t arg;
+  int64_t arg2;
   void (*callback)(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt);
 };
 
@@ -20,7 +23,7 @@ struct cbpoll_work {
   uint32_t index;
   int32_t  fd;
   int32_t  msg;
-  int32_t  pad;
+  int32_t  reserved;
   int64_t  arg;
   void (*callback)(struct cbpoll_ctx *ctx,
 		   void *data,
@@ -91,6 +94,7 @@ struct cbpoll_fd {
   uint32_t  refcnt;
 #define CBPOLLFD_FLAG_REMOVED 1
 #define CBPOLLFD_FLAG_EVENTS_CHANGED 2
+#define CBPOLLFD_FLAG_RESERVED 4
   uint32_t  flags;
   const struct cbpoll_fd_ops *ops;
 
@@ -230,7 +234,7 @@ struct cbpoll_client_list;
 struct cbpoll_client_hdr;
 struct cbpoll_client_ops {
   //async client creation (usually called in work thread)
-  struct cbpoll_client_hdr *(*create)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, int64_t arg);
+  struct cbpoll_client_hdr *(*create)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, void *arg);
   //async client destruction (usually called in work thread)
   void (*destroy)(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr);
 
@@ -248,18 +252,23 @@ struct cbpoll_client_ops {
 //header for client struct (make this the first member)
 struct cbpoll_client_hdr {
   int32_t fd;
-  ssize_t index;
+  ssize_t list_index;
   ssize_t fd_index;
+  ssize_t reserved_slot;
   struct cbpoll_client_list *list;
-  struct cbpoll_client_ops *ops;
+  const struct cbpoll_client_ops *ops;
   dspd_ts_t busy;
 };
 
 struct cbpoll_client_list {
-  struct cbpoll_client_ops *ops;
+  const struct cbpoll_client_ops *ops;
   struct cbpoll_client_hdr **clients;
+  const struct cbpoll_fd_ops *fd_ops;
   size_t max_clients;
   void *data;
+#define CBPOLL_CLIENT_LIST_LISTENFD 1
+  uint32_t flags;
+  
 };
 
 //accept a new fd
@@ -276,5 +285,11 @@ bool cbpoll_async_destructor_cb(void *data,
 				int fd);
 int32_t cbpoll_queue_client_work(struct cbpoll_ctx *ctx, size_t index);
 void cbpoll_link(struct cbpoll_ctx *ctx, int index1, int index2);
+
+int cbpoll_listening_fd_event_cb(void *data, 
+				 struct cbpoll_ctx *context,
+				 int index,
+				 int fd,
+				 int revents);
 
 #endif

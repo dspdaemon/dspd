@@ -297,13 +297,13 @@ int32_t dspd_aio_cancel(struct dspd_aio_ctx *ctx, struct dspd_async_op *op, bool
   size_t i, count = 0;
   int32_t ret = -EINVAL;
   struct dspd_async_op *o;
-  if ( op->error > 0 )
+  if ( op == NULL || op->error > 0 )
     {
       ret = -ENOENT;
       for ( i = 0; i < ctx->max_ops; i++ )
 	{
 	  o = ctx->pending_ops[i];
-	  if ( o == op || op == NULL )
+	  if ( o != NULL && (o == op || op == NULL) )
 	    {
 	      if ( o->error == EINPROGRESS || ctx->dead == true ) //Did not start sending or connection is dead
 		{
@@ -443,8 +443,11 @@ static void io_complete(struct dspd_aio_ctx *ctx, struct dspd_async_op *op)
     op->complete(ctx, op);
   if ( ctx->io_completed )
     ctx->io_completed(ctx, op, ctx->io_arg);
-  if ( ctx->error == -ESHUTDOWN && ctx->shutdown_cb )
-    ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+  if ( ctx->error == -ESHUTDOWN && ctx->shutdown_cb != NULL && ctx->pending_ops_count == 0 )
+    {
+      ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+      ctx->shutdown_cb = NULL;
+    }
 }
 
 static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
@@ -1050,9 +1053,13 @@ void dspd_aio_shutdown(struct dspd_aio_ctx *ctx,
   ctx->shutdown_cb = shutdown_cb;
   ctx->shutdown_arg = arg;
   if ( dspd_aio_cancel(ctx, NULL, true) > 0 )
-    dspd_aio_process(ctx, 0, 0);
-  else
-    ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+    {
+      dspd_aio_process(ctx, 0, 0);
+    } else if ( ctx->pending_ops_count == 0 )
+    {
+      ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+      ctx->shutdown_cb = NULL;
+    }
 }
 
 
