@@ -1045,20 +1045,28 @@ int32_t dspd_aio_init(struct dspd_aio_ctx *ctx, ssize_t max_req)
   return ret;
 }
 
-void dspd_aio_shutdown(struct dspd_aio_ctx *ctx, 
-		       void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
-		       void *arg)
+void dspd_aio_set_shutdown_cb(struct dspd_aio_ctx *ctx,
+			      void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
+			      void *shutdown_arg)
 {
-  ctx->error = -ESHUTDOWN;
   ctx->shutdown_cb = shutdown_cb;
-  ctx->shutdown_arg = arg;
-  if ( dspd_aio_cancel(ctx, NULL, true) > 0 )
+  ctx->shutdown_arg = shutdown_arg;
+}
+
+void dspd_aio_shutdown(struct dspd_aio_ctx *ctx)
+{
+  if ( ctx->error != -ESHUTDOWN )
     {
-      dspd_aio_process(ctx, 0, 0);
-    } else if ( ctx->pending_ops_count == 0 )
-    {
-      ctx->shutdown_cb(ctx, ctx->shutdown_arg);
-      ctx->shutdown_cb = NULL;
+      ctx->error = -ESHUTDOWN;
+      if ( dspd_aio_cancel(ctx, NULL, true) > 0 )
+	{
+	  dspd_aio_process(ctx, 0, 0);
+	} else if ( ctx->pending_ops_count == 0 &&
+		    ctx->shutdown_cb != NULL )
+	{
+	  ctx->shutdown_cb(ctx, ctx->shutdown_arg);
+	  ctx->shutdown_cb = NULL;
+	}
     }
 }
 

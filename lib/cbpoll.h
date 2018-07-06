@@ -214,7 +214,9 @@ void cbpoll_remove_aio(struct cbpoll_ctx *context, struct dspd_aio_ctx *aio);
 int32_t cbpoll_aio_new(struct cbpoll_ctx *cbpoll, 
 		       struct dspd_aio_ctx **aio,
 		       const char *addr,
-		       void *context);
+		       void *context,
+		       void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
+		       void *shutdown_arg);
 
 dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t);
 void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time_t period);
@@ -285,7 +287,7 @@ bool cbpoll_async_destructor_cb(void *data,
 				int fd);
 int32_t cbpoll_queue_client_work(struct cbpoll_ctx *ctx, size_t index);
 void cbpoll_link(struct cbpoll_ctx *ctx, int index1, int index2);
-
+void cbpoll_unlink(struct cbpoll_ctx *ctx, int index);
 int cbpoll_listening_fd_event_cb(void *data, 
 				 struct cbpoll_ctx *context,
 				 int index,

@@ -122,16 +122,22 @@ static const struct cbpoll_fd_ops msgpipe_fd_ops = {
 static uint32_t _cbpoll_unref(struct cbpoll_ctx *ctx, int index, bool recursive)
 {
   struct cbpoll_fd *fd;
+  int ac;
   DSPD_ASSERT((size_t)index < ctx->max_fd);
   fd = &ctx->fdata[index];
+  ac = fd->associated_context;
   DSPD_ASSERT(fd->refcnt);
+  
   fd->refcnt--;
+  if ( fd->refcnt == 0 )
+    fd->associated_context = -1;
   if ( fd->ops != NULL && fd->ops->refcnt_changed )
     fd->ops->refcnt_changed(fd->data, ctx, index, fd->fd, fd->refcnt);
-  if ( recursive == true && fd->associated_context >= 0 )
-    if ( _cbpoll_unref(ctx, fd->associated_context, false) == 0 )
+  if ( recursive == true && ac >= 0 )
+    if ( _cbpoll_unref(ctx, ac, false) == 0 )
       fd->associated_context = -1;
-    
+  
+
   if ( fd->refcnt == 0 )
     {
       if ( (fd->flags & (CBPOLLFD_FLAG_REMOVED|CBPOLLFD_FLAG_RESERVED)) == 0 && fd->fd >= 0 )
@@ -161,9 +167,6 @@ static uint32_t _cbpoll_unref(struct cbpoll_ctx *ctx, int index, bool recursive)
       fd->flags = 0;
       if ( ctx->pending_timers != NULL )
 	cbpoll_cancel_timer(ctx, index);
-      if ( fd->associated_context >= 0 && fd->associated_context == index )
-	ctx->fdata[fd->associated_context].associated_context = -1;
-      fd->associated_context = -1;
     }
   return fd->refcnt;
 }
@@ -209,6 +212,20 @@ void cbpoll_link(struct cbpoll_ctx *ctx, int index1, int index2)
   fd1->associated_context = index2;
   fd2->associated_context = index1;
 }
+
+void cbpoll_unlink(struct cbpoll_ctx *ctx, int index)
+{
+  struct cbpoll_fd *fd1, *fd2;
+  fd1 = &ctx->fdata[index];
+  if ( fd1->associated_context >= 0 )
+    {
+      fd2 = &ctx->fdata[fd1->associated_context];
+      DSPD_ASSERT(fd2->associated_context == index || fd2->associated_context == -1 );
+      fd2->associated_context = -1;
+    }
+  fd1->associated_context = -1;
+}
+
 
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index)
 {
@@ -311,10 +328,10 @@ static void *cbpoll_thread(void *p)
 					fd,
 					ev->events) < 0 )
 		{
-		  cbpoll_close_fd(ctx, idx);
+		  if ( fdata->refcnt > 0 )
+		    cbpoll_close_fd(ctx, idx);
 		} else if ( ctx->wq.overflow.callback )
 		{
-
 		  ctx->wq.overflow.callback(ctx,
 					    fdata->data,
 					    &ctx->wq.overflow,
@@ -327,7 +344,7 @@ static void *cbpoll_thread(void *p)
 	      //setting the epoll events to wait for.  So, a POLLIN might be requested in on function
 	      //and cancelled in another without making 2 system calls.  A POLLOUT might be needed in
 	      //yet another function so the two will not need to coordinate or cause extra syscalls.
-	      if ( fdata->flags & CBPOLLFD_FLAG_EVENTS_CHANGED )
+	      if ( fdata->refcnt && (fdata->flags & CBPOLLFD_FLAG_EVENTS_CHANGED) )
 		{
 		  ctx->fdata_idx = -1; //make invalid index to commit changes now
 		  cbpoll_set_events(ctx, idx, fdata->events);
@@ -1033,7 +1050,15 @@ static int timer_fd_event(void *data,
 
 
 
-
+static bool aiofd_destructor(void *data,
+			     struct cbpoll_ctx *context,
+			     int index,
+			     int fd)
+{
+  struct dspd_aio_ctx *aio = data;
+  dspd_aio_shutdown(aio);
+  return false;
+}
 
 static int aiofd_event(void *data, 
 		       struct cbpoll_ctx *context,
@@ -1043,18 +1068,25 @@ static int aiofd_event(void *data,
 {
   int32_t ret;
   struct dspd_aio_ctx *aio = data;
+  cbpoll_ref(context, index);
   ret = dspd_aio_process(aio, revents, 0);
   if ( ret == 0 || ret == -EINPROGRESS )
     ret = cbpoll_set_events(context, index, dspd_aio_block_directions(aio));
+  if ( ret < 0 && ret != -EINPROGRESS )
+    dspd_aio_shutdown(aio);
+  cbpoll_unref(context, index);
   return ret;
 }
+
 static const struct cbpoll_fd_ops aiofd_ops = {
   .fd_event = aiofd_event,
+  .destructor = aiofd_destructor,
 };
 
 static void aio_fd_ready(struct dspd_aio_ctx *ctx, void *arg)
 {
-  cbpoll_set_events(arg, ctx->slot, dspd_aio_block_directions(ctx));
+  if ( ctx->slot >= 0 )
+    cbpoll_set_events(arg, ctx->slot, dspd_aio_block_directions(ctx));
 }
 
 static void aio_fifo_ready(struct dspd_aio_ctx *ctx, void *arg)
@@ -1085,7 +1117,8 @@ static void io_submitted_cb(struct dspd_aio_ctx *aio,
 			    void *arg)
 {
   struct cbpoll_ctx *cbctx = arg;
-  cbpoll_ref(cbctx, aio->slot);
+  if ( aio->slot >= 0 )
+    cbpoll_ref(cbctx, aio->slot);
   (void)cbpoll_set_events(cbctx, aio->slot, dspd_aio_block_directions(aio));
 }
 
@@ -1094,7 +1127,8 @@ static void io_completed_cb(struct dspd_aio_ctx *aio,
 			    void *arg)
 {
   struct cbpoll_ctx *cbctx = arg;
-  cbpoll_unref(cbctx, aio->slot);
+  if ( aio->slot >= 0 )
+    cbpoll_unref(cbctx, aio->slot);
   (void)cbpoll_set_events(cbctx, aio->slot, dspd_aio_block_directions(aio));
 }
 
@@ -1112,27 +1146,43 @@ static void io_completed_cb2(struct dspd_aio_ctx *aio,
 			     void *arg)
 {
   struct cbpoll_ctx *cbctx = arg;
-  cbpoll_unref(cbctx, aio->slot);
+  if ( aio->slot >= 0 )
+    cbpoll_unref(cbctx, aio->slot);
 }
 
 int32_t cbpoll_aio_new(struct cbpoll_ctx *cbpoll, 
 		       struct dspd_aio_ctx **aio,
 		       const char *addr,
-		       void *context)
+		       void *context,
+		       void (*shutdown_cb)(struct dspd_aio_ctx *ctx, void *arg),
+		       void *shutdown_arg)
 {
   struct dspd_aio_ctx *c;
-  int32_t ret;
-  ret = dspd_aio_new(&c, DSPD_AIO_DEFAULT);
-  if ( ret == 0 )
+  int32_t ret = -EINVAL;
+  /*
+    A shutdown callback is required since the loss of a connection will result in resource leaks
+    if another cbpoll fd is associated with the aio context.  The associated context will need to
+    be released.  It is also possible that the associated context may initiate the shutdown, in
+    which case everything should work the same way to avoid trouble.
+  */
+  if ( shutdown_cb )
     {
-      if ( context )
-	ret = dspd_aio_connect(c, NULL, context, &dspd_aio_fifo_eventfd_ops, &cbpoll->eventfd);
-      else
-	ret = dspd_aio_connect(c, addr, context, NULL, NULL);
-      if ( ret < 0 )
-	dspd_aio_delete(c);
-      else
-	*aio = c;
+      ret = dspd_aio_new(&c, DSPD_AIO_DEFAULT);
+      if ( ret == 0 )
+	{
+	  if ( context )
+	    ret = dspd_aio_connect(c, NULL, context, &dspd_aio_fifo_eventfd_ops, &cbpoll->eventfd);
+	  else
+	    ret = dspd_aio_connect(c, addr, context, NULL, NULL);
+	  if ( ret < 0 )
+	    {
+	      dspd_aio_delete(c);
+	    } else
+	    {
+	      dspd_aio_set_shutdown_cb(c, shutdown_cb, shutdown_arg);
+	      *aio = c;
+	    }
+	}
     }
   return ret;
 }
@@ -1580,6 +1630,7 @@ bool cbpoll_async_destructor_cb(void *data,
   if ( f->associated_context >= 0 )
     {
       f2 = &context->fdata[f->associated_context];
+      fprintf(stderr, "ASSOC %d %d\n", f->associated_context, f2->refcnt);
       DSPD_ASSERT(f2->refcnt > 0);
       if ( f2->data == data )
 	return false;
