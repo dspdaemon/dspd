@@ -33,7 +33,17 @@
 #define _DSPD_CTL_MACROS
 #include "sslib.h"
 #include "daemon.h"
+/*
+  Lock optimization saves up to 30% CPU.  The idea is that any io cycle that is split into
+  multiple chunks can avoid locking and unlocking a client multiple times during the io cycle.
+  The rare syscalls made for a futex based lock should be deferred until the buffers are completely
+  serviced and the atomic ops of an uncontended futex consume a lot of CPU and bus cycles compared
+  to other instructions.
 
+  If the device thread knows it already has a lock, it can hold onto it throughout multiple
+  iterations until it is time to sleep or start a new io cycle.
+*/
+#define ENABLE_LOCK_OPTIMIZATION
 struct dspd_pcm_device {
   struct dspd_pcmdev_stream        playback;
   struct dspd_pcmdev_stream        capture;
@@ -42,8 +52,6 @@ struct dspd_pcm_device {
   struct dspd_dev_reg     reg;
   uint32_t                current_config;
   void (*process_data)(void *arg, struct dspd_pcm_device *device);
-
-  uint8_t lock_mask[DSPD_MAX_OBJECTS/8];
 
   //This basically indicates that an IRQ occurred.  It is up to the client
   //to decide what to do with it.
@@ -90,6 +98,12 @@ struct dspd_pcm_device {
   unsigned int seed;
   uint32_t wakeup_count;
   uint64_t hotplug_event_id;
+
+
+  
+  bool    must_unlock;
+  uint8_t lock_mask[DSPD_MASK_SIZE];
+  size_t  lock_count;
 };
 
 #define DSPD_DEV_USE_TLS
@@ -1414,6 +1428,7 @@ static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32
 	}
       dspd_client_srv_unlock(dev->list, client);
       dspd_daemon_unref(client); //Might sleep and free resources
+      dspd_clr_bit(dev->lock_mask, client);
       return;
     }
 
@@ -1441,7 +1456,7 @@ static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32
       if ( dspd_daemon_ref(client, DSPD_DCTL_ENUM_TYPE_CLIENT) == 0 )
 	{
 
-	  if ( dspd_client_srv_lock(dev->list, client, dev->key) ) //Might sleep
+	  if ( dspd_test_bit(dev->lock_mask, client) || dspd_client_srv_lock(dev->list, client, dev->key) ) //Might sleep
 	    {
 	      dspd_slist_entry_get_pointers(dev->list,
 					    client,
@@ -1453,6 +1468,7 @@ static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32
 		  if ( cli_ops->error )
 		    cli_ops->error(dev, dev->key, cli, error);
 		}
+	      dspd_clr_bit(dev->lock_mask, client);
 	      dspd_client_srv_unlock(dev->list, client);
 	    }
 	  dspd_daemon_unref(client); //Might sleep and free resources
@@ -1501,18 +1517,34 @@ static void alert_all_clients(struct dspd_pcm_device *dev, int32_t error)
   dev->current_exception = 0;
 }
 
+static void unlock_all_clients(struct dspd_pcm_device *dev)
+{
+#ifdef ENABLE_LOCK_OPTIMIZATION
+  size_t i;
+  dev->must_unlock = true;
+  for ( i = 0; i < DSPD_MAX_OBJECTS; i++ )
+    {
+      if ( dspd_test_bit(dev->lock_mask, i) )
+	dspd_client_srv_unlock(dev->list, i);
+    }
+  memset(dev->lock_mask, 0, sizeof(dev->lock_mask));
+  dev->lock_count = 0;
+#endif
+}
+
 static bool process_clients_once(struct dspd_pcm_device *dev, uint32_t ops)
 {
   //Process all clients.  Must lock and unlock as they
-  //are processed.  Later I will implement lock optimization.
+  //are processed.
 
-  int32_t maxidx, i, c;
-  bool playback = false, capture = false, pr, cr, err = 0;
+  size_t maxidx, i, trigger_index;
+  bool playback = false, capture = false, playback_ready, capture_ready, err = 0;
+  bool ready;
   uint8_t tm;
   struct dspd_client_ops *cli_ops;
   struct dspd_pcmsrv_ops *srv_ops;
   void *cli;
-
+  bool unlock;
   if ( (ops & (EPOLLIN|EPOLLOUT)) == (EPOLLIN|EPOLLOUT) )
     {
       if ( dev->playback.streams > dev->capture.streams )
@@ -1535,50 +1567,75 @@ static bool process_clients_once(struct dspd_pcm_device *dev, uint32_t ops)
   if ( dev->process_data )
     dev->process_data(dev->arg, dev);
 
-  maxidx *= 2;
+  if ( maxidx < dev->lock_count )
+    maxidx = dev->lock_count;
 
-  for ( i = 0; i < maxidx; i += 2 )
+  
+
+  for ( i = 0; i < maxidx; i++ )
     {
-      tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, i);
-      pr = playback && (tm & DSPD_PCM_SBIT_PLAYBACK);
-      cr = capture && (tm & DSPD_PCM_SBIT_CAPTURE);
-
+      trigger_index = i << 1U; //i*2
+      tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, trigger_index);
+      playback_ready = playback && (tm & DSPD_PCM_SBIT_PLAYBACK);
+      capture_ready = capture && (tm & DSPD_PCM_SBIT_CAPTURE);
+      ready = playback_ready | capture_ready;
      
 
-      if ( pr || cr )
+      if ( ready )
 	{
-	 
-	  c = i / 2;
-	  if ( dspd_client_srv_trylock(dev->list, c, dev->key) )
+#ifdef ENABLE_LOCK_OPTIMIZATION
+	  if ( ! dspd_test_bit(dev->lock_mask, i) )
 	    {
-	      dev->current_client = c;
-	      //Try again with the lock
-	      tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, i);
-	      pr = playback && (tm & DSPD_PCM_SBIT_PLAYBACK);
-	      cr = capture && (tm & DSPD_PCM_SBIT_CAPTURE);
+	      if ( ! dspd_client_srv_trylock(dev->list, i, dev->key) )
+		continue;
+	      dspd_set_bit(dev->lock_mask, i);
+	      if ( i >= dev->lock_count )
+		dev->lock_count = i + 1U;
+	    }
+#else
+	  if ( dspd_client_srv_trylock(dev->list, i, dev->key) )
+#endif
+	    {
+	      dev->current_client = i;
+	      //Try again with the lock held
+	      tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, trigger_index);
+	      playback_ready = playback && (tm & DSPD_PCM_SBIT_PLAYBACK);
+	      capture_ready = capture && (tm & DSPD_PCM_SBIT_CAPTURE);
+	      ready = playback_ready | capture_ready;
 	      dspd_slist_entry_get_pointers(dev->list,
-					    c,
+					    i,
 					    &cli,
 					    (void**)&srv_ops,
 					    (void**)&cli_ops);
 	    
-	      if ( pr )
-		{
-	
-		  err = ! process_client_playback(dev, cli, cli_ops);
-		}
+	      if ( playback_ready )
+		err = ! process_client_playback(dev, cli, cli_ops);
 	      
-
-	      if ( cr )
+	      if ( capture_ready )
 		process_client_capture(dev, cli, cli_ops);
 	      dev->current_client = -1;
-	      dspd_client_srv_unlock(dev->list, c);
+
+	      //This could have been two branches (not considering what the cc optimizer might do), but
+	      //it can easily be a NOT, OR, and branch (JMP).
+	      //if ( dev->must_unlock || ready == false )
+	      unlock = !ready; unlock |= dev->must_unlock; if ( unlock ) { 
+		dspd_client_srv_unlock(dev->list, i);
+		dspd_clr_bit(dev->lock_mask, i);
+	      }
+	      
 	      if ( err )
 		break;
 	    }
+	} else if ( dev->must_unlock && dspd_test_bit(dev->lock_mask, i) )
+	{
+#ifdef ENABLE_LOCK_OPTIMIZATION
+	  dspd_client_srv_unlock(dev->list, i);
+	  dspd_clr_bit(dev->lock_mask, i);
+#endif
 	}
     }
-
+  if ( dev->must_unlock )
+    dev->lock_count = 0;
   return err;
 }
 
@@ -1596,6 +1653,7 @@ static int stream_prepare(struct dspd_pcmdev_stream *stream)
 
 static int stream_recover_fcn(struct dspd_pcmdev_stream *stream)
 {
+  unlock_all_clients(stream->dev);
   stream->started = false;
   stream->status = NULL;
   stream->cycle.start_count++;
@@ -1766,7 +1824,7 @@ static void schedule_playback_wake(void *userdata)
 {
   struct dspd_pcm_device *dev = userdata;
   int32_t ret;
-  uintptr_t len, count, i, l, written = 0, total;
+  uintptr_t len, count, i, l, written = 0, total, n;
   uint16_t revents;
   if ( AO_load(&dev->error) != 0 )
     dspd_scheduler_abort(dev->sched);
@@ -1818,6 +1876,7 @@ static void schedule_playback_wake(void *userdata)
 	{
 	  dev->playback.cycle.len = 0;
 	  dev->playback.early_cycle = UINT64_MAX;
+	  dev->must_unlock = true;
 	  process_clients_once(dev, EPOLLOUT);
 	} 
 
@@ -1862,11 +1921,15 @@ static void schedule_playback_wake(void *userdata)
 	      dev->playback.cycle.remaining = total;
 	      while ( written < total )
 		{
+		  n = written + len;
+#ifdef ENABLE_LOCK_OPTIMIZATION
+		  dev->must_unlock = n >= total;
+#endif
 		  if ( ! device_playback_cycle(dev, len) )
 		    break;
 		  if ( ! dev->playback.status )
 		    break;
-		  written += len;
+		  written = n;
 		  len *= 2;
 		  if ( len > dev->playback.status->space )
 		    len = dev->playback.status->space;
@@ -1887,10 +1950,15 @@ static void schedule_playback_wake(void *userdata)
 	    } else
 	    {
 	      dev->playback.cycle.remaining = dev->playback.status->space;
+	      n = count - 1;
 	      for ( i = 0; i < count; i++ )
 		{
 		  written += len;
-		  
+#ifdef ENABLE_LOCK_OPTIMIZATION
+		  dev->must_unlock = i == n;
+#else
+		  (void)n;
+#endif
 		  if ( ! device_playback_cycle(dev, len) )
 		    break;
 		  if ( dev->playback.status )
@@ -1927,6 +1995,7 @@ static void schedule_playback_wake(void *userdata)
   ret = stream_recover(&dev->playback);
   if ( ret < 0 )
     dspd_scheduler_abort(dev->playback.handle);
+  DSPD_ASSERT(dev->must_unlock == true);
   return;
 }
 
@@ -2033,6 +2102,7 @@ static void schedule_capture_wake(void *data)
 	}
 
       dev->capture.cycle.remaining = dev->capture.status->fill - dev->capture.cycle.len;
+      dev->must_unlock = true;
       process_clients_once(dev, POLLIN);
 
       ret = dev->capture.ops->mmap_commit(dev->capture.handle,
@@ -2293,10 +2363,8 @@ static void *dspd_dev_thread(void *arg)
 	      dspd_slist_unref(dev->list, dev->current_client);
 	      dspd_slist_entry_rw_unlock(dev->list, dev->current_client);
 	    }
-	  
-	  
-
 	}
+      unlock_all_clients(dev);
     }
   
   
@@ -2312,6 +2380,7 @@ static void *dspd_dev_thread(void *arg)
   
 
   AO_store(&dev->error, ENODEV);
+  unlock_all_clients(dev);
   alert_all_clients(dev, ENODEV);
 
   dspd_pcm_device_unregister_tls();
@@ -2485,7 +2554,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
   unsigned prio;
   struct dspd_pcm_device *dev = udata;
   int ret;
-  int client, c;
+  intptr_t client, c;
   uint8_t tm;
   struct dspd_client_ops *cli_ops;
   struct dspd_pcmsrv_ops *srv_ops;
@@ -2527,15 +2596,15 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
     }
 
 
-  c = client * 2;
+  c = (uintptr_t)client << 1U;
   
   tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, c);
   if ( tm & DSPD_PCM_SBIT_PLAYBACK )
     {
-      if ( dspd_client_srv_trylock(dev->list, client, dev->key) )
+      if ( dspd_test_bit(dev->lock_mask, client) || dspd_client_srv_trylock(dev->list, client, dev->key) )
 	{
 	  dev->current_client = client;
-	  //Try again with the lock
+	  //Try again with the lock held
 	  tm = get_trigger_mask((uint8_t*)dev->reg.client_mask, c);
 	  dspd_slist_entry_get_pointers(dev->list,
 					client,
@@ -2550,6 +2619,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
 	    }
 	  dev->current_client = -1;
 	  dspd_client_srv_unlock(dev->list, client);
+	  dspd_clr_bit(dev->lock_mask, client);
 	}
     }
 
@@ -2594,6 +2664,9 @@ int32_t dspd_pcm_device_new(void **dev,
   devptr->mq[1] = -1;
   devptr->excl_client = -1;
   devptr->hotplug_event_id = hotplug_event_id;
+  devptr->playback.dev = devptr;
+  devptr->capture.dev = devptr;
+  devptr->must_unlock = true;
   if ( list )
     {
       dspd_slist_wrlock(list);

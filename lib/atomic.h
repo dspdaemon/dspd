@@ -3,25 +3,28 @@
 #include <atomic_ops.h>
 #include <stdint.h>
 
-static inline int dspd_test_bit(const uint8_t *mask, uintptr_t bit)
+static inline int8_t dspd_test_bit(const uint8_t *mask, uintptr_t bit)
 {
-  uint8_t val = (1 << (bit % 8));
+  uintptr_t i = bit >> 3U;
+  uint8_t val = (1 << (bit - (i << 3U)));
   AO_nop_full();
-  return mask[bit/8] & val;
+  return mask[i] & val;
 }
 
 static inline void dspd_clr_bit(uint8_t *mask, uintptr_t bit)
 {
-  uint8_t val = ~(1 << (bit % 8));
+  uintptr_t i = bit >> 3U;
+  uint8_t val = ~(1 << (bit - (i << 3U)));
   AO_nop_full();
-  mask[bit/8] &= val;
+  mask[i] &= val;
 }
 
 static inline void dspd_set_bit(uint8_t *mask, uintptr_t bit)
 {
-  uint8_t val = 1 << (bit % 8);
+  uintptr_t i = bit >> 3U;
+  uint8_t val = 1 << (bit - (i << 3U));
   AO_nop_full();
-  mask[bit/8] |= val;
+  mask[i] |= val;
 }
 
 

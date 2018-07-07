@@ -274,7 +274,7 @@ struct dspd_pcmdev_stream {
   size_t                           glitch_threshold;
   size_t                           requested_latency;
   dspd_time_t                      early_cycle;
-
+  struct dspd_pcm_device          *dev;
 };
 
 #define DSPD_CBIT_PRESENT (1<<2)
