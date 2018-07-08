@@ -326,12 +326,11 @@ static const struct dspd_rcb client_rcb = {
 static void socksrv_route_changed(int32_t dev, int32_t index, void *client, int32_t err, void *arg)
 {
   struct ss_cctx *cli = arg;
-  struct cbpoll_pipe_event evt;
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
   dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
   dspd_mutex_lock(&cli->lock);
   if ( cli->cbctx )
     {
-      memset(&evt, 0, sizeof(evt));
       evt.fd = cli->fd;
       evt.index = cli->index;
       evt.stream = cli->stream;
@@ -347,7 +346,7 @@ static void socksrv_route_changed(int32_t dev, int32_t index, void *client, int3
 static void socksrv_error(void *dev, int32_t index, void *client, int32_t err, void *arg)
 {
   struct ss_cctx *cli = arg;
-  struct cbpoll_pipe_event evt;
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
   //The client is not allowed to truncate the SHM.  This is a fatal protocol violation.
   if ( err == EFAULT )
     {
@@ -360,7 +359,6 @@ static void socksrv_error(void *dev, int32_t index, void *client, int32_t err, v
       dspd_mutex_lock(&cli->lock);
       if ( cli->cbctx )
 	{
-	  memset(&evt, 0, sizeof(evt));
 	  evt.fd = cli->fd;
 	  evt.index = cli->index;
 	  evt.stream = cli->stream;
@@ -2466,9 +2464,8 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   return ret;
 }
 static void client_async_cmd_cb(struct cbpoll_ctx *ctx,
-				void *data,
-				struct cbpoll_work *wrk,
-				bool async)
+				struct cbpoll_msg *wrk,
+				void *data)
 {
   int32_t ret;
   struct ss_cctx *cli = data;
@@ -2660,7 +2657,7 @@ int client_pipe_event(void *data,
 		      struct cbpoll_ctx *context,
 		      int index,
 		      int fd,
-		      const struct cbpoll_pipe_event *event)
+		      const struct cbpoll_msg *event)
 {
   int32_t ret = 0;
   int32_t events;
@@ -2896,7 +2893,7 @@ static void insert_fd(struct cbpoll_ctx *ctx,
 		      bool    vfd,
 		      bool    remote)
 {
-  struct cbpoll_pipe_event evt;
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
   struct ss_cctx *cli;
   struct dspd_aio_fifo_ctx *fifo;
   ssize_t slot = -1;
@@ -2927,7 +2924,6 @@ static void insert_fd(struct cbpoll_ctx *ctx,
     {
       cli = NULL;
     }
-  memset(&evt, 0, sizeof(evt));
   evt.fd = fd;
   evt.index = index;
   evt.stream = -1;
@@ -2944,9 +2940,8 @@ static void insert_fd(struct cbpoll_ctx *ctx,
 }
 
 static void accept_fd(struct cbpoll_ctx *ctx,
-		      void *data,
-		      struct cbpoll_work *wrk,
-		      bool async)
+		      struct cbpoll_msg *wrk,
+		      void *data)
 {
   struct sockaddr_un addr;
   socklen_t len = sizeof(addr);
@@ -2955,18 +2950,16 @@ static void accept_fd(struct cbpoll_ctx *ctx,
   insert_fd(ctx, newfd, wrk->arg, wrk->index, wrk->fd, false, true);
 }
 static void insert_fd_cb(struct cbpoll_ctx *ctx,
-			 void *data,
-			 struct cbpoll_work *wrk,
-			 bool async)
+			 struct cbpoll_msg *wrk,
+			 void *data)
 {
   insert_fd(ctx, wrk->arg & 0xFFFFFFFF, wrk->arg, wrk->index, wrk->fd, false, !!(wrk->arg & 0xFFFFFFFF00000000LL));
 }
 
 
 static void accept_vfd_cb(struct cbpoll_ctx *ctx,
-			  void *data,
-			  struct cbpoll_work *wrk,
-			  bool async)
+			  struct cbpoll_msg *wrk,
+			  void *data)
 {
   struct dspd_aio_fifo_ctx *fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)wrk->arg;
   insert_fd(ctx, fifo->master->slot, wrk->arg, wrk->index, wrk->fd, true, fifo->master->remote);
@@ -2978,7 +2971,7 @@ static int listen_fd_event(void *data,
 			   int fd,
 			   int revents)
 {
-  struct cbpoll_work wrk;
+  struct cbpoll_msg wrk = { .len = sizeof(struct cbpoll_msg) };
   if ( revents & EPOLLIN )
     {
       wrk.fd = fd;
@@ -2986,7 +2979,6 @@ static int listen_fd_event(void *data,
       wrk.msg = 0;
       wrk.arg = -1;
       wrk.callback = accept_fd;
-      memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
       cbpoll_queue_work(context, &wrk);
     }
   return 0;
@@ -3058,13 +3050,14 @@ static int listen_pipe_event(void *data,
 			     struct cbpoll_ctx *context,
 			     int index,
 			     int fd,
-			     const struct cbpoll_pipe_event *event)
+			     const struct cbpoll_msg *event)
 {
   struct ss_cctx *cli;
   int32_t i;
-  struct cbpoll_work wrk;
+  struct cbpoll_msg_ex wrk = { .msg = { .len = sizeof(struct cbpoll_msg_ex) } };
   struct ss_sctx *server = data;
   struct dspd_aio_fifo_ctx *fifo;
+  
   if ( event->msg == SOCKSRV_FREE_SLOT )
     {
       server->virtual_fds[event->arg] = NULL;
@@ -3099,26 +3092,26 @@ static int listen_pipe_event(void *data,
 	}
     } else if ( event->msg == SOCKSRV_INSERT_FD )
     {
-      wrk.fd = fd;
-      wrk.index = index;
-      wrk.msg = 0;
-      wrk.arg = event->arg;
-      wrk.callback = insert_fd_cb;
+      wrk.msg.fd = fd;
+      wrk.msg.index = index;
+      wrk.msg.msg = 0;
+      wrk.msg.arg = event->arg;
+      wrk.msg.callback = insert_fd_cb;
       memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
-      cbpoll_queue_work(context, &wrk);
+      cbpoll_queue_work(context, &wrk.msg);
     } else if ( event->msg == SOCKSRV_INSERT_FIFO )
     {
       fifo = (struct dspd_aio_fifo_ctx*)(intptr_t)event->arg;
       fifo->master->slot = reserve_slot(server);
       if ( fifo->master->slot >= 0 )
 	{
-	  wrk.fd = fd;
-	  wrk.index = index;
-	  wrk.msg = 0;
-	  wrk.arg = event->arg;
-	  wrk.callback = accept_vfd_cb;
+	  wrk.msg.fd = fd;
+	  wrk.msg.index = index;
+	  wrk.msg.msg = 0;
+	  wrk.msg.arg = event->arg;
+	  wrk.msg.callback = accept_vfd_cb;
 	  memset(wrk.extra_data, 0, sizeof(wrk.extra_data));
-	  cbpoll_queue_work(context, &wrk);
+	  cbpoll_queue_work(context, &wrk.msg);
 	} else
 	{
 	  dspd_aio_fifo_close(fifo);
@@ -3137,7 +3130,7 @@ static int32_t socksrv_new_aio_ctx(struct dspd_aio_ctx            **aio,
 				   bool                             remote)
 {
   int32_t ret = -EINVAL;
-  struct cbpoll_pipe_event evt;
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
   struct dspd_aio_ctx *naio = NULL;
   intptr_t s[2] = { -1, -1 };
   struct dspd_aio_fifo_ctx *fifos[2];

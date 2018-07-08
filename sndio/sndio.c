@@ -1015,14 +1015,12 @@ static int _amsg_setpar(struct sndio_client *cli)
 }
 
 static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
-			   void *data,
-			   struct cbpoll_work *wrk,
-			   bool async)
+			   struct cbpoll_msg *wrk,
+			   void *data)
 {
   struct sndio_client *cli = data;
   int ret = _amsg_setpar(cli);
-  struct cbpoll_pipe_event evt;
-  memset(&evt, 0, sizeof(evt));
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
   if ( ret == 0 )
     evt.arg = CLIENT_MSG_COMPLETE;
   else
@@ -1394,9 +1392,8 @@ static int client_fd_event(void *data,
 
 
 static void free_client_cb(struct cbpoll_ctx *ctx,
-			   void *data,
-			   struct cbpoll_work *wrk,
-			   bool async)
+			   struct cbpoll_msg *wrk,
+			   void *data)
 {
   struct sndio_client *cli = (struct sndio_client*)(intptr_t)wrk->arg;
   if ( cli->pclient )
@@ -1414,7 +1411,7 @@ static bool client_destructor(void *data,
 {
   ssize_t i;
   struct sndio_client *cli = data;
-  struct cbpoll_work wrk;
+  struct cbpoll_msg wrk = { .len = sizeof(struct cbpoll_msg) };
   for ( i = 0; i < MAX_CLIENTS; i++ )
     {
       if ( cli->server->clients[i] == cli )
@@ -1427,7 +1424,6 @@ static bool client_destructor(void *data,
   if ( cli->pstate > 0 )
     cli->server->sessrefs--;
   shutdown(fd, SHUT_RDWR);
-  memset(&wrk, 0, sizeof(wrk));
   wrk.index = cli->server->cbidx;
   wrk.msg = 0;
   wrk.arg = (intptr_t)cli;
@@ -1442,7 +1438,7 @@ static int client_pipe_event(void *data,
 			     struct cbpoll_ctx *context,
 			     int index,
 			     int fd,
-			     const struct cbpoll_pipe_event *event)
+			     const struct cbpoll_msg *event)
 {
   int ret = 0;
   struct sndio_client *cli = data;
@@ -1472,7 +1468,7 @@ static int listen_pipe_event(void *data,
 			     struct cbpoll_ctx *context,
 			     int index,
 			     int fd,
-			     const struct cbpoll_pipe_event *event)
+			     const struct cbpoll_msg *event)
 {
   struct sndio_ctx *ctx = data;
   struct sndio_client *cli;
@@ -1503,16 +1499,15 @@ static int listen_pipe_event(void *data,
 }
 
 static void create_client_cb(struct cbpoll_ctx *ctx,
-			     void *data,
-			     struct cbpoll_work *wrk,
-			     bool async)
+			     struct cbpoll_msg *wrk,
+			     void *data)
 {
   struct sndio_ctx *srv = data;
   struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));
   int32_t newfd = wrk->arg & 0xFFFFFFFF;
   int32_t sio_idx = wrk->arg >> 32U;
-  struct cbpoll_pipe_event evt;
-  memset(&evt, 0, sizeof(evt));
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
+
   evt.fd = wrk->fd;
   evt.index = wrk->index;
 

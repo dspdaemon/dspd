@@ -494,9 +494,8 @@ struct cdev_open_req {
 };
 
 static void free_client_cb(struct cbpoll_ctx *ctx,
-			   void *data,
-			   struct cbpoll_work *wrk,
-			   bool async)
+			   struct cbpoll_msg *wrk,
+			   void *data)
 {
   struct oss_cdev_client *cli = (struct oss_cdev_client*)(intptr_t)wrk->arg;
   size_t br;
@@ -527,10 +526,10 @@ static void free_client_cb(struct cbpoll_ctx *ctx,
     }
 }
 
-void dsp_client_release_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt)
+void dsp_client_release_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data)
 {
   struct oss_dsp_cdev *dev = (void*)(intptr_t)evt->arg;
-  struct cbpoll_work wrk;
+  struct cbpoll_msg wrk = { .len = sizeof(struct cbpoll_msg) };
   //static int call_count = 0;
   int count, idx = -1;
   //call_count++;
@@ -572,7 +571,7 @@ void dsp_client_release_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt
     cbpoll_unref(ctx, dev->cbpoll_index);
 }
 
-static void dsp_cdev_seterror_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt)
+static void dsp_cdev_seterror_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data)
 {
   struct oss_dsp_cdev *dev = (void*)(intptr_t)evt->arg;
   struct oss_cdev_client *cli;
@@ -614,7 +613,7 @@ static void dsp_cdev_seterror_cb(struct cbpoll_ctx *ctx, struct cbpoll_pipe_even
 }
 static void dsp_cdev_seterror(struct oss_dsp_cdev *dev, int err)
 {
-  struct cbpoll_pipe_event pe = { 0 };
+  struct cbpoll_msg pe = { .len = sizeof(struct cbpoll_msg) };
   pe.fd = dev->cdev->fd;
   pe.index = err;
   pe.stream = -1;
@@ -630,7 +629,7 @@ static void dsp_cdev_seterror(struct oss_dsp_cdev *dev, int err)
 
 void dsp_client_release_notify(struct oss_dsp_cdev *dev, int slot)
 {
-  struct cbpoll_pipe_event pe = { 0 };
+  struct cbpoll_msg pe = { .len = sizeof(struct cbpoll_msg) };
   pe.fd = dev->cdev->fd;
   pe.index = slot;
   pe.stream = -1;
@@ -649,14 +648,14 @@ static bool check_mode(mode_t mode, int sbits)
 }
 
 static void async_dsp_new_client(struct cbpoll_ctx *ctx,
-				 void *data,
-				 struct cbpoll_work *wrk,
-				 bool async)
+				 struct cbpoll_msg *w,
+				 void *data)
 {
+  struct cbpoll_msg_ex *wrk = (struct cbpoll_msg_ex*)w;
   struct oss_cdev_client *cli;
   struct oss_dsp_cdev *dev = data;
   struct cdev_open_req *req = (struct cdev_open_req*)wrk->extra_data;
-  int32_t slot = wrk->arg, device_index;
+  int32_t slot = wrk->msg.arg, device_index;
   int err = 0;
   size_t pgsize = 256, pgcount, n;
   size_t br;
@@ -962,7 +961,7 @@ static void async_dsp_new_client(struct cbpoll_ctx *ctx,
 static int dsp_new_client(struct oss_dsp_cdev *dev, struct rtcuse_ipkt *pkt)
 {
   int slot = cdev_find_slot(dev);
-  struct cbpoll_work work = { 0 };
+  struct cbpoll_msg_ex work = { .extra_data = { 0 } };
   struct cdev_open_req *req = (void*)work.extra_data;
   struct fuse_open_in *in = (struct fuse_open_in*)pkt->data;
   int mode;
@@ -970,7 +969,7 @@ static int dsp_new_client(struct oss_dsp_cdev *dev, struct rtcuse_ipkt *pkt)
     return -EBUSY;
   if ( dev->error )
     return dev->error;
-
+  work.msg.len = sizeof(work.msg) + sizeof(*req);
   mode = in->flags & O_ACCMODE;
   if ( mode == O_RDONLY )
     {
@@ -1000,14 +999,14 @@ static int dsp_new_client(struct oss_dsp_cdev *dev, struct rtcuse_ipkt *pkt)
   req->pid = pkt->header.pid;
   req->uid = pkt->header.uid;
   req->gid = pkt->header.gid;
-  work.fd = dev->cdev->fd;
-  work.index = dev->cbpoll_index;
-  work.arg = slot;
+  work.msg.fd = dev->cdev->fd;
+  work.msg.index = dev->cbpoll_index;
+  work.msg.arg = slot;
 
-  work.msg = CBPOLL_PIPE_MSG_CALLBACK;
-  work.callback = async_dsp_new_client;
+  work.msg.msg = CBPOLL_PIPE_MSG_CALLBACK;
+  work.msg.callback = async_dsp_new_client;
   cbpoll_ref(&server_context.cbpoll, dev->cbpoll_index);
-  cbpoll_queue_work(&server_context.cbpoll, &work);
+  cbpoll_queue_work(&server_context.cbpoll, &work.msg);
   return 0;
 }
 
@@ -1947,7 +1946,7 @@ static const struct cbpoll_fd_ops dsp_ops = {
   .destructor = cdev_destructor,
 };
 
-static void async_add_fd(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *pe)
+static void async_add_fd(struct cbpoll_ctx *ctx, struct cbpoll_msg *pe, void *data)
 {
   struct oss_dsp_cdev *dev = (void*)(uintptr_t)pe->arg;
   int ret = cbpoll_add_fd(ctx, 
@@ -1967,7 +1966,7 @@ static const struct cbpoll_fd_ops ctl_ops = {
 };
 
 
-static void async_add_ctlfd(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *pe)
+static void async_add_ctlfd(struct cbpoll_ctx *ctx, struct cbpoll_msg *pe, void *data)
 {
   struct oss_dsp_cdev *dev = (void*)(uintptr_t)pe->arg;
   int ret = cbpoll_add_fd(ctx, 
@@ -2301,7 +2300,7 @@ static void oss_init_device(void *arg, const struct dspd_dict *device)
   int32_t index, dspnum;
   struct dspd_device_stat info;
   size_t br;
-  struct cbpoll_pipe_event pe = { 0 };
+  struct cbpoll_msg pe = { .len = sizeof(struct cbpoll_msg) };
   slot = dspd_dict_find_pair(device, DSPD_HOTPLUG_SLOT);
   bool dead;
   if ( ! slot )
@@ -2670,7 +2669,7 @@ static int oc_init(struct dspd_daemon_ctx *daemon, void **context)
   const char *val;
   pthread_t thr;
   struct oss_dsp_cdev *ctl;
-  struct cbpoll_pipe_event pe = { 0 };
+  struct cbpoll_msg pe = { .len = sizeof(struct cbpoll_msg) };
   server_context.cuse_helper_fd = -1;
   server_context.config = dspd_read_config("mod_osscuse", true);
   server_context.devnode_prefix = "";

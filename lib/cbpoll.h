@@ -9,35 +9,35 @@ struct cbpoll_ctx;
 #define CBPOLL_PIPE_MSG_DEFERRED_WORK 1
 #define CBPOLL_PIPE_MSG_CALLBACK      2
 #define CBPOLL_PIPE_MSG_USER          1000
-struct cbpoll_pipe_event {
-  int32_t fd;
-  int32_t index;
-  int32_t stream;
-  int32_t msg;
-  int64_t arg;
-  int64_t arg2;
-  void (*callback)(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt);
+
+#define CBPOLL_MAX_FDS INT16_MAX
+
+struct cbpoll_msg {
+  uint16_t len;
+#define CBPOLL_MSG_EVENT_THREAD 1
+#define CBPOLL_MSG_WORK_THREAD 2
+  uint16_t flags;
+  int32_t  fd;
+  int16_t  index;
+  int16_t  stream;
+  int32_t  msg;
+  int64_t  arg;
+  int64_t  arg2;
+  void (*callback)(struct cbpoll_ctx *ctx, struct cbpoll_msg *msg, void *data);
 };
 
-struct cbpoll_work {
-  uint32_t index;
-  int32_t  fd;
-  int32_t  msg;
-  int32_t  reserved;
-  int64_t  arg;
-  void (*callback)(struct cbpoll_ctx *ctx,
-		   void *data,
-		   struct cbpoll_work *wrk,
-		   bool async);
-  char     extra_data[32];
+struct cbpoll_msg_ex {
+  struct cbpoll_msg msg;
+  uint8_t           extra_data[32];
 };
+
 
 struct cbpoll_wq {
   struct dspd_fifo_header  *fifo;
   dspd_cond_t               cond;
   dspd_mutex_t              lock;
   dspd_thread_t             thread;
-  struct cbpoll_work        overflow;
+  struct cbpoll_msg_ex      overflow;
 };
 
 struct cbpoll_fd_ops {
@@ -50,7 +50,7 @@ struct cbpoll_fd_ops {
 		      struct cbpoll_ctx *context,
 		      int index,
 		      int fd,
-		      const struct cbpoll_pipe_event *event);
+		      const struct cbpoll_msg *event);
   bool (*destructor)(void *data,
 		     struct cbpoll_ctx *context,
 		     int index,
@@ -158,9 +158,11 @@ int32_t cbpoll_get_dispatch_list(struct cbpoll_ctx *ctx, int32_t **count, struct
 uint32_t cbpoll_unref(struct cbpoll_ctx *ctx, int index);
 uint32_t cbpoll_ref(struct cbpoll_ctx *ctx, int index);
 uint32_t cbpoll_refcnt(struct cbpoll_ctx *ctx, int index);
-int32_t cbpoll_send_event(struct cbpoll_ctx *ctx, struct cbpoll_pipe_event *evt);
-void cbpoll_queue_work(struct cbpoll_ctx *ctx, struct cbpoll_work *wrk);
-
+int32_t cbpoll_send_event(struct cbpoll_ctx *ctx, const struct cbpoll_msg *evt);
+void cbpoll_queue_work(struct cbpoll_ctx *ctx, const struct cbpoll_msg *wrk);
+void cbpoll_reply_work(struct cbpoll_ctx *ctx,
+		       const struct cbpoll_msg *prev,
+		       struct cbpoll_msg *reply);
 int32_t cbpoll_set_events(struct cbpoll_ctx *ctx, 
 			  int32_t index,
 			  int32_t events);
@@ -182,9 +184,8 @@ void cbpoll_queue_deferred_work(struct cbpoll_ctx *ctx,
 				int32_t index,
 				int64_t arg,
 				void (*callback)(struct cbpoll_ctx *ctx,
-						 void *data,
-						 struct cbpoll_work *wrk,
-						 bool async));
+						 struct cbpoll_msg *wrk,
+						 void *data));
 void cbpoll_deferred_work_complete(struct cbpoll_ctx *ctx,
 				   int32_t index,
 				   int64_t arg);
