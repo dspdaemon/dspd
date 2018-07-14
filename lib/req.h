@@ -98,6 +98,7 @@ int32_t dspd_req_index(struct dspd_rctx *rctx);
 #define DSPD_REQ_FLAG_POINTER (1<<27)
 #define DSPD_REQ_FLAG_CMSG_CRED (1<<26)
 
+#define DSPD_REQ_DEFAULT_XFLAGS (DSPD_REQ_FLAG_UNIX_IOCTL|DSPD_REQ_FLAG_UNIX_FAST_IOCTL|DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED)
 
 typedef int32_t (*dspd_req_callback_t)(struct dspd_rctx *context,
 				       uint32_t      req,

@@ -87,6 +87,7 @@ struct ss_cctx {
   int32_t                   ctl_stream;
   int32_t                   work_count;
   bool                      eof;
+  bool                      shutdown;
   struct ss_cctx *prev, *next;
 };
 
@@ -646,6 +647,614 @@ static int32_t socksrv_req_defaultdev(struct dspd_rctx *context,
   return ret;
 }
 
+static int socksrv_req_open_by_name(struct dspd_rctx *rctx,
+				    uint32_t             req,
+				    const void          *inbuf,
+				    size_t        inbufsize,
+				    void         *outbuf,
+				    size_t        outbufsize)
+{
+  //Not implemented yet.
+  return dspd_req_reply_err(rctx, 0, EINVAL);
+}
+
+static int socksrv_req_newcli(struct dspd_rctx *rctx,
+			      uint32_t             req,
+			      const void          *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t ret;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  if ( cli->stream >= 0 )
+    {
+      ret = dspd_req_reply_err(rctx, 0, EBUSY);
+    } else if ( outbufsize < sizeof(cli->stream) )
+    {
+      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+    } else
+    {
+      ret = open_client_stream(cli);
+      if ( ret >= 0 )
+	{
+	  cli->stream = ret;
+	  ret = dspd_req_reply_buf(rctx, 0, &cli->stream, sizeof(cli->stream));
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, ret);
+	}
+    }
+  return ret;
+}
+
+static int socksrv_req_delcli(struct dspd_rctx *rctx,
+			      uint32_t             req,
+			      const void          *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t ret;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  if ( cli->stream >= 0 )
+    {
+      close_client_stream(cli, cli->stream);
+      cli->stream = -1;
+      ret = dspd_req_reply_err(rctx, 0, 0);
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, ENOENT);
+    }
+  return ret;
+}
+
+static int socksrv_req_refsrv(struct dspd_rctx *rctx,
+			      uint32_t             req,
+			      const void          *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t ret = 0;
+  uint32_t dev = 0;
+  uint64_t val = 0;
+  size_t br = 0;
+  int32_t err = 0;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  //Compatibility with internal APIs
+  if ( inbufsize == sizeof(uint64_t) )
+    {
+      val = *(uint64_t*)inbuf;
+      dev = val & 0xFFFFFFFFU;
+    } else
+    {
+      dev = *(uint32_t*)inbuf;
+    }
+
+  //Throw away the old reference
+  if ( cli->device != dev )
+    {
+      ret = dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
+      if ( ret == 0 && cli->device >= 0 )
+	dspd_daemon_unref(cli->device);
+
+    } else if ( dev >= DSPD_MAX_OBJECTS )
+    {
+      ret = -EINVAL;
+    } else
+    {
+      ret = 0;
+    }
+  if ( ret == 0 )
+    {
+      cli->device = dev;
+      if ( outbufsize >= sizeof(struct dspd_device_stat) )
+	{
+	  err = dspd_stream_ctl(&dspd_dctx,
+				dev,
+				DSPD_SCTL_SERVER_STAT,
+				NULL,
+				0,
+				outbuf,
+				outbufsize,
+				&br);
+	  if ( err != 0 || br == 0 ) //Got the device but no data
+	    ret = dspd_req_reply_err(rctx, 0, err * -1);
+	  else
+	    ret = dspd_req_reply_buf(rctx, 0, outbuf, br);
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, 0);
+	}
+    } else
+    {
+      cli->device = -1;
+      ret = dspd_req_reply_err(rctx, 0, ENOENT);
+    }
+  return ret;
+}
+
+static int socksrv_req_unrefsrv(struct dspd_rctx *rctx,
+				uint32_t             req,
+				const void          *inbuf,
+				size_t        inbufsize,
+				void         *outbuf,
+				size_t        outbufsize)
+{
+  int32_t ret = 0;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  if ( cli->device >= 0 )
+    {
+      dspd_daemon_unref(cli->device);
+      cli->device = -1;
+      ret = dspd_req_reply_err(rctx, 0, 0);
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, ENOENT);
+    }
+  return ret;
+}
+
+static int socksrv_req_nmcli(struct dspd_rctx *rctx,
+				uint32_t             req,
+				const void          *inbuf,
+				size_t        inbufsize,
+				void         *outbuf,
+				size_t        outbufsize)
+{
+  int32_t ret = 0;
+  int32_t i32 = 0;
+  int64_t i64 = 0;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  i32 = *(int32_t*)inbuf;
+  if ( i32 )
+    {
+      //Open one or two half duplex streams.
+      if ( (i32 & DSPD_PCM_SBIT_PLAYBACK) && cli->playback_stream < 0 )
+	{
+	  ret = open_client_stream(cli);
+	  if ( ret >= 0 )
+	    {
+	      cli->playback_stream = ret;
+	      ret = 0;
+	    }
+	}
+      if ( (i32 & DSPD_PCM_SBIT_CAPTURE) && cli->capture_stream < 0 && ret == 0 )
+	{
+	  ret = open_client_stream(cli);
+	  if ( ret >= 0 )
+	    {
+	      cli->capture_stream = ret;
+	      ret = 0;
+	    }
+	}
+    } else
+    {
+      //Open one full duplex stream
+      if ( cli->playback_stream < 0 && cli->capture_stream < 0 && cli->stream < 0 )
+	{
+	  ret = open_client_stream(cli);
+	  if ( ret >= 0 )
+	    {
+	      cli->stream = ret;
+	      cli->playback_stream = ret;
+	      dspd_daemon_ref(cli->playback_stream, DSPD_DCTL_ENUM_TYPE_ANY);
+	      cli->capture_stream = ret;
+	      dspd_daemon_ref(cli->capture_stream, DSPD_DCTL_ENUM_TYPE_ANY);
+	      ret = 0; 
+	    }
+	}
+    }
+  if ( ret < 0 )
+    {
+      ret = dspd_req_reply_err(rctx, 0, ret);
+    } else
+    {
+      i64 = cli->playback_stream;
+      i64 <<= 32U;
+      i64 |= cli->capture_stream & 0x00000000FFFFFFFFULL;
+      ret = dspd_req_reply_buf(rctx, 0, &i64, sizeof(i64));
+    }
+  return ret;
+}
+
+static int socksrv_req_dmcli(struct dspd_rctx *rctx,
+			     uint32_t             req,
+			     const void          *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize)
+{
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  int32_t sbits;
+  sbits = *(int32_t*)inbuf;
+  if ( cli->playback_stream == cli->capture_stream &&
+       cli->playback_stream == cli->stream &&
+       cli->stream >= 0 &&
+       sbits == DSPD_PCM_SBIT_FULLDUPLEX )
+    {
+      close_client_stream(cli, cli->playback_stream);
+      close_client_stream(cli, cli->capture_stream);
+      close_client_stream(cli, cli->stream);
+      cli->playback_stream = -1;
+      cli->capture_stream = -1;
+      cli->stream = -1;
+    } else
+    {
+      if ( cli->playback_stream >= 0 && (sbits & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  close_client_stream(cli, cli->playback_stream);
+	  cli->playback_stream = -1;
+	}
+      if ( cli->capture_stream >= 0 && (sbits & DSPD_PCM_SBIT_CAPTURE) )
+	{
+	  close_client_stream(cli, cli->capture_stream);
+	  cli->capture_stream = -1;
+	}
+    }
+  return dspd_req_reply_err(rctx, 0, 0);
+}
+
+static int socksrv_req_rmsrv(struct dspd_rctx *rctx,
+			     uint32_t             req,
+			     const void          *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize)
+{
+  int32_t ret = 0;
+  int32_t i32 = 0, dev = 0;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  int64_t i64 = *(int64_t*)inbuf;
+  struct dspd_device_stat info;
+  i32 = i64 >> 32U;
+  dev = i64 & 0xFFFFFFFFLL;
+  
+  ret = open_device(cli, i32, dev, &info);
+  if ( ret >= 0 )
+    {
+      if ( (i32 & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
+	{
+	  if ( cli->playback_device >= 0 )
+	    dspd_daemon_unref(cli->playback_device);
+	  if ( cli->capture_device >= 0 )
+	    dspd_daemon_unref(cli->capture_device);
+	  if ( cli->device >= 0 )
+	    dspd_daemon_unref(cli->device);
+	  cli->device = ret;
+	  cli->playback_device = cli->device;
+	  dspd_daemon_ref(cli->playback_device, DSPD_DCTL_ENUM_TYPE_ANY);
+	  cli->capture_device = cli->device;
+	  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
+	} else if ( i32 & DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  if ( cli->playback_device >= 0 )
+	    dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = ret;
+	} else if ( i32 & DSPD_PCM_SBIT_CAPTURE )
+	{
+	  if ( cli->capture_device >= 0 )
+	    dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = ret;
+	} else
+	{
+	  if ( cli->device >= 0 )
+	    dspd_daemon_unref(cli->device);
+	  cli->device = ret;
+	}
+      if ( outbufsize == sizeof(struct dspd_device_stat) )
+	ret = dspd_req_reply_buf(rctx, 0, &info, sizeof(info));
+      else
+	ret = dspd_req_reply_err(rctx, 0, 0);
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, EINVAL);
+    }
+  return ret;
+}
+
+static int socksrv_req_umsrv(struct dspd_rctx *rctx,
+			     uint32_t             req,
+			     const void          *inbuf,
+			     size_t        inbufsize,
+			     void         *outbuf,
+			     size_t        outbufsize)
+{
+  int32_t sbits = 0;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  sbits = *(int32_t*)inbuf;
+  if ( sbits == DSPD_PCM_SBIT_FULLDUPLEX &&
+       cli->playback_device == cli->capture_device &&
+       cli->capture_device == cli->device &&
+       cli->device >= 0 )
+    {
+      //Unref full duplex
+      dspd_daemon_unref(cli->playback_device);
+      cli->playback_device = -1;
+      dspd_daemon_unref(cli->capture_device);
+      cli->capture_device = -1;
+      dspd_daemon_unref(cli->device);
+      cli->device = -1;
+    } else if ( sbits == 0 )
+    {
+      //Unref all
+      if ( cli->playback_device >= 0 )
+	{
+	  dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = -1;
+	}
+      if ( cli->capture_device >= 0 )
+	{
+	  dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = -1;
+	}
+      if ( cli->device >= 0 )
+	{
+	  dspd_daemon_unref(cli->device);
+	  cli->device = -1;
+	}
+    } else
+    {
+      //Unref specified stream
+      if ( cli->playback_device >= 0 && (sbits & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = -1;
+	}
+      if ( cli->capture_device >= 0 && (sbits & DSPD_PCM_SBIT_CAPTURE) )
+	{
+	  dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = -1;
+	}
+    }
+  return dspd_req_reply_err(rctx, 0, 0);
+}
+
+static int socksrv_req_setsrv(struct dspd_rctx *rctx,
+			      uint32_t             req,
+			      const void          *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t sbits, ret = -EBADFD;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  sbits = *(int32_t*)inbuf;
+  //Must have already referenced the device
+  if ( cli->device >= 0 )
+    {
+      ret = 0;
+      if ( sbits == DSPD_PCM_SBIT_FULLDUPLEX )
+	{
+	  if ( cli->playback_device >= 0 )
+	    dspd_daemon_unref(cli->playback_device);
+	  if ( cli->capture_device >= 0 )
+	    dspd_daemon_unref(cli->capture_device);
+	  cli->playback_device = cli->device;
+	  cli->device = -1;
+	  cli->capture_device = cli->capture_device;
+	  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
+	} else if ( sbits == DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  if ( cli->playback_device >= 0 )
+	    dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = cli->device;
+	  cli->device = -1;
+	} else if ( sbits == DSPD_PCM_SBIT_CAPTURE )
+	{
+	  if ( cli->capture_device >= 0 )
+	    dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = cli->device;
+	  cli->device = -1;
+	} else
+	{
+	  ret = -EINVAL;
+	}
+    }
+  return dspd_req_reply_err(rctx, 0, ret);
+}
+
+static int socksrv_req_allocz(struct dspd_rctx *rctx,
+			      uint32_t             req,
+			      const void          *inbuf,
+			      size_t        inbufsize,
+			      void         *outbuf,
+			      size_t        outbufsize)
+{
+  int32_t ret;
+  size_t s;
+  void *ptr;
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  if ( cli->local )
+    {
+      if ( inbufsize == sizeof(s) )
+	{
+	  s = *(size_t*)inbuf;
+	  ptr = calloc(1, s);
+	  if ( ptr == NULL )
+	    ret = dspd_req_reply_err(rctx, 0, ENOMEM);
+	  else
+	    ret = dspd_req_reply_buf(rctx, 0, &ptr, sizeof(ptr));
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, EPERM);
+    }
+  return ret;
+}
+
+static int socksrv_req_free(struct dspd_rctx *rctx,
+			    uint32_t             req,
+			    const void          *inbuf,
+			    size_t        inbufsize,
+			    void         *outbuf,
+			    size_t        outbufsize)
+{
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  int32_t ret;
+  void *ptr;
+  if ( cli->local )
+    {
+      if ( inbufsize == sizeof(ptr) )
+	{
+	  ptr = *(void**)inbuf;
+	  free(ptr);
+	  ret = dspd_req_reply_err(rctx, 0, 0);
+	} else
+	{
+	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
+	}
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, EPERM);
+    }
+  return ret;
+}
+
+static int socksrv_req_echo(struct dspd_rctx *rctx,
+			    uint32_t             req,
+			    const void          *inbuf,
+			    size_t        inbufsize,
+			    void         *outbuf,
+			    size_t        outbufsize)
+{
+  int32_t ret;
+  if ( inbufsize == 0 && outbufsize == 0 )
+    ret = dspd_req_reply_err(rctx, 0, 0);
+  else if ( inbufsize > outbufsize )
+    ret = dspd_req_reply_err(rctx, 0, EINVAL);
+  else
+    ret = dspd_req_reply_buf(rctx, 0, inbuf, inbufsize);
+  return ret;
+}
+
+
+struct dspd_req_handler socksrv_req_handlers[] = {
+  [DSPD_SOCKSRV_REQ_QUIT] = {
+    .handler = 0,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_NEWCLI] = {
+    .handler = socksrv_req_newcli,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = sizeof(int32_t),
+  },
+  [DSPD_SOCKSRV_REQ_DELCLI] = {
+    .handler = socksrv_req_delcli,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_REFSRV] = {
+    .handler = socksrv_req_refsrv,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(uint32_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_UNREFSRV] = {
+    .handler = socksrv_req_unrefsrv,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_NMCLI] = {
+    .handler = socksrv_req_nmcli,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = sizeof(int64_t),
+  },
+  [DSPD_SOCKSRV_REQ_DMCLI] = {
+    .handler = socksrv_req_dmcli,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_RMSRV] = {
+    .handler = socksrv_req_rmsrv,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(int64_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_UMSRV] = {
+    .handler = socksrv_req_umsrv,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_SETSRV] = {
+    .handler = socksrv_req_setsrv,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(int32_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_ALLOCZ] = {
+    .handler = socksrv_req_allocz,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = sizeof(size_t),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_FREE] = {
+    .handler = socksrv_req_free,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS | DSPD_REQ_FLAG_REMOTE,
+    .rflags = 0,
+    .inbufsize = sizeof(void*),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_ECHO] = {
+    .handler = socksrv_req_echo,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_EVENT] = {
+    .handler = socksrv_req_event,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(struct dspd_async_event),
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_DEFAULTDEV] = {
+    .handler = socksrv_req_defaultdev,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = sizeof(uint32_t),
+    .outbufsize = sizeof(struct dspd_device_mstat),
+  },
+  [DSPD_SOCKSRV_REQ_CTLADDRMODE] = {
+    .handler = NULL,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+  [DSPD_SOCKSRV_REQ_OPEN_BY_NAME] = {
+    .handler = socksrv_req_open_by_name,
+    .xflags = DSPD_REQ_DEFAULT_XFLAGS,
+    .rflags = 0,
+    .inbufsize = 0,
+    .outbufsize = 0,
+  },
+};
+
 
 static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				uint32_t             req,
@@ -654,418 +1263,18 @@ static int socksrv_dispatch_req(struct dspd_rctx *rctx,
 				void         *outbuf,
 				size_t        outbufsize)
 {
-  struct ss_cctx *cli = dspd_req_userdata(rctx);
-  int ret = 0;
-  int err = 0;
-  size_t br;
-  uint32_t dev;
-  uint64_t val;
-  int64_t i64;
-  int32_t i32;
-  struct dspd_device_stat info;
-  void *ptr;
-  size_t s;
-  switch(req)
-    {
-    case DSPD_SOCKSRV_REQ_NEWCLI:
-      if ( cli->stream >= 0 )
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EBUSY);
-	} else if ( outbufsize < sizeof(cli->stream) )
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	} else
-	{
-	  ret = open_client_stream(cli);
-	  if ( ret >= 0 )
-	    {
-	      cli->stream = ret;
-	      ret = dspd_req_reply_buf(rctx, 0, &cli->stream, sizeof(cli->stream));
-	    } else
-	    {
-	      ret = dspd_req_reply_err(rctx, 0, ret);
-	    }
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_DELCLI:
-      if ( cli->stream >= 0 )
-	{
-	  close_client_stream(cli, cli->stream);
-	  cli->stream = -1;
-	  ret = dspd_req_reply_err(rctx, 0, 0);
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, ENOENT);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_REFSRV:
-       if ( inbufsize < 4 )
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	} else
-	{
-	  //Compatibility with internal APIs
-	  if ( inbufsize == sizeof(uint64_t) )
-	    {
-	      val = *(uint64_t*)inbuf;
-	      dev = val & 0xFFFFFFFFU;
-	    } else
-	    {
-	      dev = *(uint32_t*)inbuf;
-	    }
-
-	  //Throw away the old reference
-	  if ( cli->device != dev )
-	    {
-	      ret = dspd_daemon_ref(dev, DSPD_DCTL_ENUM_TYPE_SERVER);
-	      if ( ret == 0 && cli->device >= 0 )
-		dspd_daemon_unref(cli->device);
-
-	    } else if ( dev >= DSPD_MAX_OBJECTS )
-	    {
-	      ret = -EINVAL;
-	    } else
-	    {
-	      ret = 0;
-	    }
-	  if ( ret == 0 )
-	    {
-	      cli->device = dev;
-	      if ( outbufsize >= sizeof(struct dspd_device_stat) )
-		{
-		  err = dspd_stream_ctl(&dspd_dctx,
-					dev,
-					DSPD_SCTL_SERVER_STAT,
-					NULL,
-					0,
-					outbuf,
-					outbufsize,
-					&br);
-		  if ( err != 0 || br == 0 ) //Got the device but no data
-		    ret = dspd_req_reply_err(rctx, 0, err * -1);
-		  else
-		    ret = dspd_req_reply_buf(rctx, 0, outbuf, br);
-		} else
-		{
-		  ret = dspd_req_reply_err(rctx, 0, 0);
-		}
-	    } else
-	    {
-	      cli->device = -1;
-	      ret = dspd_req_reply_err(rctx, 0, ENOENT);
-	    }
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_UNREFSRV:
-      if ( cli->device >= 0 )
-	{
-	  dspd_daemon_unref(cli->device);
-	  cli->device = -1;
-	  ret = dspd_req_reply_err(rctx, 0, 0);
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, ENOENT);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_NMCLI:
-      if ( inbufsize == sizeof(int32_t) &&
-	   outbufsize == sizeof(int64_t) )
-	{
-	  i32 = *(int32_t*)inbuf;
-	  ret = 0;
-	  if ( i32 )
-	    {
-	      //Open one or two half duplex streams.
-	      if ( (i32 & DSPD_PCM_SBIT_PLAYBACK) && cli->playback_stream < 0 )
-		{
-		  ret = open_client_stream(cli);
-		  if ( ret >= 0 )
-		    {
-		      cli->playback_stream = ret;
-		      ret = 0;
-		    }
-		}
-	      if ( (i32 & DSPD_PCM_SBIT_CAPTURE) && cli->capture_stream < 0 && ret == 0 )
-		{
-		  ret = open_client_stream(cli);
-		  if ( ret >= 0 )
-		    {
-		      cli->capture_stream = ret;
-		      ret = 0;
-		    }
-		}
-	    } else
-	    {
-	      //Open one full duplex stream
-	      if ( cli->playback_stream < 0 && cli->capture_stream < 0 && cli->stream < 0 )
-		{
-		  ret = open_client_stream(cli);
-		  if ( ret >= 0 )
-		    {
-		      cli->stream = ret;
-		      cli->playback_stream = ret;
-		      dspd_daemon_ref(cli->playback_stream, DSPD_DCTL_ENUM_TYPE_ANY);
-		      cli->capture_stream = ret;
-		      dspd_daemon_ref(cli->capture_stream, DSPD_DCTL_ENUM_TYPE_ANY);
-		      ret = 0; 
-		    }
-		}
-	    }
-	  if ( ret < 0 )
-	    {
-	      ret = dspd_req_reply_err(rctx, 0, ret);
-	    } else
-	    {
-	      i64 = cli->playback_stream;
-	      i64 <<= 32U;
-	      i64 |= cli->capture_stream & 0x00000000FFFFFFFFULL;
-	      ret = dspd_req_reply_buf(rctx, 0, &i64, sizeof(i64));
-	    }
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_DMCLI:
-      if ( inbufsize == sizeof(int32_t) )
-	{
-	  i32 = *(int32_t*)inbuf;
-	  if ( cli->playback_stream == cli->capture_stream &&
-	       cli->playback_stream == cli->stream &&
-	       cli->stream >= 0 &&
-	       i32 == DSPD_PCM_SBIT_FULLDUPLEX )
-	    {
-	      close_client_stream(cli, cli->playback_stream);
-	      close_client_stream(cli, cli->capture_stream);
-	      close_client_stream(cli, cli->stream);
-	      cli->playback_stream = -1;
-	      cli->capture_stream = -1;
-	      cli->stream = -1;
-	    } else
-	    {
-	      if ( cli->playback_stream >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
-		{
-		  close_client_stream(cli, cli->playback_stream);
-		  cli->playback_stream = -1;
-		}
-	      if ( cli->capture_stream >= 0 && (i32 & DSPD_PCM_SBIT_CAPTURE) )
-		{
-		  close_client_stream(cli, cli->capture_stream);
-		  cli->capture_stream = -1;
-		}
-	    }
-	  ret = dspd_req_reply_err(rctx, 0, 0);
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_RMSRV:
-      if ( inbufsize == sizeof(int64_t) )
-	{
-	  i64 = *(int64_t*)inbuf;
-	  i32 = i64 >> 32U;
-	  dev = i64 & 0xFFFFFFFFLL;
-	  ret = open_device(cli, i32, dev, &info);
-	  if ( ret >= 0 )
-	    {
-	      if ( (i32 & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
-		{
-		  if ( cli->playback_device >= 0 )
-		    dspd_daemon_unref(cli->playback_device);
-		  if ( cli->capture_device >= 0 )
-		    dspd_daemon_unref(cli->capture_device);
-		  if ( cli->device >= 0 )
-		    dspd_daemon_unref(cli->device);
-		  cli->device = ret;
-		  cli->playback_device = cli->device;
-		  dspd_daemon_ref(cli->playback_device, DSPD_DCTL_ENUM_TYPE_ANY);
-		  cli->capture_device = cli->device;
-		  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
-		} else if ( i32 & DSPD_PCM_SBIT_PLAYBACK )
-		{
-		  if ( cli->playback_device >= 0 )
-		    dspd_daemon_unref(cli->playback_device);
-		  cli->playback_device = ret;
-		} else if ( i32 & DSPD_PCM_SBIT_CAPTURE )
-		{
-		  if ( cli->capture_device >= 0 )
-		    dspd_daemon_unref(cli->capture_device);
-		  cli->capture_device = ret;
-		} else
-		{
-		  if ( cli->device >= 0 )
-		    dspd_daemon_unref(cli->device);
-		  cli->device = ret;
-		}
-	      if ( outbufsize == sizeof(struct dspd_device_stat) )
-		ret = dspd_req_reply_buf(rctx, 0, &info, sizeof(info));
-	      else
-		ret = dspd_req_reply_err(rctx, 0, 0);
-	    } else
-	    {
-	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	    }
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_UMSRV:
-      if ( inbufsize == sizeof(int32_t) )
-	{
-	  i32 = *(int32_t*)inbuf;
-	  if ( i32 == DSPD_PCM_SBIT_FULLDUPLEX &&
-	       cli->playback_device == cli->capture_device &&
-	       cli->capture_device == cli->device &&
-	       cli->device >= 0 )
-	    {
-	      //Unref full duplex
-	      dspd_daemon_unref(cli->playback_device);
-	      cli->playback_device = -1;
-	      dspd_daemon_unref(cli->capture_device);
-	      cli->capture_device = -1;
-	      dspd_daemon_unref(cli->device);
-	      cli->device = -1;
-	    } else if ( i32 == 0 )
-	    {
-	      //Unref all
-	      if ( cli->playback_device >= 0 )
-		{
-		  dspd_daemon_unref(cli->playback_device);
-		  cli->playback_device = -1;
-		}
-	      if ( cli->capture_device >= 0 )
-		{
-		  dspd_daemon_unref(cli->capture_device);
-		  cli->capture_device = -1;
-		}
-	      if ( cli->device >= 0 )
-		{
-		  dspd_daemon_unref(cli->device);
-		  cli->device = -1;
-		}
-	    } else
-	    {
-	      //Unref specified stream
-	      if ( cli->playback_device >= 0 && (i32 & DSPD_PCM_SBIT_PLAYBACK) )
-		{
-		  dspd_daemon_unref(cli->playback_device);
-		  cli->playback_device = -1;
-		}
-	      if ( cli->capture_device >= 0 && (i32 & DSPD_PCM_SBIT_CAPTURE) )
-		{
-		  dspd_daemon_unref(cli->capture_device);
-		  cli->capture_device = -1;
-		}
-	    }
-	  ret = dspd_req_reply_err(rctx, 0, 0);
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_SETSRV:
-      if ( inbufsize == sizeof(int32_t) )
-	{
-	  i32 = *(int32_t*)inbuf;
-	  //Must have already referenced the device
-	  if ( cli->device >= 0 )
-	    {
-	      ret = 0;
-	      if ( i32 == DSPD_PCM_SBIT_FULLDUPLEX )
-		{
-		  if ( cli->playback_device >= 0 )
-		    dspd_daemon_unref(cli->playback_device);
-		  if ( cli->capture_device >= 0 )
-		    dspd_daemon_unref(cli->capture_device);
-		  cli->playback_device = cli->device;
-		  cli->device = -1;
-		  cli->capture_device = cli->capture_device;
-		  dspd_daemon_ref(cli->capture_device, DSPD_DCTL_ENUM_TYPE_ANY);
-		} else if ( i32 == DSPD_PCM_SBIT_PLAYBACK )
-		{
-		  if ( cli->playback_device >= 0 )
-		    dspd_daemon_unref(cli->playback_device);
-		  cli->playback_device = cli->device;
-		  cli->device = -1;
-		} else if ( i32 == DSPD_PCM_SBIT_CAPTURE )
-		{
-		   if ( cli->capture_device >= 0 )
-		     dspd_daemon_unref(cli->capture_device);
-		  cli->capture_device = cli->device;
-		  cli->device = -1;
-		} else
-		{
-		  ret = EINVAL;
-		}
-	    } else
-	    {
-	      ret = -EBADFD;
-	    }
-	} else
-	{
-	  ret = EINVAL;
-	}
-      ret = dspd_req_reply_err(rctx, 0, ret);
-      break;
-    case DSPD_SOCKSRV_REQ_ALLOCZ:
-      if ( cli->local )
-	{
-	  if ( inbufsize == sizeof(s) )
-	    {
-	      s = *(size_t*)inbuf;
-	      ptr = calloc(1, s);
-	      if ( ptr == NULL )
-		ret = dspd_req_reply_err(rctx, 0, ENOMEM);
-	      else
-		ret = dspd_req_reply_buf(rctx, 0, &ptr, sizeof(ptr));
-	    } else
-	    {
-	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	    }
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EPERM);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_FREE:
-      if ( cli->local )
-	{
-	  if ( inbufsize == sizeof(ptr) )
-	    {
-	      ptr = *(void**)inbuf;
-	      free(ptr);
-	      ret = dspd_req_reply_err(rctx, 0, 0);
-	    } else
-	    {
-	      ret = dspd_req_reply_err(rctx, 0, EINVAL);
-	    }
-	} else
-	{
-	  ret = dspd_req_reply_err(rctx, 0, EPERM);
-	}
-      break;
-    case DSPD_SOCKSRV_REQ_ECHO:
-      if ( inbufsize > outbufsize || inbufsize == 0 )
-	ret = dspd_req_reply_err(rctx, 0, EINVAL);
-      else
-	ret = dspd_req_reply_buf(rctx, 0, inbuf, inbufsize);
-      break;
-    case DSPD_SOCKSRV_REQ_EVENT:
-      if ( inbufsize >= sizeof(struct dspd_async_event) )
-	ret = socksrv_req_event(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
-      else
-	ret = dspd_req_reply_err(rctx, 0, EINVAL);
-      break;
-    case DSPD_SOCKSRV_REQ_DEFAULTDEV:
-      ret = socksrv_req_defaultdev(rctx, req, inbuf, inbufsize, outbuf, outbufsize);
-      break;
-    default:
-      ret = dspd_req_reply_err(rctx, 0, EINVAL);
-      break;
-    }
-  return ret;
+  uint64_t r;
+  r = req;
+  r <<= 32U;
+  r |= req;
+  return dspd_daemon_dispatch_ctl(rctx, 
+				  socksrv_req_handlers, 
+				  ARRAY_SIZE(socksrv_req_handlers),
+				  r,
+				  inbuf,
+				  inbufsize,
+				  outbuf,
+				  outbufsize);
 }
 
 static int32_t get_streams(struct dspd_rctx *ctx, struct ss_cctx **cli, int32_t *playback, int32_t *capture, int32_t sbits)
@@ -2721,65 +2930,110 @@ int client_pipe_event(void *data,
   return ret;
 }
 
-static void destroy_client(struct ss_cctx *cli, int32_t fd)
+static void destroy_client(struct ss_cctx *cli, int32_t fd, bool shutdown_only)
 {
   static const struct dspd_req dead_req = { .len = 0 };
   size_t offset = 0;
-  ssize_t ret;
-  while ( offset < sizeof(dead_req) )
+  ssize_t ret = 0;
+  if ( cli->shutdown == false )
     {
-      if ( fd >= 0 )
-	ret = write(fd, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
-      else if ( cli->fifo )
-	ret = dspd_aio_fifo_write(cli->fifo, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
+      while ( offset < sizeof(dead_req) )
+	{
+	  if ( fd >= 0 )
+	    ret = write(fd, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
+	  else if ( cli->fifo )
+	    ret = dspd_aio_fifo_write(cli->fifo, ((const char*)&dead_req)+offset, sizeof(dead_req) - offset);
+	  else
+	    break;
+	  if ( ret <= 0 )
+	    break;
+	  offset += ret;
+	}
+      dspd_clr_bit(cli->server->listening_clients, cli->index);
+      if ( cli->prev == NULL )
+	cli->server->client_list = cli->next;
       else
-	break;
-      if ( ret <= 0 )
-	break;
-      offset += ret;
+	cli->prev->next = cli->next;
+      if ( cli->next )
+	cli->next->prev = cli->prev;
+      
+      if ( cli->fifo != NULL && cli->fifo->master->slot >= 0 )
+	{
+	  cli->server->virtual_fds[cli->fifo->master->slot] = NULL;
+	  cli->fifo->master->slot = -1;
+	}
+      
+      cli->shutdown = true;
     }
   
-  dspd_mutex_lock(&cli->lock);
-  cli->fd = -1;
-  dspd_mutex_unlock(&cli->lock);
-  if ( cli->stream >= 0 )
-    close_client_stream(cli, cli->stream);
-
-
-  if ( cli->playback_stream >= 0 )
-    close_client_stream(cli, cli->playback_stream);
-
-  if ( cli->capture_stream >= 0 )
-    close_client_stream(cli, cli->capture_stream);
-  
-  dspd_mutex_destroy(&cli->lock);
-  if ( cli->device >= 0 )
-    dspd_daemon_unref(cli->device);
-  if ( cli->playback_device >= 0 )
-    dspd_daemon_unref(cli->playback_device);
-  if ( cli->capture_device >= 0 )
-    dspd_daemon_unref(cli->capture_device);
-  if ( cli->req_ctx )
-    dspd_req_ctx_delete(cli->req_ctx);
-  if ( cli->pkt_fd >= 0 )
-    close(cli->pkt_fd);
-  if ( cli->fd_out >= 0 )
-    close(cli->fd_out);
-
-  if ( cli->fifo )
+  if ( shutdown_only == false )
     {
-      cli->server->virtual_fds[cli->fifo->master->slot] = NULL;
-      DSPD_ASSERT(cli->eof == true);
-      dspd_aio_fifo_close(cli->fifo);
+      dspd_mutex_lock(&cli->lock);
+      cli->fd = -1;
+      dspd_mutex_unlock(&cli->lock);
+      if ( cli->stream >= 0 )
+	{
+	  close_client_stream(cli, cli->stream);
+	  cli->stream = -1;
+	}
+      if ( cli->playback_stream >= 0 )
+	{
+	  close_client_stream(cli, cli->playback_stream);
+	  cli->playback_stream = -1;
+	}
+      if ( cli->capture_stream >= 0 )
+	{
+	  close_client_stream(cli, cli->capture_stream);
+	  cli->capture_stream = -1;
+	}
+      dspd_mutex_destroy(&cli->lock);
+      if ( cli->device >= 0 )
+	{
+	  dspd_daemon_unref(cli->device);
+	  cli->device = -1;
+	}
+      if ( cli->playback_device >= 0 )
+	{
+	  dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = -1;
+	}
+      if ( cli->capture_device >= 0 )
+	{
+	  dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = -1;
+	}
+      if ( cli->req_ctx )
+	dspd_req_ctx_delete(cli->req_ctx);
+      if ( cli->pkt_fd >= 0 )
+	{
+	  close(cli->pkt_fd);
+	  cli->pkt_fd = -1;
+	}
+      if ( cli->fd_out >= 0 )
+	{
+	  close(cli->fd_out);
+	  cli->fd_out = -1;
+	}
+      if ( cli->fifo )
+	{
+	  if ( cli->fifo->master->slot >= 0 )
+	    cli->server->virtual_fds[cli->fifo->master->slot] = NULL;
+	  DSPD_ASSERT(cli->eof == true);
+	  dspd_aio_fifo_close(cli->fifo);
+	  cli->fifo = NULL;
+	}
+      socksrv_eq_reset(&cli->eventq);
+      socksrv_eq_realloc(&cli->eventq, 0, 0, 0);
     }
-  socksrv_eq_realloc(&cli->eventq, 0, 0, 0);
-  
-  if ( cli->prev == NULL )
-    cli->server->client_list = cli->next;
-  else
-    cli->prev->next = cli->next;
-  if ( cli->next )
-    cli->next->prev = cli->prev;
+}
+
+static void client_async_destructor(struct cbpoll_ctx *ctx, struct cbpoll_msg *msg, void *data)
+{
+  struct ss_cctx *cli = (struct ss_cctx*)(intptr_t)msg->arg;
+  destroy_client(cli, msg->fd, false);
+  if( msg->fd >= 0 )
+    close(msg->fd);
+  free(cli);
 }
 
 static bool client_destructor(void *data,
@@ -2788,10 +3042,21 @@ static bool client_destructor(void *data,
 			      int fd)
 {
   struct ss_cctx *cli = data;
-  dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
-  destroy_client(cli, fd);
-  free(cli);
-  return true;
+  struct cbpoll_msg msg = { .len = sizeof(struct cbpoll_msg) };
+  msg.msg = CBPOLL_PIPE_MSG_CALLBACK;
+  msg.index = -1;
+  msg.fd = fd;
+  msg.stream = -1;
+  msg.callback = client_async_destructor;
+  msg.arg = (intptr_t)cli;
+  //dspd_clr_bit((uint8_t*)cli->server->listening_clients, cli->index);
+  //destroy_client(cli, fd, false);
+  //free(cli);
+  //return true;
+  destroy_client(cli, fd, true);
+  cbpoll_queue_work(context, &msg);
+
+  return false;
 }
 static int client_vfd_set_events(void *data, 
 				 struct cbpoll_ctx *context,
@@ -3071,7 +3336,7 @@ static int listen_pipe_event(void *data,
 	  if ( i < 0 )
 	    {
 	      cli->eof = true;
-	      destroy_client(cli, cli->fd);
+	      destroy_client(cli, cli->fd, false);
 	      if ( cli->fd >= 0 )
 		close(cli->fd);
 	      free(cli);

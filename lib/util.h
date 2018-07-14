@@ -5,7 +5,7 @@
 #include <sys/uio.h>
 #include <stdarg.h>
 #include <errno.h>
-
+#include <unistd.h>
 struct dspd_ll {
   void           *pointer;
   struct dspd_ll *prev, *next;
@@ -112,4 +112,20 @@ bool dspd_devname_cmp(const char *devname, const char *str);
 void dspd_enable_assert_log(void);
 void _dspd_assert(const char *expr, const char *file, unsigned int line);
 #define DSPD_ASSERT(e) ((void) ((e) ? ((void)0) : _dspd_assert (#e, __FILE__, __LINE__)))
+
+static inline ssize_t dspd_read(int32_t fd, void *buf, size_t len)
+{
+  ssize_t ret = read(fd, buf, len);
+  if ( ret < 0 )
+    ret = -errno;
+  return ret;
+}
+static inline ssize_t dspd_write(int32_t fd, const void *buf, size_t len)
+{
+  ssize_t ret = write(fd, buf, len);
+  if ( ret < 0 )
+    ret = -errno;
+  return ret;
+}
+#define DSPD_ISSTR(_s) (!!memchr(_s,0,sizeof(_s)))
 #endif

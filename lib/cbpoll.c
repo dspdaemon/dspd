@@ -412,7 +412,7 @@ static void *cbpoll_thread(void *p)
 		}
 	    }
 	}
-     
+      ctx->fdata_idx = -1;
 
       if ( dspd_fifo_len(ctx->wq.fifo, &len) == 0 )
 	{
@@ -477,8 +477,8 @@ static void *async_work_thread(void *p)
 {
   struct cbpoll_ctx *ctx = p;
   struct cbpoll_msg *work;
-  struct cbpoll_fd *fd;
   uint32_t len;
+  struct cbpoll_fd *f;
   if ( ctx->name != NULL && strlen(ctx->name) > 0 )
     {
       char buf[256];
@@ -509,11 +509,14 @@ static void *async_work_thread(void *p)
 	{
 	  if ( len == 0 )
 	    break;
-	  DSPD_ASSERT(work->index < ctx->max_fd);
-	  fd = &ctx->fdata[work->index];
+	  DSPD_ASSERT(work->index < (ssize_t)ctx->max_fd);
 	  work->flags &= ~CBPOLL_MSG_EVENT_THREAD;
 	  work->flags |= CBPOLL_MSG_WORK_THREAD;
-	  work->callback(ctx, work, fd->data);
+	  if ( work->index >= 0 )
+	    f = fdata_msg(ctx, work);
+	  else
+	    f = NULL;
+	  work->callback(ctx, work, f);
 	  dspd_fifo_rcommit(ctx->wq.fifo, 1);
 	}
     }
@@ -581,15 +584,17 @@ void cbpoll_reply_work(struct cbpoll_ctx *ctx,
 
 void cbpoll_queue_work(struct cbpoll_ctx *ctx, const struct cbpoll_msg *wrk)
 {
-  uint32_t wcount;
-  int32_t ret;
+  uint32_t wcount = 0;
+  int32_t ret = 0;
   struct cbpoll_fd *fd;
   struct cbpoll_msg *w;
   size_t len = sizeof(*wrk);
+  bool dead = !!AO_load(&ctx->abort);
   DSPD_ASSERT(wrk->callback);
   if ( wrk->len > 0 )
     len = wrk->len;
-  ret = dspd_fifo_wiov(ctx->wq.fifo, (void**)&w, &wcount);
+  if ( ! dead )
+    ret = dspd_fifo_wiov(ctx->wq.fifo, (void**)&w, &wcount);
   
   if ( ret == 0 )
     {
@@ -598,7 +603,7 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, const struct cbpoll_msg *wrk)
 	  memcpy(w, wrk, len);
 	  w->len = len;
 	  dspd_fifo_wcommit(ctx->wq.fifo, 1U);
-	} else if ( ctx->wq.overflow.msg.callback == NULL )
+	} else if ( ctx->wq.overflow.msg.callback == NULL && dead == false )
 	{
 	  memcpy(&ctx->wq.overflow, wrk, len);
 	  ctx->wq.overflow.msg.len = len;

@@ -3,6 +3,9 @@
 #ifndef EUNKNOWN
 #define EUNKNOWN 1143426888
 #endif
+#ifndef EIOPENDING
+#define EIOPENDING EINPROGRESS
+#endif
 #define DSPD_POLLERR (POLLNVAL|POLLHUP|POLLRDHUP|POLLERR)
 #define SS_MAX_PAYLOAD 4096
 
@@ -50,7 +53,14 @@ enum dspd_ssctl_req {
   DSPD_SOCKSRV_REQ_CTLADDRMODE,
 #define DSPD_SOCKSRV_CTLADDR_RAW    0
 #define DSPD_SOCKSRV_CTLADDR_SIMPLE 1
+  DSPD_SOCKSRV_REQ_OPEN_BY_NAME,
  };
+
+struct socksrv_open_req {
+  uint32_t sbits;
+  uint32_t reserved;
+  char     name[64];
+};
 
 struct socksrv_ctl_event {
   int32_t  card;

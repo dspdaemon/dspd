@@ -1583,20 +1583,25 @@ void dspd_aio_fifo_close(void *arg)
   bool destroy;
   struct dspd_aio_fifo_oob_msg msg;
   struct dspd_aio_fifo_ctx *ctx = arg;
+  bool wake = false;
   pthread_mutex_lock(&ctx->master->lock);
   if ( ctx == ctx->master->client )
     {
       ctx->master->client = NULL;
+      wake = !!ctx->master->server;
     } else if ( ctx == ctx->master->server )
     {
       ctx->master->server = NULL;
+      wake = !!ctx->master->client;
     } else
     {
-      DSPD_ASSERT(ctx != ctx->master->server && ctx != ctx->master->client);
+      //double free
+      DSPD_ASSERT(ctx->master->client || ctx->master->server);
     }
   while ( dspd_fifo_read(ctx->rxoob, &msg, 1) == 1 )
     close(msg.fd);
-  ctx->peer->ops->wake(ctx, ctx->peer->arg);
+  if ( wake )
+    ctx->peer->ops->wake(ctx, ctx->peer->arg);
   destroy = ctx->master->client == NULL && ctx->master->server == NULL;
   pthread_mutex_unlock(&ctx->master->lock);
   if ( destroy )
