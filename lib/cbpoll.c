@@ -1651,8 +1651,6 @@ static void accept_cb(struct cbpoll_ctx *ctx,
   hdr.ops = d->list->ops;
   hdr.reserved_slot = d->reserved_slot;
   dspd_ts_clear(&hdr.busy);
-  if ( ! async )
-    fprintf(stderr, "UNEXPECTED CONTEXT\n");
   if ( d->list->flags & CBPOLL_CLIENT_LIST_LISTENFD )
     {
       len = sizeof(addr);
