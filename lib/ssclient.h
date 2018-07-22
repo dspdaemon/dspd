@@ -58,8 +58,16 @@ enum dspd_ssctl_req {
 
 struct socksrv_open_req {
   uint32_t sbits;
-  uint32_t reserved;
+  uint32_t flags;
   char     name[64];
+};
+struct socksrv_open_reply {
+  uint32_t sbits;
+  uint32_t reserved;
+  int32_t  playback_device;
+  int32_t  capture_device;
+  int32_t  playback_stream;
+  int32_t  capture_stream;
 };
 
 struct socksrv_ctl_event {

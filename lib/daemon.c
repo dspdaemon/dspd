@@ -1347,36 +1347,102 @@ int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
   return ret;
 }
 
-int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits)
+int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits, int32_t *playback, int32_t *capture)
 {
   struct dspd_hotplug_devname *dev;
-  int32_t ret = -ENOENT, s = -1;
+  int32_t ret = -ENOENT, s, pslot = -1, cslot = -1;
+  uint64_t p_eid = 0, c_eid = 0;
   pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  if ( playback )
+    *playback = -1;
+  if ( capture )
+    *capture = -1;
   if ( strcmp(hwname, "default") == 0 )
     {
-      if ( sbits == DSPD_PCM_SBIT_PLAYBACK )
-	s = dspd_dctx.hotplug.default_playback;
-      else if ( sbits == DSPD_PCM_SBIT_CAPTURE )
-	s = dspd_dctx.hotplug.default_capture;
-      if ( s > 0 )
+      if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  ret = dspd_daemon_ref(s, DSPD_DCTL_ENUM_TYPE_SERVER);
-	  if ( ret == 0 )
-	    ret = s;
+	  pslot = dspd_dctx.hotplug.default_playback;
+	  if ( pslot < 0 )
+	    goto out;
 	}
-    } else
-    {
-      for ( dev = dspd_dctx.hotplug.names; dev; dev = dev->next )
+      if ( sbits & DSPD_PCM_SBIT_CAPTURE )
 	{
-	  if ( (dev->sbits & sbits) == sbits && dspd_devname_cmp(dev->hwname, hwname) == true )
+	  cslot = dspd_dctx.hotplug.default_capture;
+	  if ( cslot < 0 )
+	    goto out;
+	}
+      if ( sbits == DSPD_PCM_SBIT_FULLDUPLEX && pslot < 0 )
+	goto out;
+    }
+  for ( dev = dspd_dctx.hotplug.names; dev; dev = dev->next )
+    {
+      s = dev->sbits & sbits;
+      if ( (s & DSPD_PCM_SBIT_PLAYBACK) && pslot >= 0 && dev->slot != pslot )
+	continue;
+      if ( (s & DSPD_PCM_SBIT_CAPTURE) && cslot >= 0 && dev->slot != cslot )
+	continue;
+
+      if ( s != 0 && (pslot >= 0 || cslot >= 0 || dspd_devname_cmp(dev->hwname, hwname) == true) )
+	{
+	  ret = dspd_daemon_ref(dev->slot, DSPD_DCTL_ENUM_TYPE_SERVER);
+	  if ( ret == 0 )
 	    {
-	      ret = dspd_daemon_ref(dev->slot, DSPD_DCTL_ENUM_TYPE_SERVER);
-	      if ( ret == 0 )
-		ret = dev->slot;
-	      break;
+	      if ( (s & DSPD_PCM_SBIT_PLAYBACK) && playback != NULL )
+		{
+		  *playback = dev->slot;
+		  sbits &= ~DSPD_PCM_SBIT_PLAYBACK;
+		  p_eid = dev->event_id;
+		}
+	      if ( (s & DSPD_PCM_SBIT_CAPTURE) && capture != NULL )
+		{
+		  *capture = dev->slot;
+		  sbits &= ~DSPD_PCM_SBIT_CAPTURE;
+		  c_eid = dev->event_id;
+		  if ( s == DSPD_PCM_SBIT_FULLDUPLEX )
+		    {
+		      ret = dspd_daemon_ref(dev->slot, DSPD_DCTL_ENUM_TYPE_SERVER);
+		      if ( ret < 0 )
+			*capture = -1;
+		    }
+		}
 	    }
+	  if ( sbits == 0 )
+	    break;
 	}
     }
+  if ( sbits != 0 )
+    {
+      //Did not find all streams
+      ret = -ENOENT;
+      if ( playback != NULL && *playback >= 0 )
+	{
+	  dspd_daemon_unref(*playback);
+	  *playback = -1;
+	}
+      if ( capture != NULL && *capture >= 0 )
+	{
+	  dspd_daemon_unref(*capture);
+	  *capture = -1;
+	}
+    } else if ( playback != NULL && capture != NULL && ret == 0 )
+    {
+      if ( p_eid != c_eid && p_eid != 0 && c_eid != 0 )
+	{
+	  if ( *playback >= 0 )
+	    {
+	      dspd_daemon_unref(*playback);
+	      *playback = -1;
+	    }
+	  if ( *capture >= 0 )
+	    {
+	      dspd_daemon_unref(*capture);
+	      *capture = -1;
+	    }
+	  ret = -ENOENT;
+	}
+    }
+
+ out:
   pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
@@ -2053,23 +2119,6 @@ int dspd_daemon_run(void)
   dspd_log(0, "Starting main thread loop.");
   ret = cbpoll_run(dspd_dctx.main_thread_loop_context);
   return ret;
-}
-
-//TODO: Open a device or return unbound client (device==-1)
-int dspd_stream_open(int32_t device)
-{
-  return 0;
-}
-
-
-int dspd_stream_ref(int32_t stream)
-{
-  return 0;
-}
-
-int dspd_stream_unref(int32_t stream)
-{
-  return 0;
 }
 
 

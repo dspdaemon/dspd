@@ -269,7 +269,11 @@ struct cbpoll_client_list {
   const struct cbpoll_fd_ops *fd_ops;
   size_t max_clients;
   void *data;
+  //The list is for a listening socket
 #define CBPOLL_CLIENT_LIST_LISTENFD 1
+  //Automatically enable events for new clients
+#define CBPOLL_CLIENT_LIST_AUTO_POLLIN  2
+#define CBPOLL_CLIENT_LIST_AUTO_POLLOUT 4
   uint32_t flags;
   
 };

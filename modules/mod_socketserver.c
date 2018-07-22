@@ -654,8 +654,138 @@ static int socksrv_req_open_by_name(struct dspd_rctx *rctx,
 				    void         *outbuf,
 				    size_t        outbufsize)
 {
-  //Not implemented yet.
-  return dspd_req_reply_err(rctx, 0, EINVAL);
+  struct ss_cctx *cli = dspd_req_userdata(rctx);
+  int32_t ret;
+  const struct socksrv_open_req *o = inbuf;
+  int32_t playback = -1, capture = -1, pstr = -1, cstr = -1;
+  size_t br;
+  struct socksrv_open_reply *r = outbuf;
+  if ( ! DSPD_ISSTR(o->name) )
+    return dspd_req_reply_err(rctx, 0, EINVAL);
+
+  if ( cli->playback_stream < 0 && (o->sbits & DSPD_PCM_SBIT_PLAYBACK) )
+    {
+      ret = open_client_stream(cli);
+      if ( ret < 0 )
+	goto out;
+      pstr = ret;
+    }
+  if ( cli->capture_stream < 0 && (o->sbits & DSPD_PCM_SBIT_CAPTURE) )
+    {
+      ret = open_client_stream(cli);
+      if ( ret < 0 )
+	goto out;
+      cstr = ret;
+    }
+
+  ret = dspd_daemon_ref_by_name(o->name, o->sbits, &playback, &capture);
+  if ( ret == 0 )
+    {
+      if ( o->sbits & DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  if ( cli->playback_device >= 0 )
+	    dspd_daemon_unref(cli->playback_device);
+	  cli->playback_device = playback;
+
+	  if ( cli->playback_stream >= 0 )
+	    {
+	      (void)dspd_stream_ctl(&dspd_dctx, 
+				    cli->playback_stream,
+				    DSPD_SCTL_CLIENT_DISCONNECT,
+				    NULL,
+				    0,
+				    NULL,
+				    0,
+				    &br);
+	    } else
+	    {
+	      cli->playback_stream = pstr;
+	    }
+
+	 
+	  ret = dspd_stream_ctl(&dspd_dctx, 
+				cli->playback_stream, 
+				DSPD_SCTL_CLIENT_RESERVE, 
+				&cli->playback_device, 
+				sizeof(cli->playback_device), 
+				NULL, 
+				0, 
+				&br);
+	  if ( ret < 0 )
+	    goto out;
+	}
+      if ( o->sbits & DSPD_PCM_SBIT_CAPTURE )
+	{
+	  if ( cli->capture_device >= 0 )
+	    dspd_daemon_unref(cli->capture_device);
+	  cli->capture_device = capture;
+
+	  if ( cli->capture_stream >= 0 )
+	    {
+	      (void)dspd_stream_ctl(&dspd_dctx, 
+				    cli->capture_stream,
+				    DSPD_SCTL_CLIENT_DISCONNECT,
+				    NULL,
+				    0,
+				    NULL,
+				    0,
+				    &br);
+	    } else
+	    {
+	      cli->capture_stream = cstr;
+	    }
+	  cli->capture_device = capture;
+	  ret = dspd_stream_ctl(&dspd_dctx, 
+				cli->capture_stream, 
+				DSPD_SCTL_CLIENT_RESERVE, 
+				&cli->capture_device, 
+				sizeof(cli->capture_device), 
+				NULL, 
+				0, 
+				&br);
+	}
+    }
+
+ out:
+  if ( ret < 0 )
+    {
+      if ( pstr >= 0 )
+	{
+	  close_client_stream(cli, pstr);
+	  if ( cli->playback_stream == pstr )
+	    cli->playback_stream = -1;
+	}
+      if ( cstr >= 0 )
+	{
+	  close_client_stream(cli, cstr);
+	  if ( cli->capture_stream == cstr )
+	    cli->capture_stream = -1;
+	}
+      if ( playback >= 0 )
+	{
+	  dspd_daemon_unref(playback);
+	  if ( cli->playback_device == playback )
+	    cli->playback_device = -1;
+	}
+      if ( capture >= 0 )
+	{
+	  dspd_daemon_unref(capture);
+	  if ( cli->capture_device == capture )
+	    cli->capture_device = -1;
+	}
+      ret = dspd_req_reply_err(rctx, 0, ret);
+    } else
+    {
+      r->sbits = o->sbits;
+      r->reserved = 0;
+      r->playback_device = cli->playback_device;
+      r->capture_device = cli->capture_device;
+      r->playback_stream = cli->playback_stream;
+      r->capture_stream = cli->capture_stream;
+      ret = dspd_req_reply_buf(rctx, 0, r, sizeof(*r));
+    }
+
+  return dspd_req_reply_err(rctx, 0, ret);
 }
 
 static int socksrv_req_newcli(struct dspd_rctx *rctx,
@@ -1250,8 +1380,8 @@ struct dspd_req_handler socksrv_req_handlers[] = {
     .handler = socksrv_req_open_by_name,
     .xflags = DSPD_REQ_DEFAULT_XFLAGS,
     .rflags = 0,
-    .inbufsize = 0,
-    .outbufsize = 0,
+    .inbufsize = sizeof(struct socksrv_open_req),
+    .outbufsize = sizeof(struct socksrv_open_reply),
   },
 };
 

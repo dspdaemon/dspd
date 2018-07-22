@@ -222,7 +222,7 @@ int32_t dspd_daemon_dispatch_ctl2(struct dspd_rctx *rctx,
 
 int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags);
 void dspd_daemon_unref(uint32_t stream);
-int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits);
+int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits, int32_t *playback, int32_t *capture);
 
 #define DSPD_THREADATTR_RTIO     1
 #define DSPD_THREADATTR_RTSVC    2

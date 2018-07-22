@@ -358,8 +358,8 @@ static void *cbpoll_thread(void *p)
 					&ctx->wq.overflow.msg,
 					fdata_msg(ctx, &ctx->wq.overflow.msg));
 	  dspd_mutex_lock(&ctx->loop_lock);
-	  if ( ctx->wq.overflow.msg.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
-	    cbpoll_unref(ctx, ctx->wq.overflow.msg.index);
+	  //if ( ctx->wq.overflow.msg.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
+	  //cbpoll_unref(ctx, ctx->wq.overflow.msg.index);
 	  ctx->wq.overflow.msg.callback = NULL;
 	} else
 	{
@@ -397,8 +397,6 @@ static void *cbpoll_thread(void *p)
 						&ctx->wq.overflow.msg,
 						fdata->data);
 		  dspd_mutex_lock(&ctx->loop_lock);
-		  if ( ctx->wq.overflow.msg.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
-		    cbpoll_unref(ctx, idx);
 		  ctx->wq.overflow.msg.callback = NULL;
 		}
 	      //The idea is to free the user of the callback from caring about system calls made in
@@ -432,13 +430,9 @@ static void *cbpoll_thread(void *p)
 	  ctx->wq.overflow.msg.callback(ctx,
 					&ctx->wq.overflow.msg,
 					fdata_msg(ctx, &ctx->wq.overflow.msg));
-	  if ( ctx->wq.overflow.msg.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
-	    {
-	      dspd_mutex_lock(&ctx->loop_lock);
-	      cbpoll_unref(ctx, ctx->wq.overflow.msg.index);
-	      ctx->wq.overflow.msg.callback = NULL;
-	      dspd_mutex_unlock(&ctx->loop_lock);
-	    }
+	  dspd_mutex_lock(&ctx->loop_lock);
+	  ctx->wq.overflow.msg.callback = NULL;
+	  dspd_mutex_unlock(&ctx->loop_lock);
 	}
 
     }
@@ -622,8 +616,6 @@ void cbpoll_queue_work(struct cbpoll_ctx *ctx, const struct cbpoll_msg *wrk)
 			   &tmp.msg,
 			   fd->data);
 	  dspd_mutex_lock(&ctx->loop_lock);
-	  if ( tmp.msg.msg == CBPOLL_PIPE_MSG_DEFERRED_WORK )
-	    cbpoll_unref(ctx, tmp.msg.index);
 	}
     }
 
@@ -1592,6 +1584,7 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
   struct cbpoll_client_hdr *hdr = (struct cbpoll_client_hdr*)(uintptr_t)evt->arg;
   size_t i = hdr->list_index;
   size_t fdi = hdr->fd_index;
+  int32_t flags;
   assert(hdr->list->clients[i] == (struct cbpoll_client_hdr*)UINTPTR_MAX);
   hdr->list->clients[i] = hdr;
   if ( hdr->reserved_slot >= 0 )
@@ -1605,7 +1598,15 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
 	  evt->index = fdi;
 	  fail_cb(ctx, evt, NULL);
 	  return;
-	}
+	} 
+      flags = 0;
+      if ( hdr->list->flags & CBPOLL_CLIENT_LIST_AUTO_POLLIN )
+	flags |= EPOLLIN;
+      if ( hdr->list->flags & CBPOLL_CLIENT_LIST_AUTO_POLLOUT )
+	flags |= EPOLLOUT;
+      if ( flags )
+	cbpoll_set_events(ctx, hdr->reserved_slot, flags);
+
     }
   if ( hdr->list->ops->success )
     {
@@ -1621,6 +1622,7 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
     }
   if ( hdr->list->flags & CBPOLL_CLIENT_LIST_LISTENFD )
     cbpoll_set_events(ctx, evt->index, EPOLLIN|EPOLLONESHOT);
+ 
   cbpoll_unref(ctx, fdi);
 }
 
@@ -1649,7 +1651,8 @@ static void accept_cb(struct cbpoll_ctx *ctx,
   hdr.ops = d->list->ops;
   hdr.reserved_slot = d->reserved_slot;
   dspd_ts_clear(&hdr.busy);
-
+  if ( ! async )
+    fprintf(stderr, "UNEXPECTED CONTEXT\n");
   if ( d->list->flags & CBPOLL_CLIENT_LIST_LISTENFD )
     {
       len = sizeof(addr);
@@ -1691,7 +1694,9 @@ static void accept_cb(struct cbpoll_ctx *ctx,
     }
   if ( ! async )
     {
+      dspd_mutex_lock(&ctx->loop_lock);
       evt.callback(ctx, &evt, NULL);
+      dspd_mutex_unlock(&ctx->loop_lock);
     } else if ( cbpoll_send_event(ctx, &evt) < 0 )
     {
       if ( ptr )

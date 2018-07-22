@@ -44,6 +44,7 @@
 #include "defs.h"
 #include "dspd_sndio.h"
 
+
 #define MAX_CLIENTS 32
 
 #define ENABLE_CTL 
@@ -66,6 +67,7 @@ void dspd_sndio_delete(struct sndio_ctx *ctx);
 #define CLIENT_MSG_COMPLETE (CBPOLL_PIPE_MSG_USER+2)
 
 struct sndio_client {
+  struct cbpoll_client_hdr header;
   struct dspd_rclient *pclient, *cclient;
   int32_t pclient_idx;
   struct cbpoll_ctx  *cbctx;
@@ -89,7 +91,6 @@ struct sndio_client {
 #define CLIENT_STATE_BUSY   4
 
   int32_t               cstate;
-  int32_t               cbidx;
   int32_t               sio_idx;
   int32_t               fd;
   int32_t               streams;
@@ -163,8 +164,9 @@ struct sndio_timer {
 
 
 struct sndio_ctx {
-  struct sndio_client *clients[MAX_CLIENTS];
+  struct cbpoll_client_list list;
   size_t nclients;
+
   struct cbpoll_ctx cbctx;
   int fd;
   int cbidx;
@@ -208,6 +210,74 @@ static int send_pkt(struct sndio_client *cli, size_t len, bool async);
 int client_check_buffers(struct sndio_client *cli);
 int client_buildmsg(struct sndio_client *cli, bool async);
 static int send_ack(struct sndio_client *cli);
+
+
+static struct cbpoll_client_hdr *client_create(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, void *arg)
+{
+  struct sndio_ctx *srv = (struct sndio_ctx*)hdr->list;
+  struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));
+  if ( cli != NULL )
+    {
+      cli->header = *hdr;
+      cli->cbctx = ctx;
+      cli->server = srv;
+      cli->fd = hdr->fd;
+      cli->sio_idx = hdr->reserved_slot;
+    }
+  return (struct cbpoll_client_hdr*)cli;
+}
+
+static void client_async_destructor(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
+{
+  struct sndio_client *cli = (struct sndio_client*)hdr;
+  if ( cli->pclient )
+    dspd_rclient_delete(cli->pclient);
+  if ( cli->cclient != NULL && cli->cclient != cli->pclient )
+    dspd_rclient_delete(cli->cclient);
+  free(cli);
+}
+
+static bool client_success(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
+{
+  struct sndio_client *cli = (struct sndio_client*)hdr;
+  if ( hdr->list_index >= 0 && hdr->list_index >= cli->server->nclients )
+    cli->server->nclients = hdr->list_index + 1UL;
+  return true;
+}
+
+struct cbpoll_client_ops client_list_ops = {
+  .create = client_create,
+  .destroy = client_async_destructor,
+  .success = client_success,
+};
+
+
+static bool client_destructor(void *data,
+			      struct cbpoll_ctx *context,
+			      int index,
+			      int fd)
+{
+  struct sndio_client *cli = data;
+  size_t i; ssize_t c;
+  if ( cli->pstate > 0 )
+    cli->server->sessrefs--;
+  if ( cli->header.list_index == (cli->server->nclients - 1UL) )
+    {
+      c = -1L;
+      for ( i = 0; i < cli->server->nclients; i++ )
+	{
+	  if ( cli->server->list.clients[i] != NULL &&
+	       cli->server->list.clients[i] != (struct cbpoll_client_hdr*)UINTPTR_MAX )
+	    c = i;
+	}
+      cli->server->nclients = (size_t)(c + 1L);
+    }
+  shutdown(fd, SHUT_RDWR);
+  return cbpoll_async_destructor_cb(data, context, index, fd);
+}
+
+
+
 static bool client_timer_event(struct sndio_client *cli)
 {
   int32_t ret, s;
@@ -338,7 +408,7 @@ static int timer_fd_event(void *data,
   ctx->tmr.periodic_wakeup = 0;
   for ( i = 0; i < ctx->nclients; i++ )
     {
-      cli = ctx->clients[i];
+      cli = (struct sndio_client*)ctx->list.clients[i];
       if ( cli != NULL && cli != (struct sndio_client*)UINTPTR_MAX && cli->timer_active )
 	{
 	  if ( client_timer_event(cli) )
@@ -677,12 +747,12 @@ static int send_pkt(struct sndio_client *cli, size_t len, bool async)
     {
       ret = client_pollout(cli);
       if ( ret == 0 && cli->cstate == CLIENT_STATE_TXPKT )
-	ret = cbpoll_set_events(cli->cbctx, cli->cbidx, POLLOUT);
+	ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
       else
 	cli->cstate = CLIENT_STATE_IDLE;
     } else
     {
-      ret = cbpoll_set_events(cli->cbctx, cli->cbidx, POLLOUT);
+      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
     }
   return ret;
 }
@@ -1035,10 +1105,10 @@ static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
 static int amsg_setpar(struct sndio_client *cli)
 {
   int ret;
-  cbpoll_queue_deferred_work(cli->cbctx, cli->cbidx, 0, amsg_setpar_cb);
+  cbpoll_queue_deferred_work(cli->cbctx, cli->header.reserved_slot, 0, amsg_setpar_cb);
   ret = send_none(cli, 0);
   cli->cstate = CLIENT_STATE_BUSY;
-  cbpoll_set_events(cli->cbctx, cli->cbidx, 0);
+  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, 0);
   return ret;
 }
 
@@ -1132,7 +1202,7 @@ static int amsg_stop(struct sndio_client *cli)
 	{
 	  client_trigger(cli);
 	  cli->draining = true;
-	  cbpoll_set_events(cli->cbctx, cli->cbidx, 0);
+	  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, 0);
 	  ret = send_none(cli, 0);
 	} 
     }
@@ -1172,7 +1242,7 @@ static int amsg_data(struct sndio_client *cli)
   cli->p_len = 0;
   cli->p_offset = 0;
   cli->cstate = CLIENT_STATE_RXDATA;
-  cbpoll_set_events(cli->cbctx, cli->cbidx, POLLIN);
+  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
   return client_wxfer(cli);
 }
 
@@ -1319,7 +1389,7 @@ int client_pollin(struct sndio_client *cli)
     case CLIENT_STATE_TXPKT:
       //This may rarely happen if a packet was started during a timer event and
       //there was a POLLIN event at the same time.
-      ret = cbpoll_set_events(cli->cbctx, cli->cbidx, POLLOUT);
+      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
       break;
     }
   return ret;
@@ -1355,7 +1425,7 @@ int client_pollout(struct sndio_client *cli)
 	      
 	      ret = client_buildmsg(cli, true);
 	      if ( cli->cstate == CLIENT_STATE_IDLE )
-		  ret = cbpoll_set_events(cli->cbctx, cli->cbidx, POLLIN);
+		  ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
 	    } else
 	    {
 	      ret = 0;
@@ -1363,7 +1433,7 @@ int client_pollout(struct sndio_client *cli)
 	}
     } else
     {
-      ret = cbpoll_set_events(cli->cbctx, cli->cbidx, POLLIN);
+      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
     }
   
   return ret;
@@ -1391,48 +1461,8 @@ static int client_fd_event(void *data,
 
 
 
-static void free_client_cb(struct cbpoll_ctx *ctx,
-			   struct cbpoll_msg *wrk,
-			   void *data)
-{
-  struct sndio_client *cli = (struct sndio_client*)(intptr_t)wrk->arg;
-  if ( cli->pclient )
-    dspd_rclient_delete(cli->pclient);
-  if ( cli->cclient != NULL && cli->cclient != cli->pclient )
-    dspd_rclient_delete(cli->cclient);
-  free(cli);
-}
 
 
-static bool client_destructor(void *data,
-			      struct cbpoll_ctx *context,
-			      int index,
-			      int fd)
-{
-  ssize_t i;
-  struct sndio_client *cli = data;
-  struct cbpoll_msg wrk = { .len = sizeof(struct cbpoll_msg) };
-  for ( i = 0; i < MAX_CLIENTS; i++ )
-    {
-      if ( cli->server->clients[i] == cli )
-	{
-	  cli->server->clients[i] = NULL;
-	  if ( i == (cli->server->nclients-1) )
-	    cli->server->nclients = i;
-	}
-    }
-  if ( cli->pstate > 0 )
-    cli->server->sessrefs--;
-  shutdown(fd, SHUT_RDWR);
-  wrk.index = cli->server->cbidx;
-  wrk.msg = 0;
-  wrk.arg = (intptr_t)cli;
-  wrk.fd = cli->server->fd;
-  wrk.callback = free_client_cb;
-  cbpoll_queue_work(context, &wrk);
-
-  return true;
-}
 
 static int client_pipe_event(void *data, 
 			     struct cbpoll_ctx *context,
@@ -1464,125 +1494,19 @@ static const struct cbpoll_fd_ops sndio_client_ops = {
 
 
 
-static int listen_pipe_event(void *data, 
-			     struct cbpoll_ctx *context,
-			     int index,
-			     int fd,
-			     const struct cbpoll_msg *event)
+static bool server_destructor(void *data,
+			      struct cbpoll_ctx *context,
+			      int index,
+			      int fd)
 {
-  struct sndio_ctx *ctx = data;
-  struct sndio_client *cli;
-  int ret;
-  switch(event->msg)
-    {
-    case SERVER_MSG_ADDCLI:
-      cli = (struct sndio_client*)(uintptr_t)event->arg;
-      ret = cbpoll_add_fd(&ctx->cbctx, cli->fd, EPOLLIN, &sndio_client_ops, cli);
-      if ( ret < 0 )
-	{
-	  ctx->clients[cli->sio_idx] = NULL;
-	  close(cli->fd);
-	  free(cli);
-	} else
-	{
-	  cli->cbidx = ret;
-	  if ( cli->sio_idx >= ctx->nclients )
-	    ctx->nclients = cli->sio_idx + 1;
-	  ctx->clients[cli->sio_idx] = cli;
-	}
-      break;
-    case SERVER_MSG_DELCLI:
-      ctx->clients[event->arg] = NULL;
-      break;
-    }
-  return 0;
+  fprintf(stderr, "Closing sndio socket %d\n", fd);
+  return true;
 }
-
-static void create_client_cb(struct cbpoll_ctx *ctx,
-			     struct cbpoll_msg *wrk,
-			     void *data)
-{
-  struct sndio_ctx *srv = data;
-  struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));
-  int32_t newfd = wrk->arg & 0xFFFFFFFF;
-  int32_t sio_idx = wrk->arg >> 32U;
-  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
-
-  evt.fd = wrk->fd;
-  evt.index = wrk->index;
-
-  if ( cli != NULL )
-    {
-      cli->cbctx = ctx;
-      cli->server = srv;
-      cli->fd = newfd;
-      cli->sio_idx = sio_idx;
-      evt.msg = SERVER_MSG_ADDCLI;
-      evt.arg = (uintptr_t)cli;
-    } else
-    {
-      evt.msg = SERVER_MSG_DELCLI;
-      evt.arg = sio_idx;
-      close(newfd);
-      newfd = -1;
-    }
-  if ( cbpoll_send_event(ctx, &evt) < 0 )
-    {
-      close(newfd);
-      free(cli);
-      srv->clients[sio_idx] = NULL;
-    }
-  //This isn't done automatically because the reply is not CBPOLL_PIPE_MSG_DEFERRED_WORK
-  cbpoll_unref(ctx, srv->cbidx);
-}
-
-
-static int listen_fd_event(void *data, 
-			   struct cbpoll_ctx *context,
-			   int index,
-			   int fd,
-			   int revents)
-{
-
-  union sockaddr_gen addr;
-  socklen_t len = sizeof(addr);
-  struct sndio_ctx *ctx = data;
-  ssize_t slot = -1;
-  ssize_t i;
-  uint64_t arg;
-  int newfd = accept4(fd, (struct sockaddr*)&addr, &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-  if ( newfd >= 0 )
-    {
-      for ( i = 0; i < MAX_CLIENTS; i++ )
-	{
-	  if ( ctx->clients[i] == NULL && ctx->clients[i] != (struct sndio_client*)UINTPTR_MAX )
-	    {
-	      slot = i;
-	      break;
-	    }
-	}
-      if ( slot >= 0 )
-	{
-	  ctx->clients[slot] = (struct sndio_client*)UINTPTR_MAX;
-	  arg = slot;
-	  arg <<= 32U;
-	  arg |= newfd;
-	  cbpoll_queue_deferred_work(context, index, arg, create_client_cb);
-	} else if ( slot == -1 )
-	{
-	  close(newfd);
-	}
-    }
-  return 0;
-}
-
-
 
 
 static const struct cbpoll_fd_ops sndio_listen_ops = {
-  .fd_event = listen_fd_event,
-  .pipe_event = listen_pipe_event,
-  .destructor = NULL,
+  .fd_event = cbpoll_listening_fd_event_cb,
+  .destructor = server_destructor,
 };
 
 static void set_cur_vol(struct sndio_ctx *ctx, uint32_t index, uint32_t value)
@@ -1590,7 +1514,7 @@ static void set_cur_vol(struct sndio_ctx *ctx, uint32_t index, uint32_t value)
   struct sndio_client *sc;
   if ( ctx->cli_vol_elem != index || ctx->cli_vol_ptr == NULL || ctx->cli_vol_index < 0 )
     return;
-  sc = ctx->clients[ctx->cli_vol_index];
+  sc = (struct sndio_client*)ctx->list.clients[ctx->cli_vol_index];
   if ( sc != ctx->cli_vol_ptr )
     return;
   if ( sc->vol_pending == false || sc->vol_elem != index )
@@ -1608,10 +1532,10 @@ static void start_next_vol(struct dspd_ctl_client *cli, struct sndio_ctx *ctx)
   size_t i, idx;
   struct sndio_client *sc;
   int32_t ret;
-  for ( i = 1; i <= ARRAY_SIZE(ctx->clients); i++ )
+  for ( i = 1; i <= ctx->list.max_clients; i++ )
     {
       idx = i + ctx->cli_vol_pos;
-      sc = ctx->clients[idx % ARRAY_SIZE(ctx->clients)];
+      sc = (struct sndio_client*)ctx->list.clients[idx % ctx->list.max_clients];
       if ( sc == NULL || sc == (struct sndio_client*)UINTPTR_MAX )
 	continue;
       if ( sc->vol_update == true && sc->vol_elem >= 0 )
@@ -1661,7 +1585,7 @@ static void ctl_change_cb(struct dspd_ctl_client *cli, void *arg, int32_t err, u
 	  ssize_t idx = server->cli_map[stream];
 	  if ( idx >= 0 )
 	    {
-	      sc = server->clients[idx];
+	      sc = (struct sndio_client*)server->list.clients[idx];
 	      if ( sc != NULL && sc != (struct sndio_client*)UINTPTR_MAX )
 		{
 		  if ( sc->pclient != NULL && sc->pclient_idx == stream )
@@ -1881,21 +1805,40 @@ static const struct cbpoll_fd_ops sndio_timer_ops = {
   .destructor = timer_destructor,
 };
 
+
+
+
 int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 {
   char sockpath[PATH_MAX] = { 0 };
   int32_t uid;
   mode_t mask;
-  size_t fd_count = 0, len;
+  size_t fd_count = 0, len, offset;
   struct stat fi;
   char *tmp = NULL;
   int32_t ret = 0;
   char *saveptr = NULL;
   char *tok;
   int fd, port;
-  struct sndio_ctx *sctx = calloc(1, sizeof(struct sndio_ctx));
+  len = sizeof(struct sndio_ctx);
+  if ( len % sizeof(uintptr_t) )
+    {
+      offset = sizeof(uintptr_t) - (len % sizeof(uintptr_t));
+      len += sizeof(uintptr_t);
+    } else
+    {
+      offset = 0;
+    }
+  len += MAX_CLIENTS * sizeof(struct cbpoll_client_hdr*);
+
+  struct sndio_ctx *sctx = calloc(1, len);
   if ( ! sctx )
     return -ENOMEM;
+  sctx->list.clients = (struct cbpoll_client_hdr**)(((char*)sctx) + sizeof(struct sndio_ctx) + offset);
+  sctx->list.max_clients = MAX_CLIENTS;
+  sctx->list.flags = CBPOLL_CLIENT_LIST_LISTENFD | CBPOLL_CLIENT_LIST_AUTO_POLLIN;
+  sctx->list.ops = &client_list_ops;
+  sctx->list.fd_ops = &sndio_client_ops;
   sctx->fd = -1;
   sctx->tmr.timer.fd = -1;
   sctx->cbidx = -1;
@@ -1973,6 +1916,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	  ret = -errno;
 	  goto out;
 	}
+
       if ( params->context )
 	{
 	  if ( params->context->uid > 0 && 
@@ -1987,7 +1931,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	{
 	  chmod(sockpath, 0777);
 	}
-      sctx->cbidx = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN, &sndio_listen_ops, sctx);
+      sctx->cbidx = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
       if ( sctx->cbidx < 0 )
 	{
 	  ret = -errno;
@@ -2023,7 +1967,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	      fd = dspd_tcp_sock_create(sockpath, SOCK_CLOEXEC | SOCK_NONBLOCK);
 	      if ( fd >= 0 )
 		{
-		  ret = cbpoll_add_fd(&sctx->cbctx, fd, EPOLLIN, &sndio_listen_ops, sctx);
+		  ret = cbpoll_add_fd(&sctx->cbctx, fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
 		  if ( ret < 0 )
 		    goto out;
 		  sctx->tcp_fds[sctx->tcp_nfds] = fd;
@@ -2087,7 +2031,10 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
  out:
   free(tmp);
   if ( ret < 0 )
-    dspd_sndio_delete(sctx);
+    {
+      dspd_sndio_delete(sctx);
+      fprintf(stderr, "Error %d while creating sndio server", ret);
+    }
   return ret;
 }
 
@@ -2103,13 +2050,21 @@ int32_t dspd_sndio_start(struct sndio_ctx *ctx)
     {
       ret = listen(ctx->fd, SOMAXCONN);
       if ( ret < 0 )
-	return -errno;
+	{
+	  ret = -errno;
+	  perror("listen");
+	  return ret;
+	}
     }
   for ( i = 0; i < ctx->tcp_nfds; i++ )
     {
       ret = listen(ctx->tcp_fds[i], SOMAXCONN);
       if ( ret < 0 )
-	return -errno;
+	{
+	  ret = -errno;
+	  perror("listen");
+	  return ret;
+	}
     }
   ret = cbpoll_start(&ctx->cbctx);
   if ( ret == 0 )

@@ -12,7 +12,7 @@
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
 #include "../lib/cbpoll.h"
-
+#define TEST_COUNT 1
 static void test_aio_ops(struct dspd_aio_ctx *ctx)
 {
   char inbuf[512], outbuf[512];
@@ -47,7 +47,7 @@ static void test_aio_ops(struct dspd_aio_ctx *ctx)
 			
 }
 
-static void *aiotest_thread(void *p)
+static void aio_test(void *p)
 {
   struct dspd_aio_ctx *ctx;
   int32_t ret;
@@ -68,7 +68,7 @@ static void *aiotest_thread(void *p)
   pte.cond = &cond;
   pte.lock = &lock;
 
-  sleep(1);
+  
   dspd_log(0, "Testing async io...");
 
   dspd_log(0, "Testing pthread io");
@@ -112,6 +112,18 @@ static void *aiotest_thread(void *p)
   dspd_aio_delete(ctx);
   close(efd.fd);
 
+  
+  return;
+}
+
+static void *aiotest_thread(void *p)
+{
+  size_t i;
+  for ( i = 0; i < TEST_COUNT; i++ )
+    {
+      dspd_log(0, "Test %ld of %ld", (long)i, (long)TEST_COUNT);
+      aio_test(p);
+    }
   dspd_log(0, "Test complete");
   return NULL;
 }
