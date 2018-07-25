@@ -29,6 +29,15 @@
 #include "sslib.h"
 #include "cbpoll.h"
 
+
+#define CBTIMER_DEBUG
+
+#ifdef CBTIMER_DEBUG
+#define CBTIMER_ASSERT DSPD_ASSERT
+#else
+#define CBTIMER_ASSERT(...)
+#endif
+
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index);
 static int eventfd_event(void *data, 
 			 struct cbpoll_ctx *context,
@@ -48,7 +57,7 @@ static bool eventfd_destructor(void *data,
 			       struct cbpoll_ctx *context,
 			       int index,
 			       int fd);
-static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout);
+static dspd_time_t cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout);
 
 static int32_t find_fdata(struct cbpoll_ctx *ctx, int fd)
 {
@@ -854,8 +863,6 @@ static void destroy(struct cbpoll_ctx *ctx)
   ctx->aio_list = NULL;
   free(ctx->cbtimer_objects);
   ctx->cbtimer_objects = NULL;
-  free(ctx->pending_cbtimer_list);
-  ctx->pending_cbtimer_list = NULL;
   free(ctx->cbtimer_dispatch_list);
   ctx->cbtimer_dispatch_list = NULL;
 }
@@ -963,12 +970,9 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
     }
   if ( flags & CBPOLL_FLAG_CBTIMER )
     {
-      ctx->pending_cbtimer_list = calloc(ctx->max_fd, sizeof(ctx->pending_cbtimer_list[0]));
       ctx->cbtimer_objects = calloc(ctx->max_fd, sizeof(ctx->cbtimer_objects[0]));
       ctx->cbtimer_dispatch_list = calloc(ctx->max_fd, sizeof(ctx->cbtimer_dispatch_list[0]));
-      if ( ! (ctx->pending_cbtimer_list && 
-	      ctx->cbtimer_objects &&
-	      ctx->cbtimer_dispatch_list) )
+      if ( ! (ctx->cbtimer_objects && ctx->cbtimer_dispatch_list) )
 	{
 	  ret = -ENOMEM;
 	  goto out;
@@ -1132,6 +1136,7 @@ static int timer_fd_event(void *data,
   size_t i;
   struct cbpoll_fd *f;
   dspd_time_t t, next, newtimeout = UINT64_MAX;
+  dspd_time_t new_cbtimeout = 0;
   ssize_t timer_index;
   if ( revents & POLLIN )
     {
@@ -1165,15 +1170,22 @@ static int timer_fd_event(void *data,
 	    }	    
 	}
       if ( context->pending_cbtimer_list )
-	cbtimer_dispatch(context, dspd_get_time());
+	{
+	  new_cbtimeout = cbtimer_dispatch(context, dspd_get_time());
+	  if ( new_cbtimeout > 0 && new_cbtimeout < newtimeout )
+	    newtimeout = new_cbtimeout;
+	}
       if ( newtimeout != context->next_timeout )
 	{
 	  //Timeout changed
 	  context->timer_idx = timer_index + 1;
-	  if ( timer_index < 0 )
-	    context->next_timeout = 0; //No more timeouts
-	  else
-	    context->next_timeout = newtimeout; //New timeout value
+	  if ( timer_index < 0 && context->pending_cbtimer_list == NULL )
+	    {
+	      context->next_timeout = 0; //No more timeouts
+	    } else
+	    {
+	      context->next_timeout = newtimeout; //New timeout value
+	    }
 	  //Timeout needs changed later.  Not now because the value could change
 	  //between now and the next epoll_wait().
 	  context->timeout_changed = true;
@@ -1457,46 +1469,91 @@ struct dspd_cbtimer *dspd_cbtimer_new(struct cbpoll_ctx *ctx,
   return ret;
 }
 
-void dspd_cbtimer_cancel(struct dspd_cbtimer *timer)
+static void cbtimer_unlink(struct dspd_cbtimer *timer)
 {
-  if ( timer->prev )
-    timer->prev->next = timer->next;
-  else if ( timer == timer->cbpoll->pending_cbtimer_list )
-    timer->cbpoll->pending_cbtimer_list = timer->next;
-  if ( timer->next )
-    timer->next->prev = timer->prev;
-  timer->timeout = 0;
-  timer->period = 0;
+  CBTIMER_ASSERT(timer != timer->next && timer != timer->prev);
+  if ( timer == timer->cbpoll->pending_cbtimer_list )
+    {
+      CBTIMER_ASSERT(timer->prev == NULL);
+      timer->cbpoll->pending_cbtimer_list = timer->next;
+      if ( timer->cbpoll->pending_cbtimer_list )
+	timer->cbpoll->pending_cbtimer_list->prev = NULL;
+    } else
+    {
+      if ( timer->prev )
+	timer->prev->next = timer->next;
+      if ( timer->next )
+	timer->next->prev = timer->prev;
+    }
   timer->next = NULL;
   timer->prev = NULL;
+#ifdef CBTIMER_DEBUG
+  struct dspd_cbtimer *t;
+  for ( t = timer->cbpoll->pending_cbtimer_list; t; t = t->next )
+    {
+      CBTIMER_ASSERT(timer != t);
+    }
+#endif
+}
+
+void dspd_cbtimer_cancel(struct dspd_cbtimer *timer)
+{
+  cbtimer_unlink(timer);
+  timer->timeout = 0;
+  timer->period = 0;
 }
 
 void dspd_cbtimer_delete(struct dspd_cbtimer *timer)
 {
+  CBTIMER_ASSERT(timer->next != timer);
+  CBTIMER_ASSERT(timer->prev != timer);
   dspd_cbtimer_cancel(timer);
   memset(timer, 0, sizeof(*timer));
 }
 
 void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time_t period)
 {
-  struct dspd_cbtimer *t, **prev = &timer->cbpoll->pending_cbtimer_list;
-  timer->next = NULL;
-  timer->prev = NULL;
+  struct dspd_cbtimer *t;
+  cbtimer_unlink(timer);
   timer->timeout = timeout;
   timer->period = period;
-  for ( t = timer->cbpoll->pending_cbtimer_list; t; t = t->next )
+  if ( timer->cbpoll->pending_cbtimer_list == NULL )
     {
-      if ( t->timeout >= timer->timeout )
+      timer->cbpoll->pending_cbtimer_list = timer;
+      CBTIMER_ASSERT(timer->prev == NULL && timer->next == NULL);
+    } else
+    {
+      for ( t = timer->cbpoll->pending_cbtimer_list; t; t = t->next )
 	{
-	  timer->next = t;
-	  timer->prev = t->prev;
-	  t->prev = timer;
-	  break;
+	  CBTIMER_ASSERT(t != timer);
+	  if ( t->timeout >= timer->timeout )
+	    {
+	      if ( t == timer->cbpoll->pending_cbtimer_list )
+		{
+		  CBTIMER_ASSERT(t->prev == NULL);
+		  CBTIMER_ASSERT(timer->prev == NULL);
+		  timer->cbpoll->pending_cbtimer_list = timer;
+		  timer->next = t;
+		  t->prev = timer;
+		} else
+		{
+		  CBTIMER_ASSERT(t->prev != NULL);
+		  t->prev->next = timer;
+		  timer->prev = t->prev;
+		  timer->next = t;
+		  t->prev = timer;
+		  
+		}
+	      break;
+	    } else if ( t->next == NULL )
+	    {
+	      t->next = timer;
+	      timer->prev = t;
+	      break;
+	    }
 	}
-      prev = &t->next;
     }
-  *prev = timer;
-  if ( timer->cbpoll->next_timeout < timeout || timer->cbpoll->next_timeout == 0 )
+  if ( timer->cbpoll->next_timeout > timeout || timer->cbpoll->next_timeout == 0 )
     {
       timer->cbpoll->next_timeout = timeout;
       timer->cbpoll->timeout_changed = true;
@@ -1505,17 +1562,12 @@ void dspd_cbtimer_set(struct dspd_cbtimer *timer, dspd_time_t timeout, dspd_time
 
 void dspd_cbtimer_fire(struct dspd_cbtimer *timer)
 {
-  timer->timeout = timer->cbpoll->last_time;
-  timer->cbpoll->next_timeout = timer->cbpoll->last_time;
-  timer->cbpoll->timeout_changed = true;
-  if ( timer->cbpoll->pending_cbtimer_list == timer )
-    return;
-  if ( timer->prev )
-    timer->prev->next = timer->next;
-  if ( timer->next )
-    timer->next->prev = timer->prev;
-  timer->next = timer->cbpoll->pending_cbtimer_list;
-  timer->cbpoll->pending_cbtimer_list = timer;
+  dspd_time_t t;
+  if ( timer->cbpoll->last_time == 0 )
+    t = dspd_get_time();
+  else
+    t = timer->cbpoll->last_time;
+  dspd_cbtimer_set(timer, t, timer->period);
 }
 
 dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t)
@@ -1523,32 +1575,58 @@ dspd_time_t dspd_cbtimer_get_timeout(struct dspd_cbtimer *t)
   return t->timeout;
 }
 
-static void cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout)
+static dspd_time_t cbtimer_dispatch(struct cbpoll_ctx *ctx, dspd_time_t timeout)
 {
   size_t count = 0, i;
   struct dspd_cbtimer *t;
+  dspd_time_t diff, n, next_timeout = 0;
   ctx->last_time = timeout;
   for ( t = ctx->pending_cbtimer_list; t; t = t->next )
     {
       if ( t->timeout <= timeout )
 	{
-	  DSPD_ASSERT(t->callback != NULL);
+	  CBTIMER_ASSERT(t->callback != NULL);
 	  ctx->cbtimer_dispatch_list[count] = t;
 	  count++;
 	} else
 	{
+	  next_timeout = t->timeout;
 	  break;
 	}
     }
+
   for ( i = 0; i < count; i++ )
     {
       t = ctx->cbtimer_dispatch_list[i];
+      cbtimer_unlink(t); //Take it out of the list running timers
+
+      //If the callback returns true then it is either already rescheduled or will be
+      //rescheduled.  If the callback returns false then the timer is either already
+      //stopped or will be stopped.
       if ( t->callback(ctx, t, t->arg, timeout) )
 	{
-	  t->timeout += t->period;
-	  dspd_cbtimer_set(t, t->timeout, t->period);
+	  //If the timer was not already set, then set it again.
+	  if ( t->prev == NULL && t->next == NULL && t != ctx->pending_cbtimer_list )
+	    {
+	      if ( t->period )
+		{
+		  diff = ctx->last_time - t->timeout;
+		  n = diff / t->period;
+		  if ( diff % t->period )
+		    n++;
+		  t->timeout += t->period * n;
+		}
+	      dspd_cbtimer_set(t, t->timeout, t->period);
+	    }
+	  if ( t->timeout > 0 && (next_timeout > t->timeout || next_timeout == 0) )
+	    next_timeout = t->timeout;
+	} else
+	{
+	  //timer is done (typical for oneshot timers)
+	  dspd_cbtimer_cancel(t);
 	}
     }
+  return next_timeout;
 }
 
 
@@ -1612,12 +1690,8 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
     {
       if ( ! hdr->list->ops->success(ctx, hdr) )
 	{
-	  if ( hdr->list->fd_ops->destructor(hdr, ctx, hdr->reserved_slot, hdr->fd) )
-	    close(hdr->fd);
-	  evt->stream = hdr->list_index;
-	  evt->arg2 = hdr->reserved_slot;
-	  evt->index = fdi;
-	  return;
+	  if ( hdr->reserved_slot >= 0 )
+	    cbpoll_unref(ctx, hdr->reserved_slot);
 	}
     }
   if ( hdr->list->flags & CBPOLL_CLIENT_LIST_LISTENFD )

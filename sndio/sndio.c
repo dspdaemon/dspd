@@ -44,6 +44,7 @@
 #include "defs.h"
 #include "dspd_sndio.h"
 
+#define USE_CBTIMER
 
 #define MAX_CLIENTS 32
 
@@ -72,10 +73,8 @@ struct sndio_client {
   int32_t pclient_idx;
   struct cbpoll_ctx  *cbctx;
   struct sndio_ctx   *server;
-  bool                timer_active;
-  dspd_time_t         next_wakeup;
-  uint32_t            periodic_wakeup;
-  bool                next_wakeup_expired;
+  struct dspd_cbtimer *timer;
+
 
   //No work to do (waiting on POLLIN)
 #define CLIENT_STATE_IDLE   0
@@ -153,14 +152,6 @@ struct sndio_client {
 #define SERVER_MSG_ADDCLI (CBPOLL_PIPE_MSG_USER+1)
 #define SERVER_MSG_DELCLI (CBPOLL_PIPE_MSG_USER+2)
 
-struct sndio_timer {
-  struct dspd_timer timer;
-  dspd_time_t       next_wakeup;
-  uint32_t          periodic_wakeup;
-  bool              active;
-  bool              reset;
-  bool              changed;
-};
 
 
 struct sndio_ctx {
@@ -173,7 +164,7 @@ struct sndio_ctx {
   uint8_t cookie[AMSG_COOKIELEN];
   size_t  sessrefs;
 
-  struct sndio_timer tmr;
+
   void             *ctx;
   char             *server_addr;
   int              *tcp_fds;
@@ -210,6 +201,10 @@ static int send_pkt(struct sndio_client *cli, size_t len, bool async);
 int client_check_buffers(struct sndio_client *cli);
 int client_buildmsg(struct sndio_client *cli, bool async);
 static int send_ack(struct sndio_client *cli);
+static bool client_cbtimer_event(struct cbpoll_ctx *ctx, 
+				 struct dspd_cbtimer *timer,
+				 void *arg, 
+				 dspd_time_t timeout);
 
 
 static struct cbpoll_client_hdr *client_create(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, void *arg)
@@ -240,9 +235,15 @@ static void client_async_destructor(struct cbpoll_ctx *ctx, struct cbpoll_client
 static bool client_success(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
 {
   struct sndio_client *cli = (struct sndio_client*)hdr;
-  if ( hdr->list_index >= 0 && hdr->list_index >= cli->server->nclients )
-    cli->server->nclients = hdr->list_index + 1UL;
-  return true;
+  bool ret = false;
+  cli->timer = dspd_cbtimer_new(ctx, client_cbtimer_event, cli);
+  if ( cli->timer )
+    {
+      if ( hdr->list_index >= 0 && hdr->list_index >= cli->server->nclients )
+	cli->server->nclients = hdr->list_index + 1UL;
+      ret = true;
+    }
+  return ret;
 }
 
 struct cbpoll_client_ops client_list_ops = {
@@ -272,19 +273,27 @@ static bool client_destructor(void *data,
 	}
       cli->server->nclients = (size_t)(c + 1L);
     }
+  if ( cli->timer )
+    {
+      dspd_cbtimer_delete(cli->timer);
+      cli->timer = NULL;
+    }
   shutdown(fd, SHUT_RDWR);
   return cbpoll_async_destructor_cb(data, context, index, fd);
 }
 
 
 
-static bool client_timer_event(struct sndio_client *cli)
+static bool client_cbtimer_event(struct cbpoll_ctx *ctx, 
+				 struct dspd_cbtimer *timer,
+				 void *arg, 
+				 dspd_time_t timeout)
 {
+  struct sndio_client *cli = arg;
   int32_t ret, s;
   size_t br;
   if ( cli->draining )
     {
-     
       ret = dspd_rclient_avail(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
       if ( ret == -EPIPE )
 	{
@@ -353,86 +362,23 @@ static int client_xrun(struct sndio_client *cli)
   return ret;
 }
 
-static void loop_sleep(void *arg, struct cbpoll_ctx *context)
-{
-  struct sndio_ctx *ctx = arg;
-  uint64_t val;
-  if ( ctx->tmr.reset )
-    {
-      read(ctx->tmr.timer.fd, &val, sizeof(val));
-      ctx->tmr.reset = false;
-    } else if ( ctx->tmr.changed )
-    {
-      ctx->tmr.changed = false;
-      dspd_timer_set(&ctx->tmr.timer, ctx->tmr.next_wakeup, ctx->tmr.periodic_wakeup);
-    }
-}
 
 static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint32_t *per)
 {
+  dspd_time_t n = 0, p = 0;
   if ( next )
-    cli->next_wakeup = *next;
+    n = *next;
   if ( per )
-    cli->periodic_wakeup = *per;
- 
-  if ( cli->next_wakeup > 0 && (cli->server->tmr.next_wakeup > cli->next_wakeup || cli->server->tmr.next_wakeup == 0) )
-    {
-      cli->server->tmr.next_wakeup = cli->next_wakeup;
-      cli->server->tmr.changed = true;
-    }
-  if ( cli->periodic_wakeup > 0 && (cli->server->tmr.periodic_wakeup > cli->periodic_wakeup || cli->server->tmr.periodic_wakeup == 0))
-    {
-      cli->server->tmr.periodic_wakeup = cli->periodic_wakeup;
-      if ( cli->server->tmr.next_wakeup == 0 )
-	cli->server->tmr.next_wakeup = 1;
-      cli->server->tmr.changed = true;
-    }
-  cli->timer_active = ( cli->periodic_wakeup || cli->next_wakeup );
-}
-
-
-
-
-static int timer_fd_event(void *data, 
-			  struct cbpoll_ctx *context,
-			  int index,
-			  int fd,
-			  int revents)
-{
-  struct sndio_ctx *ctx = data;
-  size_t i;
-  struct sndio_client *cli;
-  dspd_time_t w = ctx->tmr.next_wakeup;
-  uint32_t p = ctx->tmr.periodic_wakeup;
-  ctx->tmr.next_wakeup = 0;
-  ctx->tmr.periodic_wakeup = 0;
-  for ( i = 0; i < ctx->nclients; i++ )
-    {
-      cli = (struct sndio_client*)ctx->list.clients[i];
-      if ( cli != NULL && cli != (struct sndio_client*)UINTPTR_MAX && cli->timer_active )
-	{
-	  if ( client_timer_event(cli) )
-	    {
-	      if ( cli->next_wakeup > w && ctx->tmr.next_wakeup > cli->next_wakeup && cli->next_wakeup != 0 )
-		ctx->tmr.next_wakeup = cli->next_wakeup;
-	      else if ( w > cli->next_wakeup )
-		cli->next_wakeup = 0;
-	      if ( ctx->tmr.periodic_wakeup < cli->periodic_wakeup && cli->periodic_wakeup != 0 )
-		ctx->tmr.periodic_wakeup = cli->periodic_wakeup;
-	    }
-	}
-    }
-  if ( (ctx->tmr.next_wakeup == w && ctx->tmr.periodic_wakeup == p) ||
-       (ctx->tmr.next_wakeup == 0 && ctx->tmr.periodic_wakeup == p) )
-    ctx->tmr.reset = true;
-  else if ( ctx->tmr.next_wakeup != w || ctx->tmr.periodic_wakeup != p )
-    ctx->tmr.changed = true;
+    p = *per;
+  if ( n == 0 && p == 0 )
+    dspd_cbtimer_cancel(cli->timer);
   else
-    ctx->tmr.changed = false;
-  if ( ctx->tmr.changed && ctx->tmr.periodic_wakeup > 0 && ctx->tmr.next_wakeup == 0 )
-    ctx->tmr.next_wakeup = 1;
-  return 0;
+    dspd_cbtimer_set(cli->timer, n, p);
 }
+
+
+
+
 
 
 int client_check_buffers(struct sndio_client *cli)
@@ -1789,21 +1735,7 @@ static int par2cli(const struct dspd_device_stat *info,
   }*/
 
 
-static bool timer_destructor(void *data,
-			     struct cbpoll_ctx *context,
-			     int index,
-			     int fd)
-{
-  struct sndio_ctx *ctx = data;
-  dspd_timer_destroy(&ctx->tmr.timer);
-  return false; //Do not close (already done)
-}
 
-static const struct cbpoll_fd_ops sndio_timer_ops = {
-  .fd_event = timer_fd_event,
-  .pipe_event = NULL,
-  .destructor = timer_destructor,
-};
 
 
 
@@ -1840,7 +1772,6 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   sctx->list.ops = &client_list_ops;
   sctx->list.fd_ops = &sndio_client_ops;
   sctx->fd = -1;
-  sctx->tmr.timer.fd = -1;
   sctx->cbidx = -1;
   sctx->cli_vol_index = -1;
   if ( params->server_addr )
@@ -1854,24 +1785,18 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
     }
   sctx->ctx = params->context;
     
-  ret = dspd_timer_init(&sctx->tmr.timer);
-  if ( ret < 0 )
-    goto out;
 
   if ( params->net_addrs )
     {
       for ( tok = strchr(params->net_addrs, ','); tok; tok = strchr(&tok[1], ',') )
 	fd_count++;
     }
-  ret = cbpoll_init(&sctx->cbctx, 0, MAX_CLIENTS+3+fd_count);
+  ret = cbpoll_init(&sctx->cbctx, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_CBTIMER, MAX_CLIENTS+3+fd_count);
   if ( ret < 0 )
     goto out;
 
-  ret = cbpoll_add_fd(&sctx->cbctx, sctx->tmr.timer.fd, EPOLLIN, &sndio_timer_ops, sctx);
-  if ( ret < 0 )
-    goto out;
 
-  cbpoll_set_callbacks(&sctx->cbctx, sctx, loop_sleep, NULL);
+
   if ( ! params->disable_unix_socket )
     {
       uid = getuid();
@@ -2102,7 +2027,6 @@ void dspd_sndio_delete(struct sndio_ctx *ctx)
   free(ctx->server_addr);
   if ( ! ctx->started )
     {
-      dspd_timer_destroy(&ctx->tmr.timer);
       for ( i = 0; i < ctx->tcp_nfds; i++ )
 	close(ctx->tcp_fds[i]);
     }
