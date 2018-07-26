@@ -194,12 +194,10 @@ static int par2cli(const struct dspd_device_stat *info,
 /*static int cli2par(int mode,
 		   const struct dspd_cli_params *clp,
 		   struct sio_par *par);*/
-int client_pollout(struct sndio_client *cli);
-int client_check_io(struct sndio_client *cli);
-int client_check_io_fast(struct sndio_client *cli, dspd_time_t *nextwakeup);
+static int client_pollout(struct sndio_client *cli);
 static int send_pkt(struct sndio_client *cli, size_t len, bool async);
-int client_check_buffers(struct sndio_client *cli);
-int client_buildmsg(struct sndio_client *cli, bool async);
+static int client_check_buffers(struct sndio_client *cli);
+static int client_buildmsg(struct sndio_client *cli, bool async);
 static int send_ack(struct sndio_client *cli);
 static bool client_cbtimer_event(struct cbpoll_ctx *ctx, 
 				 struct dspd_cbtimer *timer,
@@ -341,22 +339,37 @@ static void client_reset(struct sndio_client *cli)
    
 }
 
-static int client_xrun(struct sndio_client *cli)
+static int client_xrun(struct sndio_client *cli, int32_t sbits)
 {
   int ret = 0;
+  uint32_t pdelta = 0, cdelta = 0;
   if ( cli->running == true && cli->draining == false )
     {
       if ( cli->xrun_policy == SIO_ERROR )
 	{
 	  shutdown(cli->fd, SHUT_RDWR);
 	  ret = -1;
-	} else if ( cli->xrun_policy == SIO_SYNC )
+	}/* else if ( cli->xrun_policy == SIO_SYNC )
 	{
 	  //TODO: Implement this
-	} else
+	  }*/ else
 	{
-	  if ( cli->write_window == 0 && cli->pclient != NULL )
-	    cli->flow_control_pending = cli->pparams.bufsize - cli->pparams.fragsize;
+	  //Send pointer movements and flow control
+	  if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
+	    {
+	      pdelta = cli->last_delay; //all data was consumed
+	      cli->last_delay = 0;
+	      cli->hw_ptr += pdelta;
+	      //If we still have a write window then there is no need to ask for more data.
+	      if ( cli->write_window == 0 && cli->pclient != NULL )
+		cli->flow_control_pending = cli->pparams.bufsize - cli->pparams.fragsize;
+	    }
+	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
+	    {
+	      cdelta = cli->cparams.bufsize - cli->last_fill;
+	      cli->last_fill = cli->cparams.bufsize; //buffer is full
+	    }
+	  cli->delta += MAX(pdelta, cdelta);
 	}
     }
   return ret;
@@ -381,7 +394,7 @@ static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint3
 
 
 
-int client_check_buffers(struct sndio_client *cli)
+static int client_check_buffers(struct sndio_client *cli)
 {
   int ret = 0;
   uint32_t avail_min = 1;
@@ -404,13 +417,13 @@ int client_check_buffers(struct sndio_client *cli)
 		{
 	
 		  if ( ret == -EPIPE )
-		    ret = client_xrun(cli);
+		    ret = client_xrun(cli, DSPD_PCM_SBIT_PLAYBACK);
 		    
 		}
 	    } else if ( ret < 0 )
 	    {
 	      if ( ret == -EPIPE )
-		ret = client_xrun(cli);
+		ret = client_xrun(cli, DSPD_PCM_SBIT_PLAYBACK);
 	      
 	    } else
 	    {
@@ -463,12 +476,12 @@ int client_check_buffers(struct sndio_client *cli)
 	      if ( ret < 0 )
 		{
 		  if ( ret == -EPIPE )
-		    ret = client_xrun(cli);
+		    ret = client_xrun(cli, DSPD_PCM_SBIT_CAPTURE);
 		}
 	    } else if ( ret < 0 )
 	    {
 	      if ( ret == -EPIPE )
-		ret = client_xrun(cli);
+		ret = client_xrun(cli, DSPD_PCM_SBIT_CAPTURE);
 	    } else
 	    {
 	      if ( cli->cparams.fragsize > avail_min )
@@ -500,7 +513,7 @@ int client_check_buffers(struct sndio_client *cli)
   return ret;
 }
 
-int client_buildmsg(struct sndio_client *cli, bool async)
+static int client_buildmsg(struct sndio_client *cli, bool async)
 {
   int ret = 0;
   size_t max_read;
@@ -1181,7 +1194,7 @@ static int amsg_data(struct sndio_client *cli)
     return -1;
        
   if ( dspd_rclient_test_xrun(cli->pclient, cli->streams) )
-    if ( client_xrun(cli) < 0 )
+    if ( client_xrun(cli, cli->streams) < 0 )
       return -1;
   cli->p_max = size;
   cli->p_total = 0;
@@ -1341,7 +1354,7 @@ int client_pollin(struct sndio_client *cli)
   return ret;
 }
 
-int client_pollout(struct sndio_client *cli)
+static int client_pollout(struct sndio_client *cli)
 {
   int ret, e;
   const char *ptr;
