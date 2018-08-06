@@ -1085,12 +1085,12 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
 static void bind_complete_cb(void *context, struct dspd_async_op *op)
 {
   struct dspd_pcmcli *cli = op->data;
-  if ( op->error == 0 )
+  if ( op->error == 0 || op->error == -EALREADY )
     cli->state = PCMCLI_STATE_OPEN;
   complete_event(cli, op->error);
 }
 
-int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bindparams *params, bool autoclose, dspd_aio_ccb_t complete, void *data)
+int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bindparams *params, int32_t flags, dspd_aio_ccb_t complete, void *data)
 {
   int32_t ret = 0, bits, *s;
   if ( client->state > PCMCLI_STATE_INIT )
@@ -1123,7 +1123,7 @@ int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bi
 	    {
 	      client->conn = params->context;
 	      client->nfds = 0;
-	      client->close = autoclose;
+	      client->close = !!(flags & DSPD_PCMCLI_BIND_AUTOCLOSE);
 	      client->connfd = dspd_aio_get_iofd(client->conn);
 	      if ( client->connfd >= 0 )
 		{
@@ -1142,11 +1142,23 @@ int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bi
 	    }
 	  bits = 0;
 	  if ( client->playback.device_idx >= 0 && client->playback.stream_idx >= 0 )
-	    bits |= DSPD_PCM_SBIT_PLAYBACK;
+	    {
+	      bits |= DSPD_PCM_SBIT_PLAYBACK;
+	      if ( params->playback_info )
+		client->playback.info = *params->playback_info;
+	    }
 	  if ( client->capture.device_idx >= 0 && client->capture.stream_idx  >= 0 )
-	    bits |= DSPD_PCM_SBIT_CAPTURE;
+	    {
+	      bits |= DSPD_PCM_SBIT_CAPTURE;
+	      if ( params->capture_info )
+		client->capture.info = *params->capture_info;
+	    }
+	  
 	  //It isn't open until all streams are properly bound
-	  if ( bits == client->streams && client->conn != NULL )
+	  if ( flags & DSPD_PCMCLI_BIND_CONNECTED )
+	    {
+	      client->state = PCMCLI_STATE_OPEN;
+	    } else if ( bits == client->streams && client->conn != NULL && (flags & DSPD_PCMCLI_BIND_CONNECTED) == 0 )
 	    {
 	      s = (int32_t*)client->input;
 	      *s = -1;
@@ -1324,6 +1336,8 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
   if ( client->state > PCMCLI_STATE_PREPARED )
     return -EBADFD;
 
+  
+
   if ( (hwparams->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS) == 0 )
     {
       hwp = *hwparams;
@@ -1349,7 +1363,6 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 	  else
 	    hwparams = &out;
 	}
-
     }
   if ( ret == 0 && (client->streams & DSPD_PCM_SBIT_PLAYBACK) && playback_shm == NULL )
     {
@@ -1463,7 +1476,7 @@ int32_t dspd_pcmcli_get_hwparams(struct dspd_pcmcli *client, struct dspd_cli_par
 	  hwparams->channels |= p->channels & 0x0000FFFFU;
 	  hwparams->stream = DSPD_PCM_SBIT_FULLDUPLEX;
 	  hwparams->bufsize = MAX(c->bufsize, p->bufsize);
-	  hwparams->fragsize = MAX(c->fragsize, p->bufsize);
+	  hwparams->fragsize = MAX(c->fragsize, p->fragsize);
 	  hwparams->latency = MAX(c->latency, p->latency);
 	  if ( c->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS )
 	    hwparams->channels |= c->channels & 0x0000FFFFU;
@@ -1679,6 +1692,11 @@ void dspd_pcmcli_set_timer_callbacks(struct dspd_pcmcli *client, const struct ds
     }
 }
 
+size_t dspd_pcmcli_sizeof(void)
+{
+  return sizeof(struct dspd_pcmcli);
+}
+
 int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t flags)
 {
   int32_t ret = 0;
@@ -1761,7 +1779,8 @@ int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t fl
 void dspd_pcmcli_destroy(struct dspd_pcmcli *client)
 {
   dspd_pcmcli_unbind(client);
-  client->timer_ops->destroy(client->timer_arg);
+  if ( client->timer_ops )
+    client->timer_ops->destroy(client->timer_arg);
   if ( client->streams & DSPD_PCM_SBIT_PLAYBACK )
     {
       dspd_pcmcli_stream_destroy(&client->playback.stream); 
@@ -2120,7 +2139,7 @@ int32_t dspd_pcmcli_open_device(struct dspd_pcmcli *client,
 			params.playback_stream = o >> 32U;
 		      if ( client->streams & DSPD_PCM_SBIT_CAPTURE )
 			params.capture_stream = o & 0xFFFFFFFFU;
-		      ret = dspd_pcmcli_bind(client, &params, true, NULL, NULL);
+		      ret = dspd_pcmcli_bind(client, &params, DSPD_PCMCLI_BIND_AUTOCLOSE, NULL, NULL);
 		    } else
 		    {
 		      ret = -EPROTO;
@@ -2144,11 +2163,10 @@ int32_t dspd_pcmcli_open_device(struct dspd_pcmcli *client,
 }
 
 
-static void start_complete_cb(void *context, struct dspd_async_op *op)
+static int32_t start_complete(void *context, struct dspd_async_op *op, int32_t sbits)
 {
   struct dspd_pcmcli *client = op->data;
   dspd_time_t *tstamps = op->outbuf;
-  int32_t sbits = *(int32_t*)op->inbuf;
   int32_t ret = op->error;
   if ( ret == 0 )
     {
@@ -2171,7 +2189,14 @@ static void start_complete_cb(void *context, struct dspd_async_op *op)
 	  dspd_pcmcli_wait(client, client->streams, 0, true);
 	}
     }
-  complete_event(client, ret);
+  return ret;
+}
+
+static void start_complete_cb(void *context, struct dspd_async_op *op)
+{
+  int32_t sbits = *(const int32_t*)op->inbuf;
+  int32_t ret = start_complete(context, op, sbits);
+  complete_event(op->data, ret);
 }
 
 int32_t dspd_pcmcli_start(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data)
@@ -2203,11 +2228,10 @@ int32_t dspd_pcmcli_start(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_cc
   return ret;
 }
 
-static void stop_complete_cb(void *context, struct dspd_async_op *op)
+static int32_t stop_complete(void *context, struct dspd_async_op *op, int32_t sbits)
 {
   struct dspd_pcmcli *client = op->data;
   int32_t err;
-  int32_t sbits = *(const int32_t*)op->inbuf;
   err = op->error;
   if ( err == 0 )
     {
@@ -2217,7 +2241,15 @@ static void stop_complete_cb(void *context, struct dspd_async_op *op)
 	err = dspd_pcmcli_stream_set_running(&client->capture.stream, false);
       client->state = PCMCLI_STATE_SETUP;
     }
-  complete_event(client, err);
+  return err;
+}
+
+static void stop_complete_cb(void *context, struct dspd_async_op *op)
+{
+  int32_t sbits = *(const int32_t*)op->inbuf;
+  int32_t ret;
+  ret = stop_complete(context, op, sbits);
+  complete_event(op->data, ret);
 }
 
 int32_t dspd_pcmcli_stop(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data)
@@ -2233,6 +2265,57 @@ int32_t dspd_pcmcli_stop(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb
 		      NULL,
 		      0,
 		      stop_complete_cb);
+      ret = complete_io(client, ret, complete, data);
+    }
+  return ret;
+}
+
+static void settrigger_complete_cb(void *context, struct dspd_async_op *op)
+{
+  int32_t sbits = *(const int32_t*)op->inbuf;
+  struct dspd_pcmcli *cli = op->data;
+  int32_t stopped = 0, started = 0;
+  int32_t err = op->error, e;
+  if ( op->error == 0 )
+    {
+      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
+	    started |= DSPD_PCM_SBIT_PLAYBACK;
+	  else
+	    stopped |= DSPD_PCM_SBIT_PLAYBACK;
+	}
+      if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	{
+	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
+	    started |= DSPD_PCM_SBIT_CAPTURE;
+	  else
+	    stopped |= DSPD_PCM_SBIT_CAPTURE;
+	}
+      if ( stopped )
+	err = stop_complete(context, op, stopped);
+      if ( started )
+	{
+	  e = start_complete(context, op, started);
+	  if ( e < 0 && err == 0 )
+	    err = e;
+	}
+    }
+  complete_event(op->data, err);
+}
+
+int32_t dspd_pcmcli_settrigger(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data)
+{
+  int32_t ret = -EBADFD;
+  if ( client->state >= PCMCLI_STATE_PREPARED )
+    {
+      ret = submit_io(client,
+		      DSPD_SCTL_CLIENT_SETTRIGGER,
+		      &sbits,
+		      sizeof(sbits),
+		      client->output,
+		      sizeof(dspd_time_t) * 2UL,
+		      settrigger_complete_cb);
       ret = complete_io(client, ret, complete, data);
     }
   return ret;
@@ -2647,17 +2730,28 @@ int32_t dspd_pcmcli_hw_params_default(struct dspd_pcmcli *client, struct dspd_cl
 int32_t dspd_pcmcli_hw_params_get_channels(struct dspd_pcmcli *client, struct dspd_cli_params *params, int32_t stream)
 {
   int32_t ret = -EINVAL;
-  stream &= params->stream;
-  stream &= client->streams;
-  if ( params->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS )
+  if ( params == NULL )
     {
       if ( stream == DSPD_PCM_SBIT_PLAYBACK )
-	ret = DSPD_CLI_PCHAN(params->channels);
+	params = &client->playback.stream.params;
       else if ( stream == DSPD_PCM_SBIT_CAPTURE )
-	ret = DSPD_CLI_CCHAN(params->channels);
-    } else if ( stream )
+	params = &client->capture.stream.params;
+    }
+
+  if ( params )
     {
-      ret = params->channels;
+      stream &= params->stream;
+      stream &= client->streams;
+      if ( params->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS )
+	{
+	  if ( stream == DSPD_PCM_SBIT_PLAYBACK )
+	    ret = DSPD_CLI_PCHAN(params->channels);
+	  else if ( stream == DSPD_PCM_SBIT_CAPTURE )
+	    ret = DSPD_CLI_CCHAN(params->channels);
+	} else if ( stream )
+	{
+	  ret = params->channels;
+	}
     }
   return ret;
 }
@@ -2928,7 +3022,7 @@ struct dspd_aio_ctx *dspd_pcmcli_get_aio_ctx(struct dspd_pcmcli *client)
 int32_t dspd_pcmcli_get_stream_index(struct dspd_pcmcli *cli, int32_t sbit)
 {
   int32_t ret = -EINVAL;
-  sbit &= ~cli->streams;
+  sbit &= cli->streams;
   if ( sbit == DSPD_PCM_SBIT_PLAYBACK )
     ret = cli->playback.stream_idx;
   else if ( sbit == DSPD_PCM_SBIT_CAPTURE )

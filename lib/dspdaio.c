@@ -1144,8 +1144,11 @@ void dspd_aio_destroy(struct dspd_aio_ctx *ctx)
 
 void dspd_aio_delete(struct dspd_aio_ctx *ctx)
 {
-  dspd_aio_destroy(ctx);
-  free(ctx);
+  if ( ctx )
+    {
+      dspd_aio_destroy(ctx);
+      free(ctx);
+    }
 }
 
 int32_t dspd_aio_new(struct dspd_aio_ctx **ctxp, ssize_t max_req)

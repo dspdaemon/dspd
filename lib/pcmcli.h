@@ -41,6 +41,8 @@ struct dspd_pcmcli_bindparams {
   int32_t  capture_stream;
   int32_t  capture_device;
   struct dspd_aio_ctx *context;
+  struct dspd_device_stat *playback_info;
+  struct dspd_device_stat *capture_info;
 };
 
 enum {
@@ -96,6 +98,7 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
 //Allow partial frame reads+writes
 #define DSPD_PCMCLI_BYTE_MODE 8
 int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t flags);
+size_t dspd_pcmcli_sizeof(void);
 void dspd_pcmcli_destroy(struct dspd_pcmcli *client);
 int32_t dspd_pcmcli_new(struct dspd_pcmcli **client, int32_t streams, int32_t flags);
 void dspd_pcmcli_delete(struct dspd_pcmcli *client);
@@ -105,7 +108,9 @@ int32_t dspd_pcmcli_set_no_xrun(struct dspd_pcmcli *client, bool no_xrun);
 
 int32_t dspd_pcmcli_set_poll_threshold(struct dspd_pcmcli *client, size_t frames);
 
-int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bindparams *params, bool autoclose, dspd_aio_ccb_t complete, void *data);
+#define DSPD_PCMCLI_BIND_AUTOCLOSE 1
+#define DSPD_PCMCLI_BIND_CONNECTED 2
+int32_t dspd_pcmcli_bind(struct dspd_pcmcli *client, const struct dspd_pcmcli_bindparams *params, int32_t flags, dspd_aio_ccb_t complete, void *data);
 void dspd_pcmcli_unbind(struct dspd_pcmcli *client);
 
 int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client, 
@@ -143,6 +148,7 @@ int32_t dspd_pcmcli_prepare(struct dspd_pcmcli *client, dspd_aio_ccb_t complete,
 
 int32_t dspd_pcmcli_start(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data);
 int32_t dspd_pcmcli_stop(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data);
+int32_t dspd_pcmcli_settrigger(struct dspd_pcmcli *client, int32_t sbits, dspd_aio_ccb_t complete, void *data);
 int32_t dspd_pcmcli_pause(struct dspd_pcmcli *client, bool paused, dspd_aio_ccb_t complete, void *data);
 
 int32_t dspd_pcmcli_get_client_index(const struct dspd_pcmcli *client, int32_t sbit);

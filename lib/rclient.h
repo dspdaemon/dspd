@@ -169,5 +169,7 @@ int32_t dspd_rclient_get_trigger(struct dspd_rclient *client);
 
 int32_t dspd_rclient_client_index(struct dspd_rclient *client);
 
+void dspd_rclient_set_raw_appl_ptr(struct dspd_rclient *client, int32_t sbits, uint32_t ptr);
+void dspd_rclient_get_raw_hw_ptr(struct dspd_rclient *client, int32_t sbits, uint32_t *ptr);
 
 #endif

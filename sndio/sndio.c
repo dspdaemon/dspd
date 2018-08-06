@@ -44,7 +44,7 @@
 #include "defs.h"
 #include "dspd_sndio.h"
 
-#define USE_CBTIMER
+
 
 #define MAX_CLIENTS 32
 
@@ -352,6 +352,9 @@ static int client_xrun(struct sndio_client *cli, int32_t sbits)
 	}/* else if ( cli->xrun_policy == SIO_SYNC )
 	{
 	  //TODO: Implement this
+	  //It should be possible to do the same thing as SIO_IGNORE, except that the capture buffer will be
+	  //have to be emptied.  It would be helpful if everything could be stopped then started again without
+	  //resetting the pointers to 0 and with the capture buffer empty.
 	  }*/ else
 	{
 	  //Send pointer movements and flow control

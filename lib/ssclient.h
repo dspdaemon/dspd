@@ -68,6 +68,10 @@ struct socksrv_open_reply {
   int32_t  capture_device;
   int32_t  playback_stream;
   int32_t  capture_stream;
+
+  struct dspd_device_stat playback_info;
+  struct dspd_device_stat capture_info;
+
 };
 
 struct socksrv_ctl_event {

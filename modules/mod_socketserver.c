@@ -711,8 +711,18 @@ static int socksrv_req_open_by_name(struct dspd_rctx *rctx,
 				NULL, 
 				0, 
 				&br);
+	  if ( ret == 0 )
+	    ret = dspd_stream_ctl(&dspd_dctx,
+				  cli->playback_device,
+				  DSPD_SCTL_SERVER_STAT,
+				  NULL,
+				  0,
+				  &r->playback_info,
+				  sizeof(r->playback_info),
+				  &br);
 	  if ( ret < 0 )
 	    goto out;
+	  
 	}
       if ( o->sbits & DSPD_PCM_SBIT_CAPTURE )
 	{
@@ -743,6 +753,15 @@ static int socksrv_req_open_by_name(struct dspd_rctx *rctx,
 				NULL, 
 				0, 
 				&br);
+	  if ( ret == 0 )
+	    ret = dspd_stream_ctl(&dspd_dctx,
+				  cli->capture_device,
+				  DSPD_SCTL_SERVER_STAT,
+				  NULL,
+				  0,
+				  &r->capture_info,
+				  sizeof(r->capture_info),
+				  &br);
 	}
     }
 
@@ -784,8 +803,7 @@ static int socksrv_req_open_by_name(struct dspd_rctx *rctx,
       r->capture_stream = cli->capture_stream;
       ret = dspd_req_reply_buf(rctx, 0, r, sizeof(*r));
     }
-
-  return dspd_req_reply_err(rctx, 0, ret);
+  return ret;
 }
 
 static int socksrv_req_newcli(struct dspd_rctx *rctx,
@@ -1794,6 +1812,7 @@ static int32_t client_setparams(struct dspd_rctx *context,
     }
   if ( ret == 0 )
     {
+     
       if ( p->stream == DSPD_PCM_SBIT_FULLDUPLEX )
 	{
 	  ret = merge_params(&params, &pparams, &cparams);
@@ -2207,11 +2226,6 @@ static int32_t client_settrigger(struct dspd_rctx *context,
   int32_t streams, s;
   dspd_time_t result[2] = { 0, 0 }, pts = 0, cts = 0;
   streams = *(int32_t*)inbuf;
-  if ( streams == DSPD_PCM_SBIT_FULLDUPLEX )
-    return client_start(context, req, inbuf, inbufsize, outbuf, outbufsize);
-  else if ( streams == 0 )
-    return client_stop(context, req, inbuf, inbufsize, outbuf, outbufsize);
-
   ret = get_streams(context, &cli, &pstream, &cstream, streams);
   if ( ret == 0 )
     {
