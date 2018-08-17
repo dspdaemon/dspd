@@ -2049,7 +2049,7 @@ static int32_t client_mapbuf(struct dspd_rctx *context,
 	ret = dspd_req_reply_buf(context, 0, shm, br);
     } else
     {
-      ret = dspd_req_reply_err(context, 0, 0);
+      ret = dspd_req_reply_err(context, 0, ret);
     }
   return ret;
 }
@@ -2689,8 +2689,6 @@ static int client_dispatch_pkt(struct ss_cctx *cli)
   const void *iptr;
   void *optr;
   struct dspd_req_pointers *ptrs;
-
-
   cli->rctx.user_data = NULL;
   cli->rctx.bytes_returned = 0;
   if ( cli->rctx.flags & DSPD_REQ_FLAG_ERROR )

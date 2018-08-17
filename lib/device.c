@@ -1893,7 +1893,11 @@ static void schedule_playback_wake(void *userdata)
 	      //Start with the amount of data that is in the buffer.
 	      //This keeps it from underrunning when latency changes
 	      //from very low to very high and when a deadline is missed
-	      //but it did not quite underrun.
+	      //but it did not quite underrun.  It is possible that this
+	      //thread will get preempted or take too long rendering data
+	      //and the buffer will go empty even though the OS scheduled it
+	      //early enough to not xrun.  The amount rendered will be doubled
+	      //until the correct amount is reached.
 	      len = dev->playback.status->fill;
 	      DSPD_ASSERT(len <= dev->playback.status->space);
 	    }

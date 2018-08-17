@@ -153,7 +153,7 @@ int main(int argc, char **argv)
 
   printf("Setting info...");
   memset(&info, 0, sizeof(info));
-  info.stream = DSPD_PCM_SBIT_PLAYBACK;
+  info.stream = -1;
   info.pid = getpid();
   info.gid = getgid();
   info.uid = getuid();

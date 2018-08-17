@@ -1663,6 +1663,7 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
   size_t i = hdr->list_index;
   size_t fdi = hdr->fd_index;
   int32_t flags;
+  bool must_close = false;
   assert(hdr->list->clients[i] == (struct cbpoll_client_hdr*)UINTPTR_MAX);
   hdr->list->clients[i] = hdr;
   if ( hdr->reserved_slot >= 0 )
@@ -1691,13 +1692,18 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
       if ( ! hdr->list->ops->success(ctx, hdr) )
 	{
 	  if ( hdr->reserved_slot >= 0 )
-	    cbpoll_unref(ctx, hdr->reserved_slot);
+	    must_close = true;
+	    
 	}
     }
   if ( hdr->list->flags & CBPOLL_CLIENT_LIST_LISTENFD )
     cbpoll_set_events(ctx, evt->index, EPOLLIN|EPOLLONESHOT);
  
   cbpoll_unref(ctx, fdi);
+
+  if ( must_close )
+    cbpoll_close_fd(ctx, hdr->reserved_slot);
+
 }
 
 

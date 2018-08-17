@@ -751,40 +751,6 @@ int32_t dspd_pcmcli_stream_state(struct dspd_pcmcli_stream *stream)
   return stream->state;
 }
 
-int32_t dspd_pcmcli_stream_cl_avail(struct dspd_pcmcli_stream *stream)
-{
-  int32_t ret;
-  uint32_t diff;
-  struct dspd_pcmcli_status status;
-  if ( ! stream->constant_latency )
-    {
-      ret = -EINVAL;
-    } else if ( stream->state != PCMCS_STATE_RUNNING && stream->state != PCMCS_STATE_PREPARED )
-    {
-      ret = -EBADFD;
-    } else 
-    {
-      ret = dspd_pcmcli_stream_status(stream, &status, true);
-      if ( ret == 0 )
-	{
-	  if ( stream->state == PCMCS_STATE_RUNNING )
-	    {
-	      if ( stream->status.delay >= stream->params.latency || stream->got_status == false )
-		diff = stream->params.latency;
-	      else
-		diff = stream->status.delay;
-	      if ( status.avail < diff )
-		ret = 0;
-	      else
-		ret = status.avail - diff;
-	    } else
-	    {
-	      ret = status.avail;
-	    }
-	}
-    }
-  return ret;
-}
 
 
 int32_t dspd_pcmcli_stream_get_next_wakeup(struct dspd_pcmcli_stream *stream, const struct dspd_pcmcli_status *status, size_t avail, dspd_time_t *next)

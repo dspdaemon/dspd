@@ -128,4 +128,8 @@ static inline ssize_t dspd_write(int32_t fd, const void *buf, size_t len)
   return ret;
 }
 #define DSPD_ISSTR(_s) (!!memchr(_s,0,sizeof(_s)))
+
+//size of member of struct or union or class (C++ only)
+#define sizeof_m(_s, _m) sizeof(((_s*)(0x0UL))->_m)
+
 #endif

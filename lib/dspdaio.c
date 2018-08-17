@@ -31,6 +31,17 @@
 
 #define DSPD_AIO_DATABUF (1ULL<<32U)
 
+#ifdef DEBUG_PACKET
+
+static bool test_packet_fcn(struct dspd_aio_ctx *ctx)
+{
+  return !!ctx->req_out.req;
+}
+#define TEST_PACKET(_aio) DSPD_ASSERT(test_packet_fcn(_aio) == true)
+#else
+#define TEST_PACKET(_aio)
+#endif
+
 //#define DEBUG_IO_COUNT
 #ifdef DEBUG_IO_COUNT
 static void check_io_count(struct dspd_aio_ctx *_ctx)
@@ -136,15 +147,19 @@ int32_t dspd_aio_set_info(struct dspd_aio_ctx *ctx,
     pid = syscall(SYS_gettid);
   else
     pid = info->pid;
-  if ( pid < 0 )
-    pkt->cred.cred.pid = 0;
+  if ( pid <= 0 )
+    pkt->cred.cred.pid = getpid();
   else
     pkt->cred.cred.pid = pid;
-  if ( info->uid > 0 )
+  if ( info->uid >= 0 )
     pkt->cred.cred.uid = info->uid;
-  if ( info->gid > 0 )
+  else
+    pkt->cred.cred.uid = getuid();
+  if ( info->gid >= 0 )
     pkt->cred.cred.gid = info->gid;
-  
+  else
+    pkt->cred.cred.gid = getgid();
+
   if ( info->name[0] != 0 )
     {
       strlcpy(pkt->name, info->name, sizeof(pkt->name));
@@ -394,7 +409,8 @@ static bool find_next_op(struct dspd_aio_ctx *ctx)
 	      ctx->len_out = ctx->iov_out[0].iov_len;
 	      if ( op->inbufsize )
 		{
-		  if ( ctx->local )
+		  //control messages are always sent inline
+		  if ( ctx->local == true && (ctx->req_out.flags & (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED)) == 0 )
 		    {
 		      ctx->req_out.flags |= DSPD_REQ_FLAG_POINTER;
 		      ctx->ptrs_out.inbuf = op->inbuf;
@@ -454,7 +470,9 @@ static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
 {
   ssize_t ret = 0;
   size_t total = 0;
-  int32_t fd;
+  int32_t fd = -1;
+  DSPD_ASSERT((ctx->req_out.flags & (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED)) != (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED));
+  
   if ( ctx->cnt_out != 2 || 
        (ctx->iov_out[1].iov_len < sizeof(fd) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_FD)) ||
        (ctx->iov_out[1].iov_len < sizeof(struct ucred) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_CRED)) )
@@ -463,10 +481,14 @@ static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
     return -ENODATA;
   if ( ctx->iov_out[0].iov_len > 0 )
     {
-      fd = *(int32_t*)ctx->iov_out[1].iov_base;
-      if ( fd < 0 )
-	return -EINVAL;
-      ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, ctx->cnt_out);
+      if ( ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_FD )
+	{
+	  fd = *(int32_t*)ctx->iov_out[1].iov_base;
+	  if ( fd < 0 )
+	    return -EINVAL;
+	}
+      //Send the header.  The server will check the flags and know what to expect next.
+      ret = ctx->ops->writev(ctx->ops_arg, ctx->iov_out, 1);
       if ( ret > 0 )
 	{
 	  total += ret;
@@ -1674,9 +1696,12 @@ ssize_t dspd_aio_fifo_send_cred(void *arg, const struct ucred *uc, const void *d
 ssize_t dspd_aio_fifo_recv_cred(void *arg, struct ucred *uc, void *data, size_t length)
 {
   ssize_t ret;
-  if ( length >= sizeof(*uc) && uc == data )
+  if ( length >= sizeof(*uc) )
     {
       ret = dspd_aio_fifo_read(arg, data, length);
+      //The incoming bytes should contain a struct ucred at offset 0 (aka first struct member)
+      if ( uc != data )
+	memcpy(uc, data, sizeof(*uc));
     } else
     {
       ret = -EINVAL;
@@ -2181,6 +2206,7 @@ ssize_t dspd_aio_sock_send_cred(void *arg, const struct ucred *uc, const void *d
         struct cmsghdr cmh;
         char   control[CMSG_SPACE(sizeof(struct ucred))];
   } control_un;
+  ssize_t ret;
   memset(&msgh, 0, sizeof(msgh));
   memset(&control_un, 0, sizeof(control_un));
   msgh.msg_control = control_un.control;
@@ -2197,7 +2223,10 @@ ssize_t dspd_aio_sock_send_cred(void *arg, const struct ucred *uc, const void *d
   cmhp->cmsg_type = SCM_CREDENTIALS;
   ucp = (struct ucred *)CMSG_DATA(cmhp);
   memcpy(ucp, uc, sizeof(*uc));
-  return sendmsg((intptr_t)arg, &msgh, 0);
+  ret = sendmsg((intptr_t)arg, &msgh, 0);
+  if ( ret < 0 )
+    ret = -errno;
+  return ret;
 }
 
 ssize_t dspd_aio_sock_recv_cred(void *arg, struct ucred *uc, void *data, size_t length)

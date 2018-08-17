@@ -100,6 +100,5 @@ int32_t dspd_pcmcli_stream_state(struct dspd_pcmcli_stream *stream);
 #define PCMCS_WAKEUP_NONE    2
 
 int32_t dspd_pcmcli_stream_get_next_wakeup(struct dspd_pcmcli_stream *stream, const struct dspd_pcmcli_status *status, size_t avail, dspd_time_t *next);
-int32_t dspd_pcmcli_stream_cl_avail(struct dspd_pcmcli_stream *stream);
 
 #endif /*_DSPD_PCMCS_H_*/

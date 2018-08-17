@@ -70,13 +70,34 @@ struct dspd_pcmcli {
   void *io_cb_arg;
 
   int32_t paused_timers;
+
+  struct {
+    struct dspd_cli_params params;
+    struct dspd_client_shm pshm;
+    struct dspd_client_shm cshm;
+    int32_t shm_count;
+  } hwdata;
+
+  bool callback_pending;
+
 };
+
+static void close_shm(struct dspd_shm_map *shm)
+{
+  if ( ! (shm->flags & DSPD_SHM_FLAG_PRIVATE) )
+    {
+      dspd_shm_close2(shm, true);
+      memset(shm, 0, sizeof(*shm));
+    }
+}
+
 
 static int32_t do_io(struct dspd_pcmcli *cli)
 {
   ssize_t err = 0;
   struct dspd_pcmcli_status s;
   int32_t paused_timers = cli->paused_timers;
+  cli->callback_pending = true;
   if ( cli->state >= PCMCLI_STATE_PREPARED )
     {
       if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
@@ -93,7 +114,6 @@ static int32_t do_io(struct dspd_pcmcli *cli)
 		{
 		  cli->paused_timers |= DSPD_PCM_SBIT_CAPTURE;
 		}
-		
 	    }
 	}
       if ( err == 0 && (cli->streams & DSPD_PCM_SBIT_PLAYBACK) )
@@ -113,6 +133,7 @@ static int32_t do_io(struct dspd_pcmcli *cli)
 	    }
 	}
     }
+  cli->callback_pending = false;
   if ( cli->paused_timers != paused_timers && err == 0 )
     err = dspd_pcmcli_wait(cli, cli->streams & (~cli->paused_timers), 0, true);
   return err;
@@ -212,6 +233,34 @@ static void complete_event(struct dspd_pcmcli *client, int32_t result)
     }
 }
 
+
+static int32_t submit_io2(struct dspd_pcmcli *client,
+			  uint32_t req,
+			  const void          *inbuf,
+			  size_t        inbufsize,
+			  void         *outbuf,
+			  size_t        outbufsize,
+			  void (*complete)(void *context, struct dspd_async_op *op))
+{
+  if ( inbuf != NULL && inbuf != client->input )
+    {
+      DSPD_ASSERT(inbufsize <= sizeof(client->input));
+      memcpy(client->input, inbuf, inbufsize);
+      inbuf = client->input;
+    }
+  DSPD_ASSERT(outbuf != client->output || outbufsize <= sizeof(client->output));
+  memset(&client->pending_op, 0, sizeof(client->pending_op));
+  client->pending_op.stream = -1;
+  client->pending_op.req = req;
+  client->pending_op.inbuf = inbuf;
+  client->pending_op.inbufsize = inbufsize;
+  client->pending_op.outbuf = outbuf;
+  client->pending_op.outbufsize = outbufsize;
+  client->pending_op.complete = complete;
+  client->pending_op.data = client;
+  client->pending_op.error = 0;
+  return dspd_aio_submit(client->conn, &client->pending_op);
+}
 
 
 static int32_t submit_io(struct dspd_pcmcli *client,
@@ -674,10 +723,10 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
 	{
 	  offset = 0;
 	  wtime = client->playback.stream.params.latency / 2;
-	  bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING);
+	  bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING) || client->callback_pending;
 	  while ( offset < frames )
 	    {
-	      if ( client->constant_latency )
+	      if ( client->constant_latency == true && client->callback_pending == false )
 		{
 		  ret = dspd_pcmcli_get_status(client, DSPD_PCM_SBIT_PLAYBACK, true, &status);
 		  if ( status.avail > 0 )
@@ -729,9 +778,9 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
 	      else
 		ret = -EAGAIN;
 	    }
-	  if ( waited || ret > 0 || (ret < 0 && dspd_fatal_err(ret)) )
+	  if ( client->callback_pending == false && (waited || ret > 0 || (ret < 0 && dspd_fatal_err(ret))) )
 	    dspd_pcmcli_restore_wait(client);
-	} 
+	}
       if ( ret < 0 && ret != -EAGAIN )
 	{
 	  client->error = ret;
@@ -855,7 +904,7 @@ ssize_t dspd_pcmcli_read_frames(struct dspd_pcmcli *client,
       ret = -EBADF;
     } else
     {
-      bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING);
+      bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING) || client->callback_pending ;
       client->paused_timers &= ~DSPD_PCM_SBIT_CAPTURE;
       if ( client->no_xrun == true || (ret = dspd_pcmcli_stream_check_xrun(&client->capture.stream)) == 0 )
 	{
@@ -887,7 +936,7 @@ ssize_t dspd_pcmcli_read_frames(struct dspd_pcmcli *client,
 	    ret = offset;
 	  if ( ret == 0 )
 	    ret = -EAGAIN;
-	  if ( waited || ret > 0 || (ret < 0 && dspd_fatal_err(ret)) )
+	  if ( client->callback_pending == false && (waited || ret > 0 || (ret < 0 && dspd_fatal_err(ret))) )
 	    dspd_pcmcli_restore_wait(client);
 	} else
 	{
@@ -1001,13 +1050,19 @@ int32_t dspd_pcmcli_get_status(struct dspd_pcmcli *client, int32_t stream, bool 
 		  diff = (now - status->delay_tstamp) / s->stream.sample_time;
 		  if ( stream == DSPD_PCM_SBIT_PLAYBACK )
 		    {
-		      status->delay -= diff;
+		      if ( diff < (dspd_time_t)status->delay )
+			status->delay -= diff;
+		      else
+			status->delay = client->playback.stream.params.latency;
 		      if ( client->constant_latency )
 			{
-			  if (  status->delay < client->playback.stream.params.bufsize )
-			    status->avail = client->playback.stream.params.bufsize - status->delay;
-			  else
-			    status->avail = 0;
+			  if ( status->delay < client->playback.stream.params.bufsize )
+			    {
+			      status->avail = client->playback.stream.params.bufsize - status->delay;
+			    } else
+			    {
+			      status->avail = 0;
+			    }
 			}
 		    } else
 		    {
@@ -1202,14 +1257,14 @@ void dspd_pcmcli_unbind(struct dspd_pcmcli *client)
       client->playback.stream_idx = -1;
       client->playback.device_idx = -1;
       dspd_pcmcli_stream_detach(&client->playback.stream);
-      dspd_shm_close2(&client->playback.shm, true);
+      close_shm(&client->playback.shm);
     }
   if ( client->streams & DSPD_PCM_SBIT_CAPTURE )
     {
       client->capture.stream_idx = -1;
       client->capture.device_idx = -1;
       dspd_pcmcli_stream_detach(&client->capture.stream);
-      dspd_shm_close2(&client->capture.shm, true);
+      close_shm(&client->capture.shm);
     }
 }
 
@@ -1274,7 +1329,7 @@ static int32_t map_stream(struct pcmcli_stream_data *stream, int32_t sbit, const
 {
   int32_t ret;
   uint64_t p;
-  dspd_shm_close2(&stream->shm, true);
+  close_shm(&stream->shm);
   if ( shm->flags & DSPD_SHM_FLAG_PRIVATE )
     {
       if ( sizeof(uintptr_t) == 8U )
@@ -1311,19 +1366,23 @@ static int32_t map_stream(struct pcmcli_stream_data *stream, int32_t sbit, const
   if ( ret < 0 )
     {
       dspd_pcmcli_stream_detach(&stream->stream);
-      dspd_shm_close2(&stream->shm, true);
+      close_shm(&stream->shm);
     } else
     {
-      dspd_shm_close2(&stream->shm, false);
+      if ( stream->shm.flags )
+	{
+	  dspd_shm_close2(&stream->shm, false);
+	  memset(&stream->shm, 0, sizeof(stream->shm));
+	}
     }
   return ret;
 }
 
 int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client, 
-				   const struct dspd_cli_params *hwparams, 
-				   const struct dspd_client_shm *playback_shm,
-				   const struct dspd_client_shm *capture_shm,
-				   bool sync)
+				 const struct dspd_cli_params *hwparams, 
+				 const struct dspd_client_shm *playback_shm,
+				 const struct dspd_client_shm *capture_shm,
+				 bool sync)
 {
   struct dspd_cli_params hwp, out;
   struct dspd_client_shm cshm, pshm;
@@ -1388,6 +1447,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 		{
 		  pfd = ret;
 		  ret = 0;
+		  playback_shm = &pshm;
 		}
 	    }
 	}
@@ -1415,26 +1475,27 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 		{
 		  cfd = ret;
 		  ret = 0;
+		  capture_shm = &cshm;
 		}
 	    }
 	}
     }
- 
+
   if ( ret == 0 )
     {
       if ( client->streams & DSPD_PCM_SBIT_PLAYBACK )
 	{
-	  ret = map_stream(&client->playback, DSPD_PCM_SBIT_PLAYBACK, &out, &pshm, pfd);
+	  ret = map_stream(&client->playback, DSPD_PCM_SBIT_PLAYBACK, hwparams, playback_shm, pfd);
 	  pfd = -1;
 	}
       if ( ret == 0 && (client->streams & DSPD_PCM_SBIT_CAPTURE) )
 	{
 	  
-	  ret = map_stream(&client->capture, DSPD_PCM_SBIT_CAPTURE, &out, &cshm, cfd);
+	  ret = map_stream(&client->capture, DSPD_PCM_SBIT_CAPTURE, hwparams, capture_shm, cfd);
 
 	  cfd = -1;
 	}
-      if ( ret == 0 )
+      if ( ret == 0 && sync == true )
 	{
 	  client->fragsize = hwparams->fragsize;
 	  client->swparams.stop_threshold = hwparams->bufsize;
@@ -1451,6 +1512,150 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
   else
     client->state = PCMCLI_STATE_OPEN;
   return ret;
+}
+
+static void hwparams_cb(void *context, struct dspd_async_op *op);
+static int32_t hwparams_shm(void *context, struct dspd_async_op *op, int32_t stream)
+{
+  struct dspd_client_shm *shm;
+  struct dspd_pcmcli *client = op->data;
+  if ( stream == DSPD_PCM_SBIT_PLAYBACK )
+    shm = &client->hwdata.pshm;
+  else
+    shm = &client->hwdata.cshm;
+  return submit_io2(client,
+		    DSPD_SCTL_CLIENT_MAPBUF,
+		    &stream,
+		    sizeof(stream),
+		    shm,
+		    sizeof(*shm),
+		    hwparams_cb);
+}
+
+static int32_t hwparams_connect(void *context, struct dspd_async_op *op)
+{
+  struct dspd_pcmcli *client = op->data;
+  int32_t s = -1;
+  return submit_io2(client, 
+		    DSPD_SCTL_CLIENT_CONNECT,
+		    &s,
+		    sizeof(s),
+		    NULL,
+		    0,
+		    hwparams_cb);
+}
+
+static int32_t hwparams_complete(void *context, struct dspd_async_op *op)
+{
+  struct dspd_pcmcli *cli = op->data;
+  int32_t ret;
+  ret = dspd_pcmcli_set_hwparams(cli,
+				 &cli->hwdata.params,
+				 &cli->hwdata.pshm,
+				 &cli->hwdata.cshm,
+				 false);
+  if ( ret == 0 )
+    {
+      op->outbuf = &cli->hwdata.params;
+      op->outbufsize = sizeof(cli->hwdata.params);
+      complete_event(op->data, op->error);
+    } else
+    {
+      op->error = ret;
+    }
+  return ret;
+}
+
+static void hwparams_cb(void *context, struct dspd_async_op *op)
+{
+  struct dspd_pcmcli *cli = op->data;
+  int32_t err = op->error;
+  int32_t ret;
+  struct dspd_client_shm *shm;
+  if ( err == 0 )
+    {
+      switch(op->req)
+	{
+	case DSPD_SCTL_CLIENT_SETPARAMS:
+	  if ( cli->hwdata.params.stream == DSPD_PCM_SBIT_FULLDUPLEX )
+	    err = hwparams_shm(context, op, DSPD_PCM_SBIT_PLAYBACK);
+	  else
+	    err = hwparams_shm(context, op, cli->hwdata.params.stream);
+	  break;
+	case DSPD_SCTL_CLIENT_MAPBUF:
+	  shm = op->outbuf;
+	  if ( shm->flags & DSPD_SHM_FLAG_MMAP )
+	    {
+	      ret = dspd_aio_recv_fd(cli->conn);
+	      if ( ret < 0 )
+		break;
+	      //The FD is now permanently in struct dspd_client_shm.
+	    }
+	  if ( (cli->streams & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX )
+	    {
+	      cli->hwdata.shm_count++;
+	      if ( cli->hwdata.shm_count == 2 )
+		err = hwparams_connect(context, op);
+	      else
+		err = hwparams_shm(context, op, DSPD_PCM_SBIT_CAPTURE);
+	    } else
+	    {
+	      err = hwparams_connect(context, op);
+	    }
+	  break;
+	case DSPD_SCTL_CLIENT_CONNECT:
+	  err = hwparams_complete(context, op);
+	  break;
+	}
+    }
+  if ( err < 0 )
+    {      
+      cli->state = PCMCLI_STATE_OPEN;
+      op->error = err;
+      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	{
+	  dspd_pcmcli_stream_detach(&cli->playback.stream);
+	  if ( cli->hwdata.pshm.flags & DSPD_SHM_FLAG_MMAP )
+	    close(cli->hwdata.pshm.arg);
+	}
+      if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	{
+	  dspd_pcmcli_stream_detach(&cli->capture.stream);
+	  if ( cli->hwdata.cshm.flags & DSPD_SHM_FLAG_MMAP )
+	    close(cli->hwdata.cshm.arg);
+	}
+      complete_event(op->data, op->error);
+    }
+}
+
+int32_t dspd_pcmcli_set_hwparams_async(struct dspd_pcmcli *client, const struct dspd_cli_params *hwparams, dspd_aio_ccb_t complete, void *data)
+{
+  struct dspd_cli_params hwp;
+  if ( ((hwparams->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS) == 0 && (client->streams & DSPD_PCM_SBIT_FULLDUPLEX) == DSPD_PCM_SBIT_FULLDUPLEX) ||
+       hwparams->stream != client->streams || complete == NULL )
+    return -EINVAL;
+  if ( client->state > PCMCLI_STATE_PREPARED )
+    return -EBADFD;
+  if ( client->complete )
+    return -EBUSY;
+  if ( (hwparams->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS) == 0 )
+    {
+      hwp = *hwparams;
+      hwp.channels = (hwparams->channels << 16U) | hwparams->channels;
+      hwp.xflags |= DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS;
+      hwparams = &hwp;
+    }
+  memset(&client->hwdata, 0, sizeof(client->hwdata));
+  client->complete = complete;
+  client->completion_data = data;
+
+  return submit_io2(client,
+		    DSPD_SCTL_CLIENT_SETPARAMS, 
+		    hwparams,
+		    sizeof(*hwparams),
+		    &client->hwdata.params,
+		    sizeof(client->hwdata.params),
+		    hwparams_cb);
 }
 
 int32_t dspd_pcmcli_get_hwparams(struct dspd_pcmcli *client, struct dspd_cli_params *hwparams)
@@ -1848,6 +2053,8 @@ int32_t dspd_pcmcli_set_poll_threshold(struct dspd_pcmcli *client, size_t frames
 int32_t dspd_pcmcli_set_no_xrun(struct dspd_pcmcli *client, bool no_xrun)
 {
   client->no_xrun = no_xrun;
+  client->playback.stream.no_xrun = true;
+  client->capture.stream.no_xrun = true;
   return 0;
 }
 
@@ -2982,6 +3189,9 @@ int32_t dspd_pcmcli_set_info(struct dspd_pcmcli *client,
 	  */
 	  memset(client->input, 0, sizeof(*info));
 	  iptr = (struct dspd_cli_info*)client->input;
+	  iptr->uid = -1;
+	  iptr->gid = -1;
+	  iptr->pid = -1;
 	  iptr->stream = -1;
 	} else
 	{

@@ -893,7 +893,7 @@ static int32_t dspd_stream_setparams(struct dspd_client_stream *stream,
 	{
 	  memcpy(&stream->params, params, sizeof(*params));
 	  stream->sample_time = 1000000000 / params->rate;
-	  stream->ready = 1;
+	  stream->ready = true;
 	}
     }
 

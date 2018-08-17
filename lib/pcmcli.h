@@ -97,6 +97,7 @@ int32_t dspd_pcmcli_avail(struct dspd_pcmcli *client, int32_t stream, uint64_t *
 
 //Allow partial frame reads+writes
 #define DSPD_PCMCLI_BYTE_MODE 8
+
 int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t flags);
 size_t dspd_pcmcli_sizeof(void);
 void dspd_pcmcli_destroy(struct dspd_pcmcli *client);
@@ -118,6 +119,8 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 				 const struct dspd_client_shm *playback_shm,
 				 const struct dspd_client_shm *capture_shm,
 				 bool sync);
+int32_t dspd_pcmcli_set_hwparams_async(struct dspd_pcmcli *client, const struct dspd_cli_params *hwparams, dspd_aio_ccb_t complete, void *data);
+
 int32_t dspd_pcmcli_get_hwparams(struct dspd_pcmcli *client, struct dspd_cli_params *hwparams);
 int32_t dspd_pcmcli_set_swparams(struct dspd_pcmcli *client, const struct dspd_rclient_swparams *swparams, bool sync, dspd_aio_ccb_t complete, void *data);
 int32_t dspd_pcmcli_get_swparams(struct dspd_pcmcli *client, struct dspd_rclient_swparams *swparams);
