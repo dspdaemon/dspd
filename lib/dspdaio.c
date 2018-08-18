@@ -472,7 +472,7 @@ static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
   size_t total = 0;
   int32_t fd = -1;
   DSPD_ASSERT((ctx->req_out.flags & (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED)) != (DSPD_REQ_FLAG_CMSG_FD|DSPD_REQ_FLAG_CMSG_CRED));
-  
+ 
   if ( ctx->cnt_out != 2 || 
        (ctx->iov_out[1].iov_len < sizeof(fd) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_FD)) ||
        (ctx->iov_out[1].iov_len < sizeof(struct ucred) && (ctx->req_out.flags & DSPD_REQ_FLAG_CMSG_CRED)) )
@@ -495,7 +495,9 @@ static int32_t dspd_aio_send_cmsg(struct dspd_aio_ctx *ctx)
 	  ret = 0;
 	}
     }
-  if ( ret == 0 && ctx->iov_out[0].iov_len == 0 )
+
+
+  if ( ret == 0 && ctx->iov_out[0].iov_len == 0 && ctx->cnt_out > 1 )
     {
       //The header has been transmitted
       if ( (ctx->off_out+total) == sizeof(ctx->req_out) )

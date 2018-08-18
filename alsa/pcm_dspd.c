@@ -1340,6 +1340,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
   ret = dspd_pcmcli_set_info(dspd->client, NULL, NULL, NULL);
   if ( ret < 0 )
     goto out;
+  
 
   const struct dspd_device_stat *info = dspd_pcmcli_device_info(dspd->client, dspd->stream);
   

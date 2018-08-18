@@ -250,6 +250,8 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
       ret = ctx->ops->read(ctx->arg,
 			   ((char*)ctx->rxpkt) + ctx->rxstat.offset,
 			   sizeof(*ctx->rxpkt) - ctx->rxstat.offset);
+      if ( ret == -EAGAIN )
+	ret = -EINPROGRESS;
       if ( ret <= 0 )
 	  return ret;
     
@@ -274,14 +276,16 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
   if ( ctx->rxstat.started )
     {
       if ( ctx->rxstat.isfd || ctx->rxstat.iscred )
-	{
-	  return recv_cmsg(ctx);
-	} else
-	{
-	  return recv_data(ctx);
-	}
+	ret = recv_cmsg(ctx);
+      else
+	ret = recv_data(ctx);
+      if ( ret == -EAGAIN )
+	ret = -EINPROGRESS;
+    } else
+    {
+      ret = -EINPROGRESS;
     }
-  return -EINPROGRESS;
+  return ret;
 }
 
 
@@ -431,11 +435,12 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
       ret = ctx->ops->write(ctx->arg,
 			    &buf[ctx->txstat.offset],
 			    bytes_to_write);
-      if ( ret <= 0 )
-	return ret;
-      DSPD_ASSERT(ret <= bytes_to_write);
-      ctx->txstat.offset += ret;
-      DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
+      if ( ret > 0 )
+	{
+	  DSPD_ASSERT(ret <= bytes_to_write);
+	  ctx->txstat.offset += ret;
+	  DSPD_ASSERT(ctx->txstat.offset <= ctx->txstat.len);
+	}
     }
   
   if ( ctx->txstat.offset == ctx->txstat.len )
@@ -444,7 +449,7 @@ int32_t dspd_req_send(struct dspd_req_ctx *ctx, int32_t fd)
       ctx->txstat.len = 0;
       ctx->txstat.offset = 0;
       ctx->txstat.started = 0;
-    } else if ( ret > 0 )
+    } else if ( ret > 0 || ret == -EAGAIN )
     {
       ret = -EINPROGRESS;
     }
