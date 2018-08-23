@@ -1999,7 +1999,7 @@ int32_t dspd_aio_sock_sendfd(void *arg, int32_t fd, struct iovec *data)
 int32_t dspd_aio_sock_recvfd(void *arg, struct iovec *iov)
 {
   int n;
-  int fd = -1;
+  int fd = -EPROTO;
   struct msghdr msg;
   struct cmsghdr *cmsg;
   char cms[CMSG_SPACE(sizeof(int))];
@@ -2185,7 +2185,12 @@ int32_t dspd_aio_sock_poll(void *arg, int32_t events, int32_t *revents, int32_t 
 
 ssize_t dspd_aio_sock_write(void *arg, const void *buf, size_t len)
 {
-  return write((intptr_t)arg, buf, len);
+  ssize_t ret = write((intptr_t)arg, buf, len);
+  if ( ret < 0 )
+    ret = -errno;
+  else if ( ret == 0 )
+    ret = -ECONNABORTED;
+  return ret;
 }
 
 int32_t dspd_aio_sock_set_nonblocking(void *arg, bool nonblocking)

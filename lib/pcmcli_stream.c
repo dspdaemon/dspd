@@ -529,7 +529,7 @@ int32_t dspd_pcmcli_stream_set_pointer(struct dspd_pcmcli_stream *stream, bool r
 
 int32_t dspd_pcmcli_stream_rewind(struct dspd_pcmcli_stream *stream, uint64_t *frames)
 {
-  int32_t ret;
+  int32_t ret = 0;
   uint32_t len, f;
   if ( stream->state < PCMCS_STATE_PREPARED )
     {
@@ -553,7 +553,7 @@ int32_t dspd_pcmcli_stream_rewind(struct dspd_pcmcli_stream *stream, uint64_t *f
 	  f = *frames % UINT32_MAX;
 	  dspd_fifo_wcommit(&stream->fifo, f * -1);
 	  stream->appl_ptr -= *frames;
-	} else
+	} else if ( ! stream->no_xrun )
 	{
 	  ret = -EPIPE;
 	}
@@ -574,7 +574,7 @@ int32_t dspd_pcmcli_stream_rewind(struct dspd_pcmcli_stream *stream, uint64_t *f
 	  f = *frames % UINT32_MAX;
 	  dspd_fifo_rcommit(&stream->fifo, f * -1);
 	  stream->appl_ptr -= *frames;
-	} else
+	} else if ( ! stream->no_xrun )
 	{
 	  ret = -EPIPE;
 	}
@@ -612,7 +612,7 @@ int32_t dspd_pcmcli_stream_forward(struct dspd_pcmcli_stream *stream, uint64_t *
 	    {
 	      dspd_fifo_wcommit(&stream->fifo, *frames % UINT32_MAX);
 	      stream->appl_ptr += *frames;
-	    } else
+	    } else if ( ! stream->no_xrun )
 	    {
 	      ret = -EPIPE;
 	    }
@@ -631,7 +631,7 @@ int32_t dspd_pcmcli_stream_forward(struct dspd_pcmcli_stream *stream, uint64_t *
 	    {
 	      dspd_fifo_rcommit(&stream->fifo, *frames % UINT32_MAX);
 	      stream->appl_ptr += *frames;
-	    } else
+	    } else if ( ! stream->no_xrun )
 	    {
 	      ret = -EPIPE;
 	    }
@@ -646,7 +646,7 @@ int32_t dspd_pcmcli_stream_forward(struct dspd_pcmcli_stream *stream, uint64_t *
 
 int32_t dspd_pcmcli_stream_avail(struct dspd_pcmcli_stream *stream, uint64_t *hwptr, uint64_t *appl_ptr)
 {
-  int32_t ret;
+  int32_t ret = 0;
   uint32_t i, o, l;
   if ( stream->state < PCMCS_STATE_PREPARED )
     {
@@ -678,7 +678,7 @@ int32_t dspd_pcmcli_stream_avail(struct dspd_pcmcli_stream *stream, uint64_t *hw
 		*appl_ptr = stream->appl_ptr;
 	      ret = l;
 	    }
-	} else
+	} else if ( ! stream->no_xrun )
 	{
 	  ret = -EPIPE;
 	}
@@ -699,7 +699,7 @@ int32_t dspd_pcmcli_stream_check_xrun(struct dspd_pcmcli_stream *stream)
     } else
     {
       ret = dspd_pcmcli_stream_avail(stream, NULL, NULL);
-      if ( (uint32_t)ret >= stream->xrun_threshold )
+      if ( (uint32_t)ret >= stream->xrun_threshold && stream->no_xrun == false )
 	{
 	  if ( stream->stream_flags & DSPD_PCM_SBIT_PLAYBACK )
 	    {
@@ -717,7 +717,7 @@ int32_t dspd_pcmcli_stream_check_xrun(struct dspd_pcmcli_stream *stream)
 	  ret = 0;
 	}
     }
-  if ( ret == -EPIPE && stream->write_size < stream->params.bufsize )
+  if ( ret == -EPIPE && stream->write_size < stream->params.bufsize && stream->no_xrun == false )
     {
       //Catch the somewhat likely initial xrun caused by apps starting too early.
       //For example, SDL sets ALSA start threshold to 1 and fragments to 2 then writes

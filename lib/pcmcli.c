@@ -701,6 +701,7 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
   uint32_t wtime;
   size_t len;
   struct dspd_pcmcli_status status;
+  const char *addr;
   if ( client->error )
     {
       ret = client->error;
@@ -726,25 +727,25 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
 	  bool nonblocking = client->nonblocking || (client->state != PCMCLI_STATE_RUNNING) || client->callback_pending;
 	  while ( offset < frames )
 	    {
+	      len = frames - offset;
+	      //For convenience, passing a NULL pointer will write silence.
+	      if ( data )
+		addr = (const char*)data+(offset*client->playback.stream.framesize);
+	      else
+		addr = NULL;
 	      if ( client->constant_latency == true && client->callback_pending == false )
 		{
 		  ret = dspd_pcmcli_get_status(client, DSPD_PCM_SBIT_PLAYBACK, true, &status);
 		  if ( status.avail > 0 )
 		    {
-		      len = frames - offset;
 		      if ( len > status.avail )
 			len = status.avail;
-		      
-		      ret = dspd_pcmcli_stream_write(&client->playback.stream, 
-						(const char*)data+(offset*client->playback.stream.framesize), 
-						len);
+		      ret = dspd_pcmcli_stream_write(&client->playback.stream, addr, len);
 		    }
 		  
 		} else
 		{
-		  ret = dspd_pcmcli_stream_write(&client->playback.stream, 
-						 (const char*)data+(offset*client->playback.stream.framesize), 
-						 frames - offset);
+		  ret = dspd_pcmcli_stream_write(&client->playback.stream, addr, len);
 		}
 	      if ( ret < 0 )
 		{

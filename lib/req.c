@@ -260,7 +260,7 @@ int32_t dspd_req_recv(struct dspd_req_ctx *ctx)
 	{
 	  ctx->rxstat.isfd = !! (ctx->rxpkt->flags & PKT_CMSG_FD);
 	  ctx->rxstat.iscred = !! (ctx->rxpkt->flags & DSPD_REQ_FLAG_CMSG_CRED);
-	  ctx->rxstat.len = ctx->rxpkt->len & (~PKT_CMSG_FD);
+	  ctx->rxstat.len = ctx->rxpkt->len;
 	  if ( ctx->rxstat.len > ctx->rxmax ||
 	       ctx->rxstat.len < ctx->hdrlen ||
 	       ((ctx->rxstat.isfd || ctx->rxstat.iscred) && ctx->rxstat.len == ctx->hdrlen) || //Too short
