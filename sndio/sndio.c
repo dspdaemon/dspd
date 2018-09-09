@@ -21,6 +21,7 @@
 
 /*This module is compatible with sndio-1.0.1*/
 
+
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <sys/types.h>
@@ -46,9 +47,19 @@
 
 
 
+//Enable full duplex.  Clients used to intermittently lock up on xrun but that seems to be fixed.  The real sndio 1.0.1
+//client and server seem to also have this problem.
+#define ENABLE_FULLDUPLEX
+
+//Enable SIO_SYNC
+//#ifdef ENABLE_XRUN_POLICIES
+
+
 #define MAX_CLIENTS 32
 
 #define ENABLE_CTL 
+
+//#define DEBUG
 
 union sockaddr_gen {
   struct sockaddr_un un;
@@ -69,9 +80,7 @@ void dspd_sndio_delete(struct sndio_ctx *ctx);
 
 struct sndio_client {
   struct cbpoll_client_hdr header;
-  struct dspd_rclient *pclient, *cclient;
   int32_t pclient_idx;
-  struct cbpoll_ctx  *cbctx;
   struct sndio_ctx   *server;
   struct dspd_cbtimer *timer;
 
@@ -90,9 +99,9 @@ struct sndio_client {
 #define CLIENT_STATE_BUSY   4
 
   int32_t               cstate;
-  int32_t               sio_idx;
   int32_t               fd;
   int32_t               streams;
+
 
   //New connection
 #define PROTO_OPEN 0
@@ -113,31 +122,32 @@ struct sndio_client {
   size_t                offset_out, len_out;
 
   size_t      pframe_bytes, cframe_bytes;
+  size_t      p_datamax, c_datamax;
   size_t      p_offset;
   size_t      p_len;
   size_t      p_max, p_total;
   char        p_data[AMSG_DATAMAX];
-  size_t      p_avail;
+  size_t      pxfer_offset;
 
-  struct dspd_cli_params pparams, cparams;
   uint8_t xrun_policy;
   bool par_set;
-  struct dspd_sg_info syncgroup;
+
   bool   running;
-  size_t frames_written;
+  uint64_t frames_written;
   size_t start_threshold;
   
-  uint32_t write_window;
+
   int32_t  last_delay;
   uint32_t last_fill;
+  uint32_t max_send;
   uint64_t appl_ptr;
   uint64_t hw_ptr;
 
   dspd_time_t tstamp;
-  size_t      flow_control_pending;
+
   int32_t sample_time;
   uint32_t delta;
-  
+  uint32_t fragtime;
   bool draining;
 
     
@@ -146,6 +156,50 @@ struct sndio_client {
   bool vol_update;
   uint32_t volume;
   int32_t vol_elem;
+
+  struct dspd_aio_ctx *aio;
+  struct dspd_pcmcli  *pcm;
+  struct dspd_cli_params params;
+
+  volatile bool io_ready; //io is pending
+  struct dspd_async_op op;
+
+  union {
+    struct {
+      struct socksrv_open_reply oreply;
+      struct socksrv_open_req   oreq;
+#define HELLO_STATE_IDLE 0
+#define HELLO_STATE_OPENING 1
+#define HELLO_STATE_SETINFO 2
+      uint32_t                  hello_state;
+    } hello;
+    struct dspd_stream_volume vol;
+    bool setpar_state;
+  } data;
+
+  
+
+  struct dspd_cli_info info;
+  int32_t pdelta, cdelta;
+
+  /*
+    This is similar to the real sndiod.  The difference in
+    implementation is that tickpending may sometimes not be set if the
+    total pointer adjustment is too small.  This is because dspd is
+    not real hardware so the block size used internally may vary dynamically.
+
+  */
+  uint32_t fillpending;
+  uint32_t tickpending;
+  /*
+    This is not always the reciprocal of the fill level since the latency of
+    the server may vary depending on what clients are connected and how the OS schedules
+    the io thread.
+  */
+  uint32_t last_avail;
+
+  int32_t xrun, xrun_override;
+  size_t rdsil;
 };
 
 
@@ -158,14 +212,14 @@ struct sndio_ctx {
   struct cbpoll_client_list list;
   size_t nclients;
 
-  struct cbpoll_ctx cbctx;
+  struct cbpoll_ctx *cbpoll;
   int fd;
   int cbidx;
   uint8_t cookie[AMSG_COOKIELEN];
   size_t  sessrefs;
 
 
-  void             *ctx;
+  struct dspd_daemon_ctx             *daemon;
   char             *server_addr;
   int              *tcp_fds;
   size_t            tcp_nfds;
@@ -181,12 +235,26 @@ struct sndio_ctx {
   int32_t              cli_vol;     //new volume value
   int16_t              cli_map[MAX_CLIENTS]; //map of dspd stream # to sndio client #
   int32_t              cli_vol_elem;
+  pid_t                pid;
+  uid_t                uid;
+  gid_t                gid;
 };
 
 struct amsg_handler {
   int pstate;
+  /*
+    Handle an incoming packet.  The called function must reply or change the cbpoll events as needed.
+    If an operation is pending then return -EINPROGRESS or 0.
+  */
   int32_t (*handler)(struct sndio_client *cli);
+
+  /*
+    Process pending handler io.  Return -EINPROGRESS to try again (usually part of a chain
+    of async ops), 0 to stop, and -1 for a fatal error.
+   */
+  int32_t (*process)(struct sndio_client *cli, void *context, struct dspd_async_op *op);
 };
+int cli_procmsg(struct sndio_client *cli, void *context, struct dspd_async_op *op);
 static int par2cli(const struct dspd_device_stat *info, 
 		   int mode,
 		   const struct amsg_par *par, 
@@ -204,42 +272,188 @@ static bool client_cbtimer_event(struct cbpoll_ctx *ctx,
 				 void *arg, 
 				 dspd_time_t timeout);
 
+static int client_wxfer(struct sndio_client *cli);
+
+static int32_t set_io_ready(struct sndio_client *cli, int32_t ret)
+{
+  DSPD_ASSERT(cli->io_ready == false);
+  if ( cli->header.reserved_slot >= 0 && (ret == -EINPROGRESS || ret == 0) )
+    {
+      cli->io_ready = true;
+      ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, 0);
+    } else
+    {
+      ret = -EIO;
+    }
+  return ret;
+}
+static int32_t set_io_retry(struct sndio_client *cli)
+{
+  DSPD_ASSERT(cli->io_ready == true);
+  cli->io_ready = false;
+  return 0;
+}
+
+static int32_t io_sync_process(struct sndio_client *cli, int32_t ret)
+{
+  if ( ret < 0 )
+    {
+      cbpoll_ref(cli->server->cbpoll, cli->header.reserved_slot);
+      dspd_aio_shutdown(cli->aio);
+    }
+  return ret;
+}
+
+static void set_io_complete(struct sndio_client *cli)
+{
+  assert(cli->io_ready == true);
+  cli->io_ready = false;
+}
+
+void async_complete_cb(void *context, struct dspd_async_op *op)
+{
+  struct sndio_client *cli = op->data;
+  set_io_complete(cli);
+}
+
+void complete_cb(void *context, struct dspd_async_op *op)
+{
+  struct sndio_client *cli = op->data;
+  int32_t ret = cli_procmsg(cli, context, op);
+  if ( ret < 0 && ret != -EINPROGRESS )
+    {
+      set_io_complete(cli);
+      shutdown(cli->fd, SHUT_RDWR);
+    } else if ( ret == 0 )
+    {
+      cli->imsg.cmd = UINT32_MAX;
+      set_io_complete(cli);
+      cli->offset_in = 0;
+    }
+}
+
+static int32_t sndio_async_ctl(struct sndio_client *cli,
+			       uint32_t stream,
+			       uint32_t req,
+			       const void          *inbuf,
+			       size_t        inbufsize,
+			       void         *outbuf,
+			       size_t        outbufsize)
+{
+  int32_t ret;
+  DSPD_ASSERT(cli->op.error <= 0);
+  memset(&cli->op, 0, sizeof(cli->op));
+  cli->op.stream = stream;
+  cli->op.req = req;
+  cli->op.inbuf = inbuf;
+  cli->op.inbufsize = inbufsize;
+  cli->op.outbuf = outbuf;
+  cli->op.outbufsize = outbufsize;
+  cli->op.complete = complete_cb;
+  cli->op.data = cli;
+  ret = dspd_aio_submit(cli->aio, &cli->op);
+  return set_io_ready(cli, ret);
+}
+
+
+
+static void client_async_destructor(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
+{
+  struct sndio_client *cli = (struct sndio_client*)hdr;
+  dspd_pcmcli_destroy(cli->pcm);
+  free(cli->pcm);
+  dspd_aio_delete(cli->aio);
+  close(cli->fd);
+  free(cli);
+}
+
+static void get_client_info(struct sndio_client *cli)
+{
+  struct ucred cred;
+  socklen_t len = sizeof(cred);
+  char path[PATH_MAX];
+  cli->info.stream = -1;
+  if ( getsockopt(cli->fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0 )
+    {
+      if ( snprintf(path, sizeof(path), "/proc/%d/task/%d/comm", cred.pid, cred.pid) < sizeof(path) )
+	{
+	  int fd = open(path, O_RDONLY), ret;
+	  if ( fd >= 0 )
+	    {
+	      while ( (ret = read(fd, cli->info.name, sizeof(cli->info.name) - 1UL)) < 0 )
+		{
+		  ret = errno;
+		  if ( ret != EINTR && ret != EWOULDBLOCK && ret != EAGAIN )
+		    break;
+		}
+	      close(fd);
+	      char *p = strchr(cli->info.name, '\n');
+	      if ( p )
+		*p = 0;
+	    }
+	}
+      
+      //If this is not running inside the daemon then the client pid can't be used.
+      if ( cli->server->pid < 0 )
+	{
+	  cli->info.pid = cred.pid;
+	  cli->info.uid = cred.uid;
+	  cli->info.gid = cred.gid;
+	} else
+	{
+	  cli->info.pid = cli->server->pid;
+	  cli->info.gid = cli->server->gid;
+	  cli->info.uid = cli->server->uid;
+	}
+    }
+}
+
+static void client_shutdown_cb(struct dspd_aio_ctx *aio, void *arg)
+{
+  struct sndio_client *cli = arg;
+  cbpoll_remove_aio(cli->server->cbpoll, aio);
+  cbpoll_unref(cli->server->cbpoll, cli->header.reserved_slot);
+}
 
 static struct cbpoll_client_hdr *client_create(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr, void *arg)
 {
   struct sndio_ctx *srv = (struct sndio_ctx*)hdr->list;
   struct sndio_client *cli = calloc(1, sizeof(struct sndio_client));
+  
   if ( cli != NULL )
     {
       cli->header = *hdr;
-      cli->cbctx = ctx;
       cli->server = srv;
       cli->fd = hdr->fd;
-      cli->sio_idx = hdr->reserved_slot;
+      cli->pcm = calloc(1, dspd_pcmcli_sizeof());
+      cli->pclient_idx = -1;
+      get_client_info(cli);
+      if ( cli->pcm == NULL ||
+	   cbpoll_aio_new(srv->cbpoll, &cli->aio, NULL, cli->server->daemon, client_shutdown_cb, cli) < 0 )
+	{
+	  client_async_destructor(ctx, hdr);
+	  cli = NULL;
+	}
     }
   return (struct cbpoll_client_hdr*)cli;
 }
 
-static void client_async_destructor(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
-{
-  struct sndio_client *cli = (struct sndio_client*)hdr;
-  if ( cli->pclient )
-    dspd_rclient_delete(cli->pclient);
-  if ( cli->cclient != NULL && cli->cclient != cli->pclient )
-    dspd_rclient_delete(cli->cclient);
-  free(cli);
-}
+
+
 
 static bool client_success(struct cbpoll_ctx *ctx, struct cbpoll_client_hdr *hdr)
 {
   struct sndio_client *cli = (struct sndio_client*)hdr;
   bool ret = false;
-  cli->timer = dspd_cbtimer_new(ctx, client_cbtimer_event, cli);
-  if ( cli->timer )
+  if ( cbpoll_add_aio(ctx, cli->aio, hdr->reserved_slot) >= 0 )
     {
-      if ( hdr->list_index >= 0 && hdr->list_index >= cli->server->nclients )
-	cli->server->nclients = hdr->list_index + 1UL;
-      ret = true;
+      cli->timer = dspd_cbtimer_new(ctx, client_cbtimer_event, cli);
+      if ( cli->timer )
+	{
+	  if ( hdr->list_index >= 0 && hdr->list_index >= cli->server->nclients )
+	    cli->server->nclients = hdr->list_index + 1UL;
+	  ret = true;
+	}
     }
   return ret;
 }
@@ -257,20 +471,10 @@ static bool client_destructor(void *data,
 			      int fd)
 {
   struct sndio_client *cli = data;
-  size_t i; ssize_t c;
   if ( cli->pstate > 0 )
     cli->server->sessrefs--;
-  if ( cli->header.list_index == (cli->server->nclients - 1UL) )
-    {
-      c = -1L;
-      for ( i = 0; i < cli->server->nclients; i++ )
-	{
-	  if ( cli->server->list.clients[i] != NULL &&
-	       cli->server->list.clients[i] != (struct cbpoll_client_hdr*)UINTPTR_MAX )
-	    c = i;
-	}
-      cli->server->nclients = (size_t)(c + 1L);
-    }
+  if ( cli->pclient_idx >= 0 )
+    cli->server->cli_map[cli->pclient_idx] = -1;
   if ( cli->timer )
     {
       dspd_cbtimer_delete(cli->timer);
@@ -282,102 +486,62 @@ static bool client_destructor(void *data,
 
 
 
+
 static bool client_cbtimer_event(struct cbpoll_ctx *ctx, 
 				 struct dspd_cbtimer *timer,
 				 void *arg, 
 				 dspd_time_t timeout)
 {
   struct sndio_client *cli = arg;
-  int32_t ret, s;
-  size_t br;
-  if ( cli->draining )
+  int32_t ret;
+  bool result = true;
+  uint64_t hw, appl;
+  ret = client_wxfer(cli);
+  if ( ret == 0 )
     {
-      ret = dspd_rclient_avail(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
-      if ( ret == -EPIPE )
+      if ( cli->draining )
 	{
-	  s = DSPD_PCM_SBIT_PLAYBACK;
-	  ret = dspd_rclient_ctl(cli->pclient, 
-				 DSPD_SCTL_CLIENT_STOP,
-				 &s,
-				 sizeof(s),
-				 NULL,
-				 0,
-				 &br);
-	  if ( ret < 0 || send_ack(cli) < 0 )
-	    shutdown(cli->fd, SHUT_RDWR);
-	  cli->draining = false;
-	  return false;
-	} else if ( ret < 0 )
+	  ret = dspd_pcmcli_avail(cli->pcm, DSPD_PCM_SBIT_PLAYBACK, &hw, &appl);
+	  if ( (ret == -EPIPE || hw == appl) && cli->io_ready == false && cli->offset_in == 0 && cli->offset_out == cli->len_out )
+	    {
+	      ret = dspd_pcmcli_stop(cli->pcm, DSPD_PCM_SBIT_PLAYBACK, async_complete_cb, cli);
+	      if ( ret < 0 || send_ack(cli) < 0 )
+		shutdown(cli->fd, SHUT_RDWR);
+	      cli->draining = false;
+	      result = false;
+	    } else if ( ret < 0 )
+	    {
+	      shutdown(cli->fd, SHUT_RDWR);
+	      result = false;
+	    }
+	} else if ( ! cli->running )
+	{
+	  result = false;
+	} else if ( client_check_buffers(cli) < 0 ||
+		    client_buildmsg(cli, false) < 0 )
 	{
 	  shutdown(cli->fd, SHUT_RDWR);
-	  return false;
-	}
-      return true;
-    }
-
-  if ( ! cli->running )
-    return false;
-  if ( client_check_buffers(cli) < 0 ||
-       client_buildmsg(cli, false) < 0 )
+	  result = false;
+	} 
+    } else
     {
-      shutdown(cli->fd, SHUT_RDWR);
-      return false;
-    } 
-  return true;
+      result = false;
+    }
+  return result;
 }
 
 static void client_reset(struct sndio_client *cli)
 {
    cli->running = false;
-   cli->flow_control_pending = 0;
+   cli->tickpending = 0;
    cli->frames_written = 0;
    cli->delta = 0;
    cli->last_delay = 0;
    cli->last_fill = 0;
    cli->appl_ptr = 0;
    cli->hw_ptr = 0;
-   
+   cli->rdsil = 0;
 }
-
-static int client_xrun(struct sndio_client *cli, int32_t sbits)
-{
-  int ret = 0;
-  uint32_t pdelta = 0, cdelta = 0;
-  if ( cli->running == true && cli->draining == false )
-    {
-      if ( cli->xrun_policy == SIO_ERROR )
-	{
-	  shutdown(cli->fd, SHUT_RDWR);
-	  ret = -1;
-	}/* else if ( cli->xrun_policy == SIO_SYNC )
-	{
-	  //TODO: Implement this
-	  //It should be possible to do the same thing as SIO_IGNORE, except that the capture buffer will be
-	  //have to be emptied.  It would be helpful if everything could be stopped then started again without
-	  //resetting the pointers to 0 and with the capture buffer empty.
-	  }*/ else
-	{
-	  //Send pointer movements and flow control
-	  if ( sbits & DSPD_PCM_SBIT_PLAYBACK )
-	    {
-	      pdelta = cli->last_delay; //all data was consumed
-	      cli->last_delay = 0;
-	      cli->hw_ptr += pdelta;
-	      //If we still have a write window then there is no need to ask for more data.
-	      if ( cli->write_window == 0 && cli->pclient != NULL )
-		cli->flow_control_pending = cli->pparams.bufsize - cli->pparams.fragsize;
-	    }
-	  if ( sbits & DSPD_PCM_SBIT_CAPTURE )
-	    {
-	      cdelta = cli->cparams.bufsize - cli->last_fill;
-	      cli->last_fill = cli->cparams.bufsize; //buffer is full
-	    }
-	  cli->delta += MAX(pdelta, cdelta);
-	}
-    }
-  return ret;
-}
-
 
 static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint32_t *per)
 {
@@ -391,128 +555,188 @@ static void set_client_wakeup(struct sndio_client *cli, dspd_time_t *next, uint3
   else
     dspd_cbtimer_set(cli->timer, n, p);
 }
-
-
-
-
-
-
-static int client_check_buffers(struct sndio_client *cli)
+void prepare_complete_cb(void *context, struct dspd_async_op *op)
 {
-  int ret = 0;
-  uint32_t avail_min = 1;
-  int32_t delay;
-  uint32_t pdelta = 0, cdelta = 0, mdelta;
-  dspd_time_t pnext = 0, cnext = 0, nextwakeup;
-  int32_t avail = -1;
+  struct sndio_client *cli = op->data;
+  cli->running = false;
+  set_io_complete(cli);
+  if ( cli->imsg.cmd != UINT32_MAX && cli->offset_in == 0 )
+    if ( cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN) < 0 )
+      shutdown(cli->fd, SHUT_RDWR);
+}
+
+
+static int32_t client_pdelta(struct sndio_client *cli, int32_t avail)
+{
+  uint32_t delay = cli->params.bufsize - avail;
+  int32_t delta = 0, mdelta;
+  if ( avail > cli->last_avail )
+    {
+      cli->fillpending += avail - cli->last_avail;
+      if ( cli->fillpending >= cli->params.fragsize || (cli->xrun & DSPD_PCM_SBIT_PLAYBACK) )
+	{
+	  cli->tickpending++;
+	  cli->xrun &= ~DSPD_PCM_SBIT_PLAYBACK;
+	}
+      cli->last_avail = avail;
+    }
+  if ( delay < cli->last_delay )
+    {
+      delta = cli->last_delay - delay;
+      cli->last_delay = delay;
+      mdelta = cli->appl_ptr - cli->hw_ptr;
+      if ( delta > mdelta )
+	delta = mdelta;
+      cli->hw_ptr += delta;
+    }
+  return delta;
+}
+static int32_t client_cdelta(struct sndio_client *cli, int32_t avail)
+{
+  int32_t delta = 0;
+  if ( avail > cli->last_fill )
+    {
+      delta = avail - cli->last_fill;
+      cli->last_fill = avail;
+    }
+  return delta;
+}
+static int32_t playback_avail(struct sndio_client *cli, int32_t *avail)
+{
+  uint64_t hw, appl;
+  int32_t ret = dspd_pcmcli_avail(cli->pcm, DSPD_PCM_SBIT_PLAYBACK, &hw, &appl);
+  if ( ret >= 0 )
+    *avail = ret;
+  else
+    *avail = 0;
+  if ( hw == appl && (cli->xrun_override & DSPD_PCM_SBIT_PLAYBACK) == 0 )
+    ret = -EPIPE;
+  return ret;
+}
+
+static int32_t capture_avail(struct sndio_client *cli, int32_t *avail)
+{
+  int32_t ret = dspd_pcmcli_avail(cli->pcm, DSPD_PCM_SBIT_CAPTURE, NULL, NULL);
+  if ( ret >= 0 )
+    *avail = ret;
+  else
+    *avail = 0;
+  if ( ret >= cli->params.bufsize && (cli->xrun_override & DSPD_PCM_SBIT_CAPTURE) == 0 )
+    ret = -EPIPE;
+  if ( (cli->streams & DSPD_PCM_SBIT_PLAYBACK) == 0 )
+    cli->max_send = ret;
+  return ret;
+}
+
+static int buffer_xrun(struct sndio_client *cli, int32_t streams, int32_t p_avail, int32_t c_avail)
+{
+  int32_t ret = 0;
+  if ( cli->xrun_policy == SIO_ERROR )
+    {
+      ret = shutdown(cli->fd, SHUT_RDWR);
+    } else if ( cli->xrun_policy == SIO_IGNORE )
+    {
+      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
+	{
+	  cli->xrun |= streams;
+	}
+      /*
+	There is nothing special to do for half duplex streams since pausing the pointer
+	already occurs.  The problem with full duplex streams is that there are two pointers
+	and one stream will usually xrun (or just be caught) before the other one.
+      */
+      
+    } else if ( cli->xrun_policy == SIO_SYNC )
+    {
+      //TODO: Let the client see how far the hardware pointer has moved since the xrun
+    }
+  return ret;
+}
+
+int client_check_buffers(struct sndio_client *cli)
+{
+  int32_t p_avail = 0, c_avail = 0, p_delta = 0, c_delta = 0, delta, sbits;
+  int32_t ret = 0, p = 0, c = 0, xrun = 0;
+  dspd_time_t nextwakeup = 0;
   if ( cli->running == true )
     {
-      if ( cli->pclient )
+      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	p = playback_avail(cli, &p_avail);
+      if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	c = capture_avail(cli, &c_avail);
+      if ( p == -EPIPE || c == -EPIPE )
 	{
-	  ret = dspd_rclient_avail_cl(cli->pclient, &avail_min, &delay);
-	  if ( ret == 0 )
-	    {
-	      ret = dspd_rclient_get_next_wakeup_avail(cli->pclient, 
-						       DSPD_PCM_SBIT_PLAYBACK,
-						       avail_min, 
-						       &pnext);
-	      if ( ret < 0 )
-		{
-	
-		  if ( ret == -EPIPE )
-		    ret = client_xrun(cli, DSPD_PCM_SBIT_PLAYBACK);
-		    
-		}
-	    } else if ( ret < 0 )
-	    {
-	      if ( ret == -EPIPE )
-		ret = client_xrun(cli, DSPD_PCM_SBIT_PLAYBACK);
-	      
-	    } else
-	    {
-	      avail = ret;
-	      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
-		{
-		  if ( ret > cli->write_window )
-		    {
-		      
-		      //This way works best because full duplex connections need buffer feedback to read
-		      //if the playback data runs out.
-		      cli->flow_control_pending = ret - cli->write_window;
-		    }
-		} else
-		{
-		  /*
-		    This is more efficient and prevents some clients, such as xine, from spinning.
-		   */
-		  if ( cli->write_window == 0 )
-		    cli->flow_control_pending = ret;
-		}
-	      if ( delay < cli->last_delay && delay > 0 )
-		{
-		  pdelta = cli->last_delay - delay;
-
-		  //This always seems to work and also tends to be more efficient.
-		  if ( ret == 0 )
-		    pdelta = 0;
-		  else
-		    cli->last_delay = delay;
-
-		  mdelta = cli->appl_ptr - cli->hw_ptr;
-		  if ( pdelta > mdelta )
-		    pdelta = mdelta;
-		  cli->hw_ptr += pdelta;
-
-		}
-	      ret = 0;
-	    }
-	}
-      if ( cli->cclient && ret == 0 )
+	  if ( p == -EPIPE )
+	    xrun |= DSPD_PCM_SBIT_PLAYBACK;
+	  if ( c == -EPIPE )
+	    xrun |= DSPD_PCM_SBIT_CAPTURE;
+	  ret = buffer_xrun(cli, xrun, p_avail, c_avail);
+	} else if ( p < 0 )
 	{
-	  ret = dspd_rclient_avail(cli->cclient, DSPD_PCM_SBIT_CAPTURE);
-	  if ( ret == 0 )
+	  ret = p;
+	} else if ( c < 0 )
+	{
+	  ret = c;
+	} else
+	{
+	  cli->xrun_override = 0;
+	  cli->xrun = 0;
+	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
 	    {
-	      ret = dspd_rclient_get_next_wakeup_avail(cli->cclient, 
-						       DSPD_PCM_SBIT_CAPTURE,
-						       cli->cparams.fragsize,
-						       &cnext);
-	      if ( ret < 0 )
-		{
-		  if ( ret == -EPIPE )
-		    ret = client_xrun(cli, DSPD_PCM_SBIT_CAPTURE);
-		}
-	    } else if ( ret < 0 )
-	    {
-	      if ( ret == -EPIPE )
-		ret = client_xrun(cli, DSPD_PCM_SBIT_CAPTURE);
-	    } else
-	    {
-	      if ( cli->cparams.fragsize > avail_min )
-		avail_min = cli->cparams.fragsize;
-	      if ( ret > avail )
-		avail = ret;
-	      if ( ret > cli->last_fill )
-		{
-		  cdelta = ret - cli->last_fill;
-		  cli->last_fill = ret;
-		  ret = 0;
-		}
+	      p_delta = client_pdelta(cli, p_avail);
+	      cli->pdelta += p_delta;
 	    }
+	  if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	    {
+	      c_delta = client_cdelta(cli, c_avail);
+	      cli->cdelta += c_delta;
+	    }
+	  delta = MAX(cli->pdelta, cli->cdelta);
+	  cli->delta += delta;
+	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	    cli->pdelta -= delta;
+	  if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
+	    cli->cdelta -= delta;
+	  
+	  sbits = cli->streams;
+	  ret = dspd_pcmcli_get_next_wakeup(cli->pcm, NULL, &sbits, &nextwakeup);
+	  if ( ret == 0 && nextwakeup > 0 && p_avail == 0 && c_avail == 0 ) 
+	    set_client_wakeup(cli, &nextwakeup, &cli->fragtime);
 	}
-      cli->delta += MAX(pdelta, cdelta);
-      if ( pnext != 0 && cnext != 0 )
-	nextwakeup = MIN(pnext, cnext);
-      else if ( pnext )
-	nextwakeup = pnext;
-      else
-	nextwakeup = cnext;
-      /*
-	Since the server synchronized the hardware with the system timer, set_client_wakeup() 
-	never gets called.  The periodic wakeup is enough to prevent xruns.
-      */
-      if ( nextwakeup > 0 && avail < avail_min )
-	set_client_wakeup(cli, &nextwakeup, NULL);
     }
+  return ret;
+}
+
+static ssize_t client_read_frames(struct sndio_client *cli, char *buf, size_t len)
+{
+  ssize_t total = 0, ret = 0, n;
+  uint64_t frames;
+  if ( cli->rdsil > 0 )
+    {
+      n = MIN(cli->rdsil, len);
+      frames = n;
+      ret = dspd_pcmcli_forward(cli->pcm, DSPD_PCM_SBIT_CAPTURE, &frames);
+      if ( ret == 0 )
+	{
+	  n = frames;
+	  ret = dspd_pcm_fill_silence(cli->params.format, buf, n * DSPD_CLI_CCHAN(cli->params.channels));
+	  DSPD_ASSERT(ret > 0);
+	  total += ret;
+	  cli->rdsil -= ret;
+	  ret = 0;
+	}
+    }
+  if ( ret == 0 && total < len && cli->rdsil == 0 )
+    {
+      n = len - total;
+      ret = dspd_pcmcli_read_frames(cli->pcm, 
+				    buf+(cli->cframe_bytes * total),
+				    n);
+      if ( ret > 0 )
+	total += ret;
+    }
+  if ( total > 0 )
+    ret = total;
   return ret;
 }
 
@@ -520,33 +744,39 @@ static int client_buildmsg(struct sndio_client *cli, bool async)
 {
   int ret = 0;
   size_t max_read;
-  if ( cli->running == false || cli->cstate != CLIENT_STATE_IDLE )
+  if ( cli->running == false || cli->cstate != CLIENT_STATE_IDLE || cli->io_ready == true )
     return 0;
-  if ( cli->flow_control_pending )
+  if ( cli->tickpending )
     {
-      AMSG_INIT(&cli->opkt.msg);
-      cli->opkt.msg.cmd = htonl(AMSG_FLOWCTL);
-      cli->write_window += cli->flow_control_pending;
-      cli->opkt.msg.u.ts.delta = htonl(cli->write_window);
-      cli->flow_control_pending = 0;
-      ret = send_pkt(cli, sizeof(struct amsg), async);
+      if ( cli->fillpending > 0 )
+	{
+	  AMSG_INIT(&cli->opkt.msg);
+	  cli->opkt.msg.cmd = htonl(AMSG_FLOWCTL);
+	  cli->opkt.msg.u.ts.delta = htonl(cli->fillpending);
+	  cli->fillpending = 0;
+	  cli->tickpending = 0;
+	  ret = send_pkt(cli, sizeof(struct amsg), async);
+	}
     } else if ( cli->delta > 0 )
     {
       cli->opkt.msg.cmd = htonl(AMSG_MOVE);
       cli->opkt.msg.u.ts.delta = htonl(cli->delta);
       cli->delta = 0;
       ret = send_pkt(cli, sizeof(struct amsg), async);
-    } else if ( cli->last_fill )
+    } else if ( cli->last_fill > 0 && cli->max_send > 0 && 
+		((cli->xrun & DSPD_PCM_SBIT_CAPTURE) == 0 || (cli->xrun_override & DSPD_PCM_SBIT_CAPTURE)))
     {
       AMSG_INIT(&cli->opkt.msg);
       cli->opkt.msg.cmd = htonl(AMSG_DATA);
-      max_read = AMSG_DATAMAX / cli->cframe_bytes;
-      if ( max_read > cli->last_fill )
-	max_read = cli->last_fill;
-      ret = dspd_rclient_read(cli->cclient, cli->opkt.buf, max_read);
+      //cli->max_send is the maximum amount that can be sent if the buffer
+      //actually has that much data
+      uint32_t max_send = MIN(cli->last_fill, cli->max_send);
+      max_read = MIN(max_send, cli->c_datamax);
+      ret = client_read_frames(cli, cli->opkt.buf, max_read);
       if ( ret > 0 )
 	{
 	  cli->last_fill -= ret;
+	  cli->max_send -= ret;
 	  ret *= cli->cframe_bytes;
 	  cli->opkt.msg.u.data.size = htonl(ret);
 	  ret = send_pkt(cli, sizeof(struct amsg) + ret, async);
@@ -566,130 +796,127 @@ static int client_buildmsg(struct sndio_client *cli, bool async)
 }
 
 
-int client_trigger(struct sndio_client *cli)
+
+void trigger_complete_cb(void *context, struct dspd_async_op *op)
 {
-  int ret;
-  struct dspd_sync_cmd scmd;
-  struct dspd_sync_cmd info;
-  size_t br;
-  uint32_t len = 0;
-  dspd_time_t tstamps[2] = { 0, 0 };
-  if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX &&
-       cli->pclient != cli->cclient )
+  int32_t ret;
+  int32_t sbits;
+  dspd_time_t tstamp;
+  struct sndio_client *cli = op->data;
+  if ( op->error == 0 )
     {
-      
-      memset(&scmd, 0, sizeof(scmd));
-      scmd.cmd = SGCMD_STARTALL;
-      scmd.streams = cli->streams;
-      scmd.sgid = cli->syncgroup.sgid;
-      ret = dspd_rclient_ctl(cli->pclient, 
-			     DSPD_SCTL_CLIENT_SYNCCMD,
-			     &scmd,
-			     sizeof(scmd),
-			     &info,
-			     sizeof(info),
-			     &br);
+      sbits = cli->streams;
+      ret = dspd_pcmcli_get_next_wakeup(cli->pcm, NULL, &sbits, &tstamp);
       if ( ret == 0 )
 	{
-	  cli->tstamp = info.tstamp;
-	  len = cli->pparams.fragsize;
-	}
-    } else if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
-    {
-      ret = dspd_rclient_ctl(cli->pclient,
-			     DSPD_SCTL_CLIENT_START,
-			     &cli->streams,
-			     sizeof(cli->streams),
-			     &tstamps,
-			     sizeof(tstamps),
-			     &br);
-      if ( ret == 0 )
+	  tstamp += cli->fragtime;
+	  set_client_wakeup(cli, &tstamp, &cli->fragtime);
+	  cli->running = true;
+	} else
 	{
-	  cli->tstamp = tstamps[0];
-	  len = cli->pparams.fragsize;
-	}
-    } else
-    {
-      ret = dspd_rclient_ctl(cli->cclient,
-			     DSPD_SCTL_CLIENT_START,
-			     &cli->streams,
-			     sizeof(cli->streams),
-			     &tstamps,
-			     sizeof(tstamps),
-			     &br);
-      if ( ret == 0 )
-	{
-	  cli->tstamp = tstamps[1];
-	  len = cli->cparams.fragsize;
+	  op->error = ret;
 	}
     }
-  dspd_time_t t = cli->tstamp + (len * cli->sample_time);
-  uint32_t p = len * cli->sample_time;
-  set_client_wakeup(cli, &t, &p);
-  cli->running = true;
+  complete_cb(context, op);
+}
+
+int client_trigger(struct sndio_client *cli, int32_t sbits)
+{
+  int32_t err;
+  err = dspd_pcmcli_settrigger(cli->pcm, sbits, trigger_complete_cb, cli);
+  return set_io_ready(cli, err);
+}
+
+static ssize_t client_recv(int fd, char *buf, size_t len)
+{
+  int32_t ret = 0;
+  if ( len > 0 )
+    {
+      ret = read(fd, buf, len);
+      if ( ret < 0 )
+	{
+	  ret = -errno;
+	  if ( ret == -EWOULDBLOCK || ret == -EAGAIN || ret == -EINTR )
+	    ret = 0;
+	} else if ( ret == 0 )
+	{
+	  ret = -ECONNABORTED;
+	}
+    }
   return ret;
 }
 
-
-int client_wxfer(struct sndio_client *cli)
+static int client_wxfer(struct sndio_client *cli)
 {
-  if ( cli->cstate != CLIENT_STATE_RXDATA )
-      return 0;
-
   ssize_t ret;
-  size_t r, m, fr, offset;
-  int e;
-  r = cli->p_max - cli->p_total;
-  m = AMSG_DATAMAX - cli->p_offset;
-  if ( r > m )
-    r = m;
-  ret = read(cli->fd, &cli->p_data[cli->p_offset], r);
-
-
-  if ( ret < 0 )
-    {
-      e = errno;
-      if ( e == EWOULDBLOCK || e == EAGAIN || e == EINTR )
-	ret = 0;
-    } else if ( ret == 0 )
-    {
-      ret = -1;
-    } else
+  size_t fr;
+  if ( cli->cstate != CLIENT_STATE_RXDATA )
+    return 0;
+  ret = client_recv(cli->fd, &cli->p_data[cli->p_offset], cli->p_max - cli->p_offset);
+  if ( ret >= 0 )
     {
       cli->p_offset += ret;
-      cli->p_total += ret;
-      fr = cli->p_offset / cli->pframe_bytes;
+      fr = (cli->p_offset - cli->pxfer_offset) / cli->pframe_bytes;
       if ( fr > 0 )
 	{
-	  ret = dspd_rclient_write(cli->pclient, cli->p_data, fr);
-	  if ( ret < 0 )
+	  if ( (cli->xrun & DSPD_PCM_SBIT_PLAYBACK) != 0 && (cli->xrun_override & DSPD_PCM_SBIT_PLAYBACK) == 0 )
 	    {
-	      ret = -1;
+	      int32_t avail = dspd_pcmcli_avail(cli->pcm, DSPD_PCM_SBIT_PLAYBACK, NULL, NULL);
+	      if ( avail > cli->last_avail )
+		{
+		  int32_t wsil = avail - cli->last_avail;
+		  ret = dspd_pcmcli_write_frames(cli->pcm, NULL, wsil);
+		  if ( ret > 0 )
+		    {
+		      cli->last_avail += wsil - ret;
+		      cli->xrun_override |= DSPD_PCM_SBIT_PLAYBACK;
+		    }
+		}
+	    }
+
+	  ret = dspd_pcmcli_write_frames(cli->pcm, &cli->p_data[cli->pxfer_offset], fr);
+	  if ( ret == -EAGAIN )
+	    {
+	      ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, 0);
 	    } else if ( ret > 0 )
 	    {
-	      offset = ret * cli->pframe_bytes;
-	      cli->p_avail -= ret;
-	      if ( offset < cli->p_offset )
-		memmove(cli->p_data, &cli->p_data[offset], cli->p_offset - offset);
-	      cli->p_offset -= offset;
+	      fr = ret;
+	      cli->pxfer_offset += ret * cli->pframe_bytes;
 	      cli->frames_written += fr;
 	      cli->appl_ptr += fr;
-	      cli->write_window -= fr;
+	      cli->last_avail -= fr;
 	      cli->last_delay += fr;
-	      if ( cli->p_total == cli->p_max )
+	      cli->max_send += fr;
+
+	      if ( cli->xrun & DSPD_PCM_SBIT_CAPTURE )
 		{
-		  cli->p_total = 0;
+		  int32_t avail = dspd_pcmcli_avail(cli->pcm, DSPD_PCM_SBIT_CAPTURE, NULL, NULL);
+		  if ( avail > cli->last_fill )
+		    {
+		      uint64_t f = avail - cli->last_fill, f2 = f;
+		      if ( dspd_pcmcli_forward(cli->pcm, DSPD_PCM_SBIT_CAPTURE, &f) == 0 )
+			{
+			  cli->last_fill -= f2 - f;
+			  cli->rdsil = cli->last_fill;
+			  cli->xrun &= ~DSPD_PCM_SBIT_CAPTURE;
+			  cli->xrun_override |= DSPD_PCM_SBIT_CAPTURE;
+			}
+		    } else
+		    {
+		      cli->xrun_override |= DSPD_PCM_SBIT_CAPTURE;
+		    }
+		}
+	      if ( cli->p_offset == cli->p_max && cli->pxfer_offset == cli->p_offset )
+		{
 		  cli->p_max = 0;
 		  cli->cstate = CLIENT_STATE_IDLE;
-		}
-	      if ( cli->running == false )
-		{
-		  if ( cli->frames_written >= cli->start_threshold )
-		      ret = client_trigger(cli);
+		  ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
 		} else
 		{
-		  ret = 0;
+		  ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, 0);
 		}
+	      if ( cli->running == false && cli->frames_written >= cli->start_threshold )
+		ret = client_trigger(cli, cli->streams);
 	    }
 	} else
 	{
@@ -709,12 +936,12 @@ static int send_pkt(struct sndio_client *cli, size_t len, bool async)
     {
       ret = client_pollout(cli);
       if ( ret == 0 && cli->cstate == CLIENT_STATE_TXPKT )
-	ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
+	ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLOUT);
       else
 	cli->cstate = CLIENT_STATE_IDLE;
     } else
     {
-      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
+      ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLOUT);
     }
   return ret;
 }
@@ -730,10 +957,12 @@ static int send_rmsg(struct sndio_client *cli, uint32_t cmd)
   cli->opkt.msg.cmd = htonl(cmd);
   return send_pkt(cli, sizeof(cli->opkt.msg), false);
 }
-static int send_none(struct sndio_client *cli, int ret)
+static int send_none(struct sndio_client *cli, int ret, bool ready)
 {
   cli->cstate = CLIENT_STATE_IDLE;
   cli->offset_in = 0;
+  if ( ready == true && ret == 0 )
+    ret = cbpoll_enable_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
   return ret;
 }
 static int amsg_auth(struct sndio_client *cli)
@@ -754,147 +983,111 @@ static int amsg_auth(struct sndio_client *cli)
 	  cli->server->sessrefs++;
 	} else
 	{
-	  ret = -1;
+	  ret = -EACCES;
 	}
     }
-  return send_none(cli, ret);
+  return send_none(cli, ret, false);
 }
 
-static void route_changed(int32_t dev, int32_t index, void *client, int32_t err, void *arg)
+/*static void route_changed(int32_t dev, int32_t index, void *client, int32_t err, void *arg)
 {
   //Nothing to do since the device isn't accessed directly.
   return;
+  }*/
+
+
+static int amsg_hello_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  struct socksrv_open_reply *oreply = op->outbuf;
+  int32_t ret = -EINVAL;
+  struct dspd_pcmcli_bindparams params = { 0 };
+  if ( op->error < 0 )
+    {
+      ret = op->error;
+    } else if ( cli->data.hello.hello_state == HELLO_STATE_OPENING )
+    {
+      if ( op->outbufsize != sizeof(*oreply) )
+	{
+	  ret = -EPROTO;
+	} else
+	{
+	  ret = dspd_pcmcli_init(cli->pcm, cli->streams, DSPD_PCMCLI_NOTIMER | DSPD_PCMCLI_NONBLOCK | DSPD_PCMCLI_CONSTANT_LATENCY);
+	  if ( ret == 0 )
+	    ret = dspd_pcmcli_set_no_xrun(cli->pcm, true);
+	  if ( ret == 0 )
+	    {
+	      params.playback_stream = oreply->playback_stream;
+	      params.capture_stream = oreply->capture_stream;
+	      params.playback_device = oreply->playback_device;
+	      params.capture_stream = oreply->capture_device;
+	      params.context = cli->aio;
+	      params.playback_info = &oreply->playback_info;
+	      params.capture_info = &oreply->capture_info;
+	      ret = dspd_pcmcli_bind(cli->pcm, &params, DSPD_PCMCLI_BIND_CONNECTED, NULL, NULL);
+	      if ( ret == 0 )
+		{
+		  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+		    {
+		      //TODO: Routing callbacks
+		      cli->pclient_idx = params.playback_stream;
+		      if ( cli->pclient_idx >= 0 )
+			cli->server->cli_map[cli->pclient_idx] = cli->header.list_index;
+		    }
+		  ret = set_io_retry(cli);
+		  if ( ret == 0 )
+		    {
+		      ret = set_io_ready(cli, dspd_aio_set_info(cli->aio, &cli->info, complete_cb, cli));
+		      if ( ret == 0 )
+			{
+			  cli->data.hello.hello_state = HELLO_STATE_SETINFO;
+			  ret = -EINPROGRESS;
+			}
+		    }
+		}
+	    }
+	}
+    } else if ( cli->data.hello.hello_state == HELLO_STATE_SETINFO )
+    {
+      cli->pstate = PROTO_INIT;
+      cli->data.hello.hello_state = HELLO_STATE_IDLE;
+      ret = send_ack(cli);
+    }
+  return ret;
 }
 
 static int amsg_hello(struct sndio_client *cli)
 {
-  int ret;
-  struct amsg_hello *h = &cli->imsg.u.hello;
-  size_t br;
+  const struct amsg_hello *h = &cli->imsg.u.hello;
+  struct socksrv_open_req *oreq = &cli->data.hello.oreq;
   uint16_t mode = ntohs(h->mode);
-  char buf[32];
-  struct dspd_sg_info sg;
-  struct dspd_cli_info_pkt info;
-  socklen_t len;
-  char path[1024];
-  struct dspd_client_cb ccb;
-  if ( (mode & ~(DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) != 0 ||
-       h->version != AMSG_VERSION )
-    return -1; //Unsupported mask
-  sprintf(buf, "hw:%hhd", h->devnum);
+  int ret = -1;
+  memset(&cli->data.hello, 0, sizeof(cli->data.hello));
+#ifndef ENABLE_FULLDUPLEX
   if ( mode == DSPD_PCM_SBIT_FULLDUPLEX )
+    return -EINVAL;
+#endif
+
+  if ( ! ((mode & ~(DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE)) != 0 ||
+	  h->version != AMSG_VERSION || mode == 0 ))
     {
-      ret = dspd_rclient_open(cli->server->ctx, cli->server->server_addr, buf, mode, &cli->pclient);
+      oreq->sbits = mode;
+      oreq->flags = 0;
+      snprintf(oreq->name, sizeof(oreq->name), "hw:%hhd", h->devnum);
+      cli->streams = mode;
+
+      ret = sndio_async_ctl(cli, 
+			    -1, 
+			    DSPD_SOCKSRV_REQ_OPEN_BY_NAME,
+			    &cli->data.hello.oreq,
+			    sizeof(cli->data.hello.oreq),
+			    &cli->data.hello.oreply,
+			    sizeof(cli->data.hello.oreply));
       if ( ret == 0 )
-	{
-	  cli->cclient = cli->pclient;
-	} else
-	{
-	  ret = dspd_rclient_open(cli->server->ctx, cli->server->server_addr, buf, DSPD_PCM_SBIT_PLAYBACK, &cli->pclient);
-	  if ( ret == 0 )
-	    {
-	      ret = dspd_rclient_open(cli->server->ctx, cli->server->server_addr, buf, DSPD_PCM_SBIT_CAPTURE, &cli->cclient);
-	      if ( ret == 0 )
-		{
-		  memset(&sg, 0, sizeof(sg));
-		  sg.sbits = DSPD_PCM_SBIT_FULLDUPLEX;
-		  ret = dspd_rclient_ctl(cli->pclient, 
-					 DSPD_SCTL_CLIENT_SYNCGROUP,
-					 &sg,
-					 sizeof(sg),
-					 &cli->syncgroup,
-					 sizeof(cli->syncgroup),
-					 &br);
-		  if ( ret == 0 )
-		    ret = dspd_rclient_ctl(cli->cclient, 
-					   DSPD_SCTL_CLIENT_SYNCGROUP,
-					   &cli->syncgroup,
-					   sizeof(cli->syncgroup),
-					   NULL,
-					   0,
-					   &br);
-		}
-	    }
-	}
-    } else if ( mode == DSPD_PCM_SBIT_PLAYBACK )
-    {
-      ret = dspd_rclient_open(cli->server->ctx, cli->server->server_addr, buf, mode, &cli->pclient);
-    } else if ( mode == DSPD_PCM_SBIT_CAPTURE )
-    {
-      ret = dspd_rclient_open(cli->server->ctx, cli->server->server_addr, buf, mode, &cli->cclient);
-    } else
-    {
-      ret = -1;
-    }
-  if ( mode & DSPD_PCM_SBIT_PLAYBACK )
-    {
-      memset(&info, 0, sizeof(info));
-      len = sizeof(info.cred.cred);
-      if ( getsockopt(cli->fd, SOL_SOCKET, SO_PEERCRED, &info.cred.cred, &len) == 0 )
-	{
-	  if ( snprintf(path, sizeof(path), "/proc/%d/task/%d/comm", info.cred.cred.pid, info.cred.cred.pid) < sizeof(path) )
-	    {
-	      int fd = open(path, O_RDONLY), ret;
-	      memset(&info, 0, sizeof(info));
-	      if ( fd >= 0 )
-		{
-		  while ( (ret = read(fd, info.name, sizeof(info.name) - 1UL)) < 0 )
-		    {
-		      ret = errno;
-		      if ( ret != EINTR && ret != EWOULDBLOCK && ret != EAGAIN )
-			break;
-		    }
-		  close(fd);
-		  char *p = strchr(info.name, '\n');
-		  if ( p )
-		    *p = 0;
-		}
-	      if ( info.name[0] == 0 )
-		sprintf(info.name, "Client #%d (pid %d)", dspd_rclient_client_index(cli->pclient), info.cred.cred.pid);
-	    }
-	  //This will fail if sndio is running in a separate process.
-	  (void)dspd_rclient_ctl(cli->pclient,
-				 DSPD_SCTL_CLIENT_SETINFO,
-				 &info,
-				 sizeof(info),
-				 NULL,
-				 0,
-				 &br);
-	}
-    }
-  if ( ret == 0 )
-    {
-      cli->streams = mode; //Same as PCM_SBIT
-      cli->pstate = PROTO_INIT;
-      if ( cli->pclient != NULL )
-	{
-	  cli->pclient_idx = dspd_rclient_client_index(cli->pclient);
-	  if ( cli->pclient_idx > 0 )
-	    {
-	      cli->server->cli_map[cli->pclient_idx] = cli->sio_idx;
-	      if ( cli->server->ctx != NULL )
-		{
-		  memset(&ccb, 0, sizeof(ccb));
-		  ccb.index = cli->pclient_idx;
-		  ccb.callback.route_changed = route_changed;
-		  ccb.arg = cli;
-		  (void)dspd_rclient_ctl(cli->pclient,
-					 DSPD_SCTL_CLIENT_SETCB,
-					 &ccb,
-					 sizeof(ccb),
-					 NULL,
-					 0,
-					 &br);
-		}
-	    }
-	}
-      ret = send_ack(cli);
-    } else
-    {
-      ret = -1;
+	cli->data.hello.hello_state = HELLO_STATE_OPENING;
     }
   return ret;
 }
+
 
 static void par2cpu(struct amsg_par *par)
 {
@@ -935,30 +1128,75 @@ static void combine_params(struct dspd_cli_params *pparams, struct dspd_cli_para
   adjust_param(&pparams->bufsize, &cparams->bufsize);
   adjust_param(&pparams->fragsize, &cparams->fragsize);
   adjust_param(&pparams->latency, &cparams->latency);
+  pparams->xflags |= DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS;
+  pparams->channels = DSPD_CLI_FDCHAN(pparams->channels, cparams->channels);
 }
 
-static int _amsg_setpar(struct sndio_client *cli)
+
+static int amsg_setpar_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
 {
   struct amsg_par *par = &cli->imsg.u.par;
   int ret;
-  struct dspd_cli_params pparams, cparams;
-  const struct dspd_cli_params *p;
-  struct dspd_rclient_hwparams hwparams;
-  
-  if ( cli->pstate != PROTO_INIT && cli->pstate != PROTO_CONFIGURED )
-    return -1;
-  par2cpu(par);
-  memset(&pparams, 0x00, sizeof(pparams));
-  memset(&cparams, 0x00, sizeof(cparams));
-  memset(&hwparams, 0x00, sizeof(hwparams));
-  if ( ! cli->server->ctx )
+  if ( op->error < 0 )
+    return op->error;
+  if ( cli->data.setpar_state == false )
     {
-      pparams.flags = DSPD_CLI_FLAG_SHM;
-      cparams.flags = DSPD_CLI_FLAG_SHM;
+      ret = dspd_pcmcli_get_hwparams(cli->pcm, &cli->params);
+      if ( ret == 0 )
+	{
+	  cli->data.setpar_state = true;
+	  ret = dspd_pcmcli_prepare(cli->pcm, complete_cb, cli);
+	}
+    } else
+    {
+      cli->pframe_bytes = dspd_pcmcli_frames_to_bytes(cli->pcm, NULL, DSPD_PCM_SBIT_PLAYBACK, 1UL);
+      if ( cli->pframe_bytes > 0 )
+	cli->p_datamax = AMSG_DATAMAX / cli->pframe_bytes;
+
+      cli->cframe_bytes = dspd_pcmcli_frames_to_bytes(cli->pcm, NULL, DSPD_PCM_SBIT_CAPTURE, 1UL);
+      if ( cli->cframe_bytes > 0 )
+	cli->c_datamax = AMSG_DATAMAX / cli->cframe_bytes;
+      
+
+      cli->start_threshold = cli->params.bufsize;
+      if ( cli->params.rate )
+	cli->sample_time = 1000000000 / cli->params.rate;
+      cli->fragtime = cli->sample_time * cli->params.fragsize;
+      cli->par_set = true;
+      cli->pstate = PROTO_CONFIGURED;
+#ifdef ENABLE_XRUN_POLICIES
+      if ( AMSG_ISSET(par->xrun) )
+	cli->xrun_policy = par->xrun;
+      else
+	cli->xrun_policy = SIO_IGNORE;
+#else
+      if ( AMSG_ISSET(par->xrun) && par->xrun == SIO_ERROR )
+	cli->xrun_policy = SIO_ERROR;
+      else
+	cli->xrun_policy = SIO_IGNORE;
+	
+#endif
+
+      ret = send_none(cli, 0, true);
     }
+  return ret;
+}
+
+static int amsg_setpar(struct sndio_client *cli)
+{
+  struct dspd_cli_params pparams = { 0 }, cparams = { 0 };
+  struct dspd_cli_params *params;
+  int32_t ret = 0;
+  struct amsg_par *par = &cli->imsg.u.par;
+  if ( cli->pstate != PROTO_INIT && cli->pstate != PROTO_CONFIGURED )
+    return -EBADFD;
+  cli->data.setpar_state = false;
+  par2cpu(par);
+ 
   if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
     {
-      ret = par2cli(dspd_rclient_devinfo(cli->pclient),
+      
+      ret = par2cli(dspd_pcmcli_device_info(cli->pcm, DSPD_PCM_SBIT_PLAYBACK),
 		    DSPD_PCM_SBIT_PLAYBACK,
 		    par,
 		    &pparams);
@@ -968,111 +1206,30 @@ static int _amsg_setpar(struct sndio_client *cli)
     }
   if ( ret == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
     {
-      ret = par2cli(dspd_rclient_devinfo(cli->cclient),
+      ret = par2cli(dspd_pcmcli_device_info(cli->pcm, DSPD_PCM_SBIT_CAPTURE),
 		    DSPD_PCM_SBIT_CAPTURE,
 		    par,
 		    &cparams);
     }
   if ( ret == 0 )
     {
-      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX && cli->cclient == cli->pclient )
-	{
-	  combine_params(&pparams, &cparams);
-	  hwparams.playback_params = &pparams;
-	  hwparams.capture_params = &cparams;
-	  ret = dspd_rclient_set_hw_params(cli->pclient, &hwparams);
-	  if ( ret == 0 )
-	    {
-	      p = dspd_rclient_get_hw_params(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
-	      assert(p);
-	      cli->pparams = *p;
-
-	      p = dspd_rclient_get_hw_params(cli->cclient, DSPD_PCM_SBIT_CAPTURE);
-	      assert(p);
-	      cli->cparams = *p;
-
-	      cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
-	      cli->cframe_bytes = dspd_get_pcm_format_size(cli->cparams.format) * cli->cparams.channels;
-	      cli->start_threshold = cli->pparams.bufsize;
-	    }
-	} else 
-	{
-	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
-	    {
-	      hwparams.playback_params = &pparams;
-	      ret = dspd_rclient_set_hw_params(cli->pclient, &hwparams);
-	      if ( ret == 0 )
-		{
-		  p = dspd_rclient_get_hw_params(cli->pclient, DSPD_PCM_SBIT_PLAYBACK);
-		  assert(p);
-		  cli->pparams = *p;
-		  cli->start_threshold = cli->pparams.bufsize;
-		  cli->pframe_bytes = dspd_get_pcm_format_size(cli->pparams.format) * cli->pparams.channels;
-		  
-		}
-	    }
-	  if ( ret == 0 && (cli->streams & DSPD_PCM_SBIT_CAPTURE) )
-	    {
-	      hwparams.playback_params = NULL;
-	      hwparams.capture_params = &cparams;
-	      ret = dspd_rclient_set_hw_params(cli->cclient, &hwparams);
-	      if ( ret == 0 )
-		{
-		  p = dspd_rclient_get_hw_params(cli->cclient, DSPD_PCM_SBIT_CAPTURE);
-		  assert(p);
-		  cli->cparams = *p;
-		  cli->cframe_bytes = dspd_get_pcm_format_size(cli->cparams.format) * cli->cparams.channels;
-		  
-		}
-	    }
-	}
-    }
-  if ( ret == 0 )
-    {
-      if ( cli->pparams.rate )
-	cli->sample_time = 1000000000 / cli->pparams.rate;
-      else if ( cli->cparams.rate )
-	cli->sample_time = 1000000000 / cli->cparams.rate;
-      cli->par_set = true;
-      cli->pstate = PROTO_CONFIGURED;
-      if ( AMSG_ISSET(par->xrun) )
-	cli->xrun_policy = par->xrun;
+      if ( cli->streams == DSPD_PCM_SBIT_FULLDUPLEX )
+	combine_params(&pparams, &cparams);
+      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
+	params = &pparams;
       else
-	cli->xrun_policy = SIO_IGNORE;
+	params = &cparams;
+      if ( ! cli->server->daemon )
+	params->flags |= DSPD_CLI_FLAG_SHM;
+      params->stream = cli->streams;
+#ifdef DEBUG
+      dspd_dump_params(params, stdout);
+#endif
+      ret = set_io_ready(cli, dspd_pcmcli_set_hwparams_async(cli->pcm, params, complete_cb, cli));
     }
-  //This one has no reply.  The client should normally send
-  //AMSG_GETPAR next which replies with AMSG_GETPAR.
-  //return send_none(cli, ret);
   return ret;
 }
 
-static void amsg_setpar_cb(struct cbpoll_ctx *ctx,
-			   struct cbpoll_msg *wrk,
-			   void *data)
-{
-  struct sndio_client *cli = data;
-  int ret = _amsg_setpar(cli);
-  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
-  if ( ret == 0 )
-    evt.arg = CLIENT_MSG_COMPLETE;
-  else
-    evt.arg = CLIENT_MSG_ERROR;
-  evt.msg = CBPOLL_PIPE_MSG_DEFERRED_WORK;
-  evt.fd = wrk->fd;
-  evt.index = wrk->index;
-  if ( cbpoll_send_event(ctx, &evt) < 0 )
-    shutdown(wrk->fd, SHUT_RDWR);
-}
-
-static int amsg_setpar(struct sndio_client *cli)
-{
-  int ret;
-  cbpoll_queue_deferred_work(cli->cbctx, cli->header.reserved_slot, 0, amsg_setpar_cb);
-  ret = send_none(cli, 0);
-  cli->cstate = CLIENT_STATE_BUSY;
-  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, 0);
-  return ret;
-}
 
 static int amsg_getpar(struct sndio_client *cli)
 {
@@ -1085,20 +1242,13 @@ static int amsg_getpar(struct sndio_client *cli)
   AMSG_INIT(&cli->opkt.msg);
   if ( cli->pstate != PROTO_INIT && cli->pstate != PROTO_CONFIGURED )
     {
-      ret = -1;
+      ret = -EBADFD;
     } else if ( cli->par_set )
     {
       
       
-      if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
-	{
-	  fmt = cli->pparams.format;
-	  clp = &cli->pparams;
-	} else
-	{
-	  fmt = cli->cparams.format;
-	  clp = &cli->cparams;
-	}
+      fmt = cli->params.format;
+      clp = &cli->params;
       if ( dspd_pcm_format_info(fmt, &bits, &len, &usig, &be, &f) )
 	{
 	  par->bps = len;
@@ -1116,96 +1266,129 @@ static int amsg_getpar(struct sndio_client *cli)
 	  par->xrun = cli->xrun_policy;
 	  par->round = ntohl(clp->fragsize);
 	  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
-	    par->pchan = ntohs(cli->pparams.channels);
+	    par->pchan = ntohs(dspd_pcmcli_hw_params_get_channels(cli->pcm, NULL, DSPD_PCM_SBIT_PLAYBACK));
 	  if ( cli->streams & DSPD_PCM_SBIT_CAPTURE )
-	    par->rchan = ntohs(cli->cparams.channels);
+	    par->rchan = ntohs(dspd_pcmcli_hw_params_get_channels(cli->pcm, NULL, DSPD_PCM_SBIT_CAPTURE));
 	  ret = send_rmsg(cli, AMSG_GETPAR);
 	} else
 	{
-	  ret = -1;
+	  ret = -EINVAL;
 	}
 
     } else
     {
       //TODO: Fake config from default par (memset 0xFF)
-      ret = -1;
+      ret = -EINVAL;
+    }
+  return ret;
+}
+
+static int amsg_start_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  int32_t ret = op->error;
+  if ( ret == 0 )
+    {
+      cli->pstate = PROTO_TRIGGERED;
+      if ( cli->streams == DSPD_PCM_SBIT_CAPTURE )
+	ret = send_none(cli, 0, false);
+      else
+	ret = send_pkt(cli, sizeof(cli->opkt.msg), false);
     }
   return ret;
 }
 
 static int amsg_start(struct sndio_client *cli)
 {
-  cli->pstate = PROTO_TRIGGERED;
+  int32_t ret;
   cli->frames_written = 0;
-  cli->write_window = cli->pparams.bufsize - cli->pparams.fragsize;
-  cli->start_threshold = cli->write_window;
+  cli->pdelta = 0;
+  cli->cdelta = 0;
+  cli->fillpending = cli->params.bufsize - cli->params.fragsize;
+  cli->last_avail = cli->fillpending;
+  cli->start_threshold = cli->fillpending;
+
   AMSG_INIT(&cli->opkt.msg);
   cli->opkt.msg.cmd = htonl(AMSG_FLOWCTL);
-  cli->opkt.msg.u.ts.delta = htonl(cli->write_window);
-
+  cli->opkt.msg.u.ts.delta = htonl(cli->fillpending);
   if ( cli->streams == DSPD_PCM_SBIT_CAPTURE )
     {
-      if ( client_trigger(cli) < 0 )
-	return -1;
-      return send_none(cli, 0);
+      ret = client_trigger(cli, DSPD_PCM_SBIT_CAPTURE);
+    } else
+    {
+      cli->pstate = PROTO_TRIGGERED;
+      ret = send_pkt(cli, sizeof(cli->opkt.msg), false);
     }
-  return send_pkt(cli, sizeof(cli->opkt.msg), false);
+  cli->fillpending = 0;
+  return ret;
+}
+
+
+
+static int amsg_stop_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  int ret;
+  if ( ! (cli->streams & DSPD_PCM_SBIT_PLAYBACK) )
+    client_reset(cli);
+  cli->running = false;
+  if ( op->error == 0 && cli->draining == false )
+    ret = send_ack(cli);
+  else
+    ret = send_none(cli, 0, false);
+  return ret;
 }
 
 static int amsg_stop(struct sndio_client *cli)
 {
   int ret = 0;
-  int32_t s;
-  size_t br;
+  int32_t sbits = 0;
   cli->pstate = PROTO_CONFIGURED;
-  if ( cli->pclient && ret == 0 )
+  if ( (cli->streams & DSPD_PCM_SBIT_PLAYBACK) && ret == 0 )
     {
       if ( cli->running == false && cli->frames_written > 0 )
 	{
-	  client_trigger(cli);
 	  cli->draining = true;
-	  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, 0);
-	  ret = send_none(cli, 0);
+	  ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, 0);
+	  sbits |= DSPD_PCM_SBIT_PLAYBACK;
 	} 
     }
+  if ( ret == 0 )
+    ret = client_trigger(cli, sbits);
+  return ret;
+}
 
-  if ( cli->cclient )
-    {
-      s = DSPD_PCM_SBIT_CAPTURE;
-      ret = dspd_rclient_ctl(cli->cclient, 
-			     DSPD_SCTL_CLIENT_STOP,
-			     &s,
-			     sizeof(s),
-			     NULL,
-			     0,
-			     &br);
-    }
-  if ( ! cli->pclient )
-    client_reset(cli);
-  cli->running = false;
-  if ( ret == 0 && cli->draining == false )
-    ret = send_ack(cli);
+
+static int amsg_data_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  int32_t ret = client_check_buffers(cli);
+  if ( ret == 0 )
+    ret = client_wxfer(cli);
   return ret;
 }
 
 static int amsg_data(struct sndio_client *cli)
 {
   size_t size = ntohl(cli->imsg.u.data.size);
-  if ( (cli->streams & DSPD_PCM_SBIT_PLAYBACK) == 0 ||
-       (size % cli->pframe_bytes) != 0 ||
-       (size / cli->pframe_bytes) > cli->write_window )
-    return -1;
-       
-  if ( dspd_rclient_test_xrun(cli->pclient, cli->streams) )
-    if ( client_xrun(cli, cli->streams) < 0 )
-      return -1;
-  cli->p_max = size;
-  cli->p_total = 0;
-  cli->p_len = 0;
-  cli->p_offset = 0;
-  cli->cstate = CLIENT_STATE_RXDATA;
-  cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
-  return client_wxfer(cli);
+  int ret = -EBADFD;
+  if ( ! ((cli->streams & DSPD_PCM_SBIT_PLAYBACK) == 0 ||
+	  (size % cli->pframe_bytes) != 0 ||
+	  size > AMSG_DATAMAX) )
+    {
+      cli->p_max = size;
+      cli->p_total = 0;
+      cli->p_len = 0;
+      cli->p_offset = 0;
+      cli->cstate = CLIENT_STATE_RXDATA;
+      cli->pxfer_offset = 0;
+      cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
+      ret = client_wxfer(cli);
+    }
+  return ret;
+}
+
+static int amsg_setvol_process(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
+  return op->error;
 }
 
 static int amsg_setvol(struct sndio_client *cli)
@@ -1216,22 +1399,24 @@ static int amsg_setvol(struct sndio_client *cli)
    */
   uint32_t v = ntohl(cli->imsg.u.vol.ctl);
   int ret;
-  struct dspd_stream_volume sv;
+  struct dspd_stream_volume *sv = &cli->data.vol;
   if ( v > SIO_MAXVOL )
     v = SIO_MAXVOL;
-  if ( cli->pclient )
+  if ( cli->streams & DSPD_PCM_SBIT_PLAYBACK )
     {
-      sv.stream = DSPD_PCM_SBIT_PLAYBACK;
-      sv.volume = (float)v / (float)SIO_MAXVOL;
-      ret = dspd_rclient_ctl(cli->pclient,
-			     DSPD_SCTL_CLIENT_SETVOLUME,
-			     &sv,
-			     sizeof(sv),
-			     NULL,
-			     0,
-			     NULL);
-      if ( ret == 0 )
-	cli->volume = v;
+      memset(sv, 0, sizeof(*sv));
+      sv->stream = DSPD_PCM_SBIT_PLAYBACK;
+      sv->volume = (float)v / (float)SIO_MAXVOL;
+      //If the op fails then the client will be disconnected.  If the op succeeds
+      //then there will be no volume event for this operation.
+      cli->volume = v;
+      ret = sndio_async_ctl(cli,
+			    -1,
+			    DSPD_SCTL_CLIENT_SETVOLUME,
+			    sv,
+			    sizeof(sv),
+			    NULL,
+			    0);
     } else
     {
       ret = 0;
@@ -1242,7 +1427,7 @@ static int amsg_setvol(struct sndio_client *cli)
 static int amsg_bye(struct sndio_client *cli)
 {
   shutdown(cli->fd, SHUT_RDWR);
-  return -1;
+  return -ESHUTDOWN;
 }
 
 static int amsg_ack(struct sndio_client *cli)
@@ -1262,10 +1447,12 @@ static struct amsg_handler amsg_handlers[_AMSG_COUNT] = {
   [AMSG_HELLO] = {
     .pstate = PROTO_AUTH,
     .handler = amsg_hello,
+    .process = amsg_hello_process,
   },
   [AMSG_SETPAR] = {
     .pstate = -1,
     .handler = amsg_setpar,
+    .process = amsg_setpar_process,
   },
   [AMSG_GETPAR] = {
     .pstate = -1,
@@ -1274,18 +1461,22 @@ static struct amsg_handler amsg_handlers[_AMSG_COUNT] = {
   [AMSG_START] = {
     .pstate = PROTO_CONFIGURED,
     .handler = amsg_start,
+    .process = amsg_start_process,
   },
   [AMSG_STOP] = {
     .pstate = PROTO_TRIGGERED,
     .handler = amsg_stop,
+    .process = amsg_stop_process,
   },
   [AMSG_DATA] = {
     .pstate = PROTO_TRIGGERED,
     .handler = amsg_data,
+    .process = amsg_data_process,
   },
   [AMSG_SETVOL] = {
     .pstate = -1,
     .handler = amsg_setvol,
+    .process = amsg_setvol_process,
   },
   [AMSG_BYE] = {
     .pstate = -1,
@@ -1293,7 +1484,7 @@ static struct amsg_handler amsg_handlers[_AMSG_COUNT] = {
   },
 };
 
-int cli_execmsg(struct sndio_client *cli)
+int cli_startmsg(struct sndio_client *cli)
 {
   size_t cmd = (size_t)ntohl(cli->imsg.cmd);
   struct amsg_handler *h;
@@ -1303,12 +1494,32 @@ int cli_execmsg(struct sndio_client *cli)
       h = &amsg_handlers[cmd];
       if ( h->handler != NULL && 
 	   ((cli->pstate == h->pstate) || (h->pstate == -1 && cli->pstate >= PROTO_INIT)))
-	ret = h->handler(cli);
+	{
+	  ret = h->handler(cli);
+	  if ( ret == -EINPROGRESS )
+	    ret = 0;
+	}
     }
   cli->offset_in = 0;
   return ret;
 }
 
+int cli_procmsg(struct sndio_client *cli, void *context, struct dspd_async_op *op)
+{
+  size_t cmd = (size_t)ntohl(cli->imsg.cmd);
+  struct amsg_handler *h = NULL;
+  int ret = -1;
+  if ( cmd < _AMSG_COUNT )
+    {
+      h = &amsg_handlers[cmd];
+      if ( h->process != NULL && 
+	   ((cli->pstate == h->pstate) || (h->pstate == -1 && cli->pstate >= PROTO_INIT)))
+	{
+	  ret = h->process(cli, context, op);
+	}
+    }
+  return ret;
+}
 
 
 
@@ -1339,7 +1550,7 @@ int client_pollin(struct sndio_client *cli)
 	{
 	  cli->offset_in += ret;
 	  if ( cli->offset_in == sizeof(cli->imsg) )
-	    ret = cli_execmsg(cli);
+	    ret = cli_startmsg(cli);
 	  else
 	    ret = 0;
 	}
@@ -1351,7 +1562,7 @@ int client_pollin(struct sndio_client *cli)
     case CLIENT_STATE_TXPKT:
       //This may rarely happen if a packet was started during a timer event and
       //there was a POLLIN event at the same time.
-      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLOUT);
+      ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLOUT);
       break;
     }
   return ret;
@@ -1387,7 +1598,7 @@ static int client_pollout(struct sndio_client *cli)
 	      
 	      ret = client_buildmsg(cli, true);
 	      if ( cli->cstate == CLIENT_STATE_IDLE )
-		  ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
+		  ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
 	    } else
 	    {
 	      ret = 0;
@@ -1395,9 +1606,8 @@ static int client_pollout(struct sndio_client *cli)
 	}
     } else
     {
-      ret = cbpoll_set_events(cli->cbctx, cli->header.reserved_slot, POLLIN);
+      ret = cbpoll_set_events(cli->server->cbpoll, cli->header.reserved_slot, POLLIN);
     }
-  
   return ret;
 }
 
@@ -1409,15 +1619,21 @@ static int client_fd_event(void *data,
 {
   struct sndio_client *cli = data;
   int32_t ret;
- 
+  DSPD_ASSERT(cli->timer != NULL);
   if ( revents & (POLLHUP|POLLRDHUP|POLLNVAL|POLLERR) )
-    ret = -1;
+    ret = -EIO;
   else if ( revents & POLLIN )
     ret = client_pollin(cli);
   else if ( revents & POLLOUT )
     ret = client_pollout(cli);
   else
     ret = 0;
+  DSPD_ASSERT(cli->timer != NULL);
+  ret = io_sync_process(cli, ret);
+#ifdef DEBUG
+  if ( ret < 0 )
+    fprintf(stderr, "Client error %d\n", ret);
+#endif
   return ret;
 }
 
@@ -1461,7 +1677,6 @@ static bool server_destructor(void *data,
 			      int index,
 			      int fd)
 {
-  fprintf(stderr, "Closing sndio socket %d\n", fd);
   return true;
 }
 
@@ -1505,7 +1720,7 @@ static void start_next_vol(struct dspd_ctl_client *cli, struct sndio_ctx *ctx)
 	  ret = dspd_ctlcli_elem_get_int32(cli, sc->vol_elem, -1, &ctx->cli_vol, ctl_get_cb, ctx);
 	  if ( ret == -EINPROGRESS )
 	    {
-	      ctx->cli_vol_index = sc->sio_idx;
+	      ctx->cli_vol_index = sc->header.list_index;
 	      ctx->cli_vol_ptr = sc;
 	      ctx->cli_vol_pos = idx;
 	      ctx->cli_vol_elem = sc->vol_elem;
@@ -1550,7 +1765,7 @@ static void ctl_change_cb(struct dspd_ctl_client *cli, void *arg, int32_t err, u
 	      sc = (struct sndio_client*)server->list.clients[idx];
 	      if ( sc != NULL && sc != (struct sndio_client*)UINTPTR_MAX )
 		{
-		  if ( sc->pclient != NULL && sc->pclient_idx == stream )
+		  if ( (sc->streams & DSPD_PCM_SBIT_PLAYBACK) && sc->pclient_idx == stream )
 		    {
 		      if ( server->cli_vol_index < 0 )
 			{
@@ -1589,7 +1804,7 @@ static int ctl_fd_event(void *data,
   struct sndio_ctx *ctx = data;
   if ( revents & (POLLRDHUP|POLLHUP|POLLERR|POLLNVAL) )
     return -1;
-  if ( ctx->ctx )
+  if ( ctx->daemon )
     {
       ret = dspd_aio_process(ctx->aio, 0, 0);
       if ( ret == -EINPROGRESS )
@@ -1782,6 +1997,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   struct sndio_ctx *sctx = calloc(1, len);
   if ( ! sctx )
     return -ENOMEM;
+  sctx->pid = -1;
   sctx->list.clients = (struct cbpoll_client_hdr**)(((char*)sctx) + sizeof(struct sndio_ctx) + offset);
   sctx->list.max_clients = MAX_CLIENTS;
   sctx->list.flags = CBPOLL_CLIENT_LIST_LISTENFD | CBPOLL_CLIENT_LIST_AUTO_POLLIN;
@@ -1799,7 +2015,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	  goto out;
 	}
     }
-  sctx->ctx = params->context;
+  sctx->daemon = params->context;
     
 
   if ( params->net_addrs )
@@ -1807,9 +2023,22 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
       for ( tok = strchr(params->net_addrs, ','); tok; tok = strchr(&tok[1], ',') )
 	fd_count++;
     }
-  ret = cbpoll_init(&sctx->cbctx, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_CBTIMER, MAX_CLIENTS+3+fd_count);
-  if ( ret < 0 )
-    goto out;
+
+  if ( ! sctx->daemon )
+    {
+      sctx->cbpoll = calloc(1, sizeof(*sctx->cbpoll));
+      if ( ! sctx->cbpoll )
+	{
+	  ret = -errno;
+	  goto out;
+	}
+      ret = cbpoll_init(sctx->cbpoll, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_CBTIMER, MAX_CLIENTS+3+fd_count);
+      if ( ret < 0 )
+	goto out;
+    } else
+    {
+      sctx->cbpoll = sctx->daemon->main_thread_loop_context;
+    }
 
 
 
@@ -1872,7 +2101,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	{
 	  chmod(sockpath, 0777);
 	}
-      sctx->cbidx = cbpoll_add_fd(&sctx->cbctx, sctx->fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
+      sctx->cbidx = cbpoll_add_fd(sctx->cbpoll, sctx->fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
       if ( sctx->cbidx < 0 )
 	{
 	  ret = -errno;
@@ -1908,7 +2137,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
 	      fd = dspd_tcp_sock_create(sockpath, SOCK_CLOEXEC | SOCK_NONBLOCK);
 	      if ( fd >= 0 )
 		{
-		  ret = cbpoll_add_fd(&sctx->cbctx, fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
+		  ret = cbpoll_add_fd(sctx->cbpoll, fd, EPOLLIN|EPOLLONESHOT, &sndio_listen_ops, sctx);
 		  if ( ret < 0 )
 		    goto out;
 		  sctx->tcp_fds[sctx->tcp_nfds] = fd;
@@ -1919,7 +2148,7 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
     }
 
 #ifdef ENABLE_CTL
-  if ( sctx->ctx )
+  if ( sctx->daemon )
     {
       sctx->efd.fd = eventfd(0, EFD_NONBLOCK|EFD_CLOEXEC);
       if ( sctx->efd.fd < 0 )
@@ -1933,8 +2162,8 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   ret = dspd_aio_new(&sctx->aio, DSPD_AIO_SYNC); //synchronous nonblocking io
   if ( ret < 0 )
     goto out;
-  if ( sctx->ctx )
-    ret = dspd_aio_connect(sctx->aio, NULL, sctx->ctx, &dspd_aio_fifo_eventfd_ops, &sctx->efd);
+  if ( sctx->daemon )
+    ret = dspd_aio_connect(sctx->aio, NULL, sctx->daemon, &dspd_aio_fifo_eventfd_ops, &sctx->efd);
   else
     ret = dspd_aio_connect(sctx->aio, NULL, NULL, NULL, NULL);
   if ( ret < 0 )
@@ -1955,10 +2184,10 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
   if ( ret < 0 )
     goto out;
   
-  if ( sctx->ctx )
-    ret = cbpoll_add_fd(&sctx->cbctx, sctx->efd.fd, EPOLLIN, &sndio_ctl_ops, sctx);
+  if ( sctx->daemon )
+    ret = cbpoll_add_fd(sctx->cbpoll, sctx->efd.fd, EPOLLIN, &sndio_ctl_ops, sctx);
   else
-    ret = cbpoll_add_fd(&sctx->cbctx, dspd_aio_get_iofd(sctx->aio), dspd_aio_block_directions(sctx->aio), &sndio_ctl_ops, sctx);
+    ret = cbpoll_add_fd(sctx->cbpoll, dspd_aio_get_iofd(sctx->aio), dspd_aio_block_directions(sctx->aio), &sndio_ctl_ops, sctx);
   if ( ret < 0 )
     goto out;
 #else
@@ -1972,21 +2201,28 @@ int32_t dspd_sndio_new(struct sndio_ctx **ctx, struct dspd_sndio_params *params)
  out:
   free(tmp);
   if ( ret < 0 )
-    {
-      dspd_sndio_delete(sctx);
-      fprintf(stderr, "Error %d while creating sndio server", ret);
-    }
+    dspd_sndio_delete(sctx);
   return ret;
 }
 
+static void set_cred(struct sndio_ctx *ctx)
+{
+  ctx->uid = getuid();
+  ctx->gid = getgid();
+  ctx->pid = getpid();
+}
 
 int32_t dspd_sndio_start(struct sndio_ctx *ctx)
 {
-  int32_t ret;
+  int32_t ret = 0;
   size_t i;
-  ret = cbpoll_set_name(&ctx->cbctx, "dspd-sndiod");
-  if ( ret < 0 )
-    return ret;
+  if ( ! ctx->daemon )
+    {
+      ret = cbpoll_set_name(ctx->cbpoll, "dspd-sndiod");
+      if ( ret < 0 )
+	return ret;
+      set_cred(ctx);
+    }
   if ( ctx->fd >= 0 )
     {
       ret = listen(ctx->fd, SOMAXCONN);
@@ -2007,9 +2243,15 @@ int32_t dspd_sndio_start(struct sndio_ctx *ctx)
 	  return ret;
 	}
     }
-  ret = cbpoll_start(&ctx->cbctx);
-  if ( ret == 0 )
-    ctx->started = true;
+  if ( ! ctx->daemon )
+    {
+      ret = cbpoll_start(ctx->cbpoll);
+      if ( ret == 0 )
+	ctx->started = true;
+    } else if ( ret == 0 )
+    {
+      ctx->started = true;
+    }
   return ret;
 }
 
@@ -2017,6 +2259,8 @@ int32_t dspd_sndio_run(struct sndio_ctx *ctx)
 {
   int32_t ret;
   size_t i;
+  if ( ! ctx->daemon )
+    set_cred(ctx);
   if ( ctx->fd >= 0 )
     {
       ret = listen(ctx->fd, SOMAXCONN);
@@ -2030,7 +2274,7 @@ int32_t dspd_sndio_run(struct sndio_ctx *ctx)
 	return -errno;
     }
   ctx->started = true;
-  ret = cbpoll_run(&ctx->cbctx);
+  ret = cbpoll_run(ctx->cbpoll);
   ctx->started = false;
   return ret;
 }
@@ -2038,8 +2282,12 @@ int32_t dspd_sndio_run(struct sndio_ctx *ctx)
 void dspd_sndio_delete(struct sndio_ctx *ctx)
 {
   size_t i;
-  if ( ctx->started )
-    cbpoll_destroy(&ctx->cbctx);
+  if ( ctx->started && ctx->daemon == NULL )
+    {
+      cbpoll_destroy(ctx->cbpoll);
+      free(ctx->cbpoll);
+      ctx->cbpoll = NULL;
+    }
   free(ctx->server_addr);
   if ( ! ctx->started )
     {

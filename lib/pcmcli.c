@@ -80,6 +80,7 @@ struct dspd_pcmcli {
 
   bool callback_pending;
 
+  size_t last_avail;
 };
 
 static void close_shm(struct dspd_shm_map *shm)
@@ -735,14 +736,21 @@ ssize_t dspd_pcmcli_write_frames(struct dspd_pcmcli *client,
 		addr = NULL;
 	      if ( client->constant_latency == true && client->callback_pending == false )
 		{
-		  ret = dspd_pcmcli_get_status(client, DSPD_PCM_SBIT_PLAYBACK, true, &status);
-		  if ( status.avail > 0 )
+		  if ( client->last_avail == 0 )
 		    {
-		      if ( len > status.avail )
-			len = status.avail;
-		      ret = dspd_pcmcli_stream_write(&client->playback.stream, addr, len);
+		      ret = dspd_pcmcli_get_status(client, DSPD_PCM_SBIT_PLAYBACK, true, &status);
+		      if ( ret < 0 && ret != -EAGAIN )
+			break;
 		    }
-		  
+		  if ( client->last_avail > 0 )
+		    {
+		      if ( len > client->last_avail )
+			len = client->last_avail;
+		      ret = dspd_pcmcli_stream_write(&client->playback.stream, addr, len);
+		    } else
+		    {
+		      ret = 0;
+		    }
 		} else
 		{
 		  ret = dspd_pcmcli_stream_write(&client->playback.stream, addr, len);
@@ -1064,6 +1072,7 @@ int32_t dspd_pcmcli_get_status(struct dspd_pcmcli *client, int32_t stream, bool 
 			    {
 			      status->avail = 0;
 			    }
+			  client->last_avail = status->avail;
 			}
 		    } else
 		    {
@@ -1072,6 +1081,10 @@ int32_t dspd_pcmcli_get_status(struct dspd_pcmcli *client, int32_t stream, bool 
 		  if ( status->error == 0 && status->avail >= s->stream.params.bufsize && client->no_xrun == false )
 		    status->error = -EPIPE;
 		}
+	    } else if ( ret == -EAGAIN )
+	    {
+	      if ( status )
+		client->last_avail = status->avail;
 	    }
 	} else
 	{
@@ -1296,7 +1309,8 @@ static void prepare_complete_cb(void *context, struct dspd_async_op *op)
   
   client->max_clockdiff = MAX(st, client->fragtime / 10);
   client->min_clockdiff = client->max_clockdiff * -1;
-  
+  client->last_avail = 0;
+
   complete_event(client, op->error);
 }
 
@@ -3255,3 +3269,4 @@ void dspd_pcmcli_set_pcm_io_callbacks(struct dspd_pcmcli *cli,
   cli->capture_cb = capture_cb;
   cli->io_cb_arg = arg;
 }
+

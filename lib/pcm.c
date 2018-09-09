@@ -2223,6 +2223,32 @@ const struct pcm_conv *dspd_getconv(int format)
   return &conv[format];
 }
 
+
+
+ssize_t dspd_pcm_fill_silence(int32_t format, void *addr, size_t samples)
+{
+  static const float silence[32UL] = { 0 };
+  size_t i = 0, n;
+  size_t len;
+  ssize_t total = -EINVAL;
+  const struct pcm_conv *conv = dspd_getconv(format);
+  len = dspd_get_pcm_format_size(format);
+  if ( conv && len )
+    {
+      total = 0;
+      while ( i < samples )
+	{
+	  n = samples - i;
+	  if ( n > 32UL )
+	    n = 32UL;
+	  conv->fromfloat32(silence, addr, n);
+	  addr += n * len;
+	  total += n;
+	}
+    }
+  return total;
+}
+
 #define DSPD_PCM_FMT_FLAG_SIGNED 1
 #define DSPD_PCM_FMT_FLAG_MSB    2
 #define DSPD_PCM_FMT_FLAG_LE     4

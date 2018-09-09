@@ -268,6 +268,7 @@ struct cbpoll_client_list {
   struct cbpoll_client_hdr **clients;
   const struct cbpoll_fd_ops *fd_ops;
   size_t max_clients;
+  size_t nclients;
   void *data;
   //The list is for a listening socket and uses EPOLLONESHOT to accept
   //new clients.  The accept() function (actually accept4) will be called
@@ -276,6 +277,7 @@ struct cbpoll_client_list {
   //Automatically enable events for new clients
 #define CBPOLL_CLIENT_LIST_AUTO_POLLIN  2
 #define CBPOLL_CLIENT_LIST_AUTO_POLLOUT 4
+#define CBPOLL_CLIENT_LIST_NOFD 8
   uint32_t flags;
   
 };

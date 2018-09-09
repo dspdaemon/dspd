@@ -37,6 +37,8 @@
 #include <assert.h>
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
+#define DSPD_ENABLE_REQ_RETRY
+
 #include "sslib.h"
 #include "daemon.h"
 
@@ -620,6 +622,7 @@ int dspd_stream_ctl(void    *context, //DSPD object, such as dspd_dctx
       rctx.outbuf = outbuf;
       rctx.bytes_returned = 0;
       rctx.outbufsize = outbufsize;
+      rctx.retry = NULL;
       //Copy incoming file descriptor
       if ( DSPD_FD(req) && (inbufsize >= sizeof(rctx.fd)) )
 	memcpy(&rctx.fd, inbuf, sizeof(rctx.fd));
@@ -672,6 +675,8 @@ int32_t dspd_req_reply_buf(struct dspd_rctx *r,
 			   const void *buf, 
 			   size_t len)
 {
+  if ( r->retry )
+    r->retry->state = 0;
   return r->ops->reply_buf(r, flags, buf, len);
 }
 
@@ -681,6 +686,8 @@ int32_t dspd_req_reply_fd(struct dspd_rctx *r,
 			  size_t len,
 			  int32_t fd)
 {
+  if ( r->retry )
+    r->retry->state = 0;
   return r->ops->reply_fd(r, flags, buf, len, fd);
 }
 
@@ -690,6 +697,8 @@ int32_t dspd_req_reply_err(struct dspd_rctx *r,
 {
   if ( err > 0 )
     err *= -1;
+  if ( r->retry )
+    r->retry->state = 0;
   return r->ops->reply_err(r, flags, err);
 }
 
@@ -721,3 +730,78 @@ void *dspd_req_userdata(struct dspd_rctx *rctx)
   return rctx->user_data;
 }
 
+bool dspd_req_retry(struct dspd_rctx *rctx, int32_t result, int32_t *error)
+{
+  int32_t ret;
+  rctx->retry->state = result;
+  ret = rctx->retry->handler->handler(rctx, 
+				      rctx->retry->req,
+				      rctx->retry->inbuf,
+				      rctx->retry->inbufsize,
+				      rctx->outbuf,
+				      rctx->outbufsize);
+  if ( rctx->retry->state <= 0 )
+    {
+      if ( ret < 0 )
+	*error = ret;
+      else
+	*error = 0;
+      ret = true;
+    } else
+    {
+      ret = false;
+    }
+  return ret;
+}
+
+int32_t _dspd_rctx_await_fcn(struct dspd_rctx *rctx, const void *label, int32_t val)
+{
+  int32_t ret;
+  if ( val == -EIOPENDING || val == 0 )
+    {
+      rctx->retry->label = label;
+      rctx->retry->state = val;
+      ret = EIOPENDING;
+    } else
+    {
+      ret = dspd_req_reply_err(rctx, 0, val);
+    }
+  return ret;
+}
+
+void *dspd_rctx_alloc(struct dspd_rctx *rctx, size_t len)
+{
+  if ( rctx->retry->alloc_len == 0 )
+    {
+      DSPD_ASSERT(len <= rctx->retry->alloc_max);
+      memset(rctx->retry->alloc_buf, 0, len);
+      rctx->retry->alloc_len = len; 
+    } else
+    {
+      DSPD_ASSERT(len == rctx->retry->alloc_len);
+    }
+  return rctx->retry->alloc_buf;
+}
+
+void dspd_rctx_reset(struct dspd_rctx *rctx)
+{
+  if ( rctx->retry )
+    {
+      rctx->retry->alloc_len = 0;
+      rctx->retry->state = EINPROGRESS;
+      rctx->retry->handler = NULL;
+      rctx->retry->label = NULL;
+      rctx->retry->inbuf = NULL;
+      rctx->retry->inbufsize = 0;
+    }
+  rctx->outbuf = NULL;
+  rctx->outbufsize = 0;
+  rctx->flags = 0;
+  rctx->index = -1;
+  rctx->bytes_returned = 0;
+  if ( rctx->fd >= 0 )
+    {
+      close(rctx->fd);
+      rctx->fd = -1;
+    }
+}

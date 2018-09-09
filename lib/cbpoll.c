@@ -1647,6 +1647,7 @@ static void fail_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data)
     {
       assert(list->clients[evt->stream] == (struct cbpoll_client_hdr*)UINTPTR_MAX);
       list->clients[evt->stream] = NULL;
+      list->nclients--;
     }
   if ( list->ops->fail )
     list->ops->fail(ctx, list, evt->stream, evt->index, evt->fd);
@@ -1664,6 +1665,7 @@ static void insert_cb(struct cbpoll_ctx *ctx, struct cbpoll_msg *evt, void *data
   size_t fdi = hdr->fd_index;
   int32_t flags;
   bool must_close = false;
+  //the slot must already be reserved (set to UINTPTR_MAX and nclients incremented)
   assert(hdr->list->clients[i] == (struct cbpoll_client_hdr*)UINTPTR_MAX);
   hdr->list->clients[i] = hdr;
   if ( hdr->reserved_slot >= 0 )
@@ -1815,24 +1817,32 @@ int32_t cbpoll_accept(struct cbpoll_ctx *ctx,
 	  if ( list->clients[i] == NULL )
 	    {
 	      list->clients[i] = (void*)UINTPTR_MAX;
+	      list->nclients++;
 	      d->list_index = i;
 	      d->reject = false;
 	      break;
 	    }
 	}
     }
-  
-  wrk.msg.index = index;
-  wrk.msg.fd = fd;
-  wrk.msg.msg = CBPOLL_PIPE_MSG_DEFERRED_WORK;
-  wrk.msg.arg = arg;
-  wrk.msg.callback = accept_cb;
-  d->list = list;
-  d->fd_index = index;
-  wrk.msg.len += sizeof(*d);
-  cbpoll_ref(ctx, index);
-  cbpoll_queue_work(ctx, &wrk.msg);
-  return 0;
+  if ( (list->flags & CBPOLL_CLIENT_LIST_NOFD) != 0 && (d->reject == true || fail == true) )
+    {
+      if ( ret == 0 )
+	ret = -EMFILE;
+    } else
+    {
+      wrk.msg.index = index;
+      wrk.msg.fd = fd;
+      wrk.msg.msg = CBPOLL_PIPE_MSG_DEFERRED_WORK;
+      wrk.msg.arg = arg;
+      wrk.msg.callback = accept_cb;
+      d->list = list;
+      d->fd_index = index;
+      wrk.msg.len += sizeof(*d);
+      cbpoll_ref(ctx, index);
+      cbpoll_queue_work(ctx, &wrk.msg);
+      ret = 0;
+    }
+  return ret;
 }
 
 
@@ -1865,7 +1875,13 @@ bool cbpoll_async_destructor_cb(void *data,
   wrk.arg = (uintptr_t)hdr;
   wrk.callback = destroy_cb;
   if ( hdr->list )
-    hdr->list->clients[hdr->list_index] = NULL;
+    {
+      if ( hdr->list->clients[hdr->list_index] )
+	{
+	  hdr->list->clients[hdr->list_index] = NULL;
+	  hdr->list->nclients--;
+	}
+    }
   cbpoll_queue_work(context, &wrk);
   return false; //Do not close fd
 }

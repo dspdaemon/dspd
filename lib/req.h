@@ -17,6 +17,8 @@
 
 #define DSPD_REQ_FLAG_ROUTE_CHANGED 128
 
+#define DSPD_REQ_FLAG_NONBLOCK 256
+
 struct dspd_req {
   uint32_t len;    //Length of entire packet
   uint32_t flags;  //Flags, such as error flag or events
@@ -54,6 +56,9 @@ struct dspd_rcb {
 		       int32_t err);
 };
 
+
+
+struct dspd_rctx_retry_data;
 struct dspd_rctx {
   const struct dspd_rcb *ops;
   void *user_data;
@@ -64,7 +69,65 @@ struct dspd_rctx {
   int32_t fd;
   int32_t index;
   int32_t flags;
+
+  struct dspd_rctx_retry_data *retry;
 };
+
+
+#ifdef DSPD_ENABLE_REQ_RETRY
+struct dspd_rctx_retry_data {
+  void                          *alloc_buf; //buffer for temporary variables
+  size_t                         alloc_max; //maximum size for temp. vars.
+  size_t                         alloc_len; //length currently allocated
+  int32_t                        state;     //if <=0 then completed, otherwise busy
+  const struct dspd_req_handler *handler;   //last handler (saved for next invocation)
+  const void                    *label;     //place to resume within handler->handler
+  const void                    *inbuf;     //last input buffer
+  size_t                         inbufsize; //last input buffer size
+  int32_t                        req;       //raw request number (not index or otherwise decoded)
+};
+
+
+
+//Make sure a computed goto is always executed so that clang won't refuse to compile it.  With
+//clang 3.3 it is possible to do "(void)&&begin" to fool it, but it is possible a future version
+//might not be fooled so it is probably best to do a computed goto within the function every time.
+//It is arguably a bug in clang since it can't prove that rctx->label is going to be non-NULL in
+//a callback function with no computed gotos.
+#define _DSPD_RCTX_RESUME(rctx) do {		\
+  __label__ begin;				\
+  if ( ! rctx->label )				\
+    rctx->label = &&begin;			\
+  goto *rctx->label;				\
+begin:						\
+  rctx->label = NULL;				\
+  break;					\
+  } while(0);
+
+//clean and easy syntax for local variables: $.var = value;
+#define $ (*$__local)
+
+//declare local variables with an anonymous struct since the stack won't be restored
+#define _DSPD_RCTX_LOCALVARS(rctx, ...) struct __VA_ARGS__ *$__local=dspd_rctx_alloc(rctx,sizeof(*$__local))
+
+//define most (preferably all) of the function body: DSPD_RCTX_PROC(rctx,{ int x; long y; }){ /*code here*/ }
+#define dspd_req_proc(rctx, ...) _DSPD_RCTX_LOCALVARS(rctx, __VA_ARGS__); _DSPD_RCTX_RESUME
+
+//This macro returns a value which is set with dspd_req_retry()
+#define dspd_req_await(rctx, _val) ({ __label__ _awlbl; int _ret; static const void *_awaddr = &&_awlbl; \
+      return _dspd_rctx_await_fcn(rctx, _awaddr, &_val);		\
+    _awlbl:								\
+      _ret = rctx->retry->state;	_ret;				\
+    })
+int32_t _dspd_rctx_await_fcn(struct dspd_rctx *rctx, const void *label, int32_t val);
+bool dspd_req_retry(struct dspd_rctx *rctx, int32_t result, int32_t *error);
+void *dspd_rctx_alloc(struct dspd_rctx *rctx, size_t len);
+//set pending to allow resuming manually (does not require dspd_req_proc or any computed goto)
+#define dspd_req_set_pending(rctx) _dspd_rctx_await_fcn(rctx, NULL, -EINPROGRESS)
+void dspd_rctx_reset(struct dspd_rctx *rctx);
+
+#endif
+
 
 int32_t dspd_req_flags(const struct dspd_rctx *rctx);
 
@@ -89,7 +152,7 @@ void *dspd_req_userdata(struct dspd_rctx *rctx);
 int32_t dspd_req_get_fd(struct dspd_rctx *rctx);
 int32_t dspd_req_index(struct dspd_rctx *rctx);
 
-//Flags are part of req.
+
 #define DSPD_REQ_FLAG_CMSG_FD      (1<<31)
 #define DSPD_REQ_FLAG_REMOTE       (1<<30)
 #define DSPD_REQ_FLAG_UNIX_FAST_IOCTL   (1<<29)

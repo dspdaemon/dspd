@@ -37,6 +37,9 @@
 #include <sys/prctl.h>
 #include <ctype.h>
 #include <dirent.h>
+
+#define DSPD_ENABLE_REQ_RETRY
+
 #include "sslib.h"
 #include "daemon.h"
 #include "syncgroup.h"
@@ -214,12 +217,16 @@ static int32_t dspd_daemon_dispatch_ioctl(struct dspd_rctx *rctx,
       if ( handler->data == req_num )
 	{
 	  if ( handler->handler )
-	    ret = handler->handler(rctx,
-				   req_num,
-				   inbuf,
-				   inbufsize,
-				   outbuf,
-				   outbufsize);
+	    {
+	      if ( rctx->retry )
+		rctx->retry->handler = handler;
+	      ret = handler->handler(rctx,
+				     req_num,
+				     inbuf,
+				     inbufsize,
+				     outbuf,
+				     outbufsize);
+	    }
 	  break;
 	}
     }
@@ -239,6 +246,17 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
   int32_t ret;
   uint32_t index = req & 0xFFFFFFFF;
   uint32_t req_num = req >> 32;
+
+  if ( rctx->retry )
+    {
+      DSPD_ASSERT(rctx->retry->state <= 0);
+      rctx->retry->inbuf = inbuf;
+      rctx->retry->inbufsize = inbufsize;
+      rctx->retry->label = NULL;
+      rctx->retry->alloc_len = 0UL;
+      rctx->retry->req = req_num;
+    }
+
   if ( rctx->flags & DSPD_REQ_FLAG_UNIX_IOCTL )
     return dspd_daemon_dispatch_ioctl(rctx,
 				      handlers,
@@ -256,14 +274,19 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
   //a request.
   handler = &handlers[0];
   if ( handler->handler )
-    ret = handler->handler(rctx,
-			   req_num,
-			   inbuf,
-			   inbufsize,
-			   outbuf,
-			   outbufsize);
-  else
-    ret = -ENOSYS;
+    {
+      if ( rctx->retry )
+	rctx->retry->handler = handler;
+      ret = handler->handler(rctx,
+			     req_num,
+			     inbuf,
+			     inbufsize,
+			     outbuf,
+			     outbufsize);
+    } else
+    {
+      ret = -ENOSYS;
+    }
   if ( ret == -ENOSYS )
     {
       if ( index < count )
@@ -280,6 +303,8 @@ int32_t dspd_daemon_dispatch_ctl(struct dspd_rctx *rctx,
 		     (outbufsize >= handler->outbufsize))) )     //be used in another context.
 
 		{
+		  if ( rctx->retry )
+		    rctx->retry->handler = handler;
 		  ret = handler->handler(rctx,
 					 req_num,
 					 inbuf,
