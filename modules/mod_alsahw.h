@@ -103,6 +103,17 @@ struct alsahw_handle {
   void *other_handle;
   uint64_t hotplug_event_id;
  
+  /*
+    Interpolation is not perfectly accurate so sometimes the server thread
+    will need to do more expensive position register reads instead of
+    interpolating.
+  */
+  /*virtual buffer size interpolation threshold*/
+  uintptr_t i_vbuf_threshold;
+  /*hardware buffer size interpolation threshold*/
+  uintptr_t i_hbuf_threshold;
+  
+
 };
 
 struct alsahw_ctldata;

@@ -72,6 +72,8 @@ struct cbpoll_fd_ops {
 			 int fd,
 			 uint32_t refcnt);
 
+  void (*async_cb)(void *data, struct cbpoll_ctx *context, int index, int fd);
+
 };
 
 struct cbpoll_fd {
@@ -95,6 +97,7 @@ struct cbpoll_fd {
 #define CBPOLLFD_FLAG_REMOVED 1
 #define CBPOLLFD_FLAG_EVENTS_CHANGED 2
 #define CBPOLLFD_FLAG_RESERVED 4
+#define CBPOLLFD_FLAG_CALLBACK 8
   uint32_t  flags;
   const struct cbpoll_fd_ops *ops;
 
@@ -131,6 +134,7 @@ struct cbpoll_ctx {
   dspd_thread_t thread;
   char *name;
   int32_t dispatch_count;
+  size_t async_cb_pending;
 
   struct dspd_timer timer;
   dspd_time_t  *pending_timers;
@@ -302,5 +306,7 @@ int cbpoll_listening_fd_event_cb(void *data,
 				 int index,
 				 int fd,
 				 int revents);
+
+void cbpoll_set_async_cb(struct cbpoll_ctx *context, size_t index);
 
 #endif

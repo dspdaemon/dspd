@@ -326,7 +326,7 @@ static void *cbpoll_thread(void *p)
   void *result = NULL;
   int i;
   struct epoll_event *ev;
-  int32_t fd, idx, f;
+  int32_t fd, idx, f, t;
   uint32_t len;
   struct cbpoll_fd *fdata;
   if ( ! ctx->name )
@@ -347,9 +347,12 @@ static void *cbpoll_thread(void *p)
 	  dspd_timer_set(&ctx->timer, ctx->next_timeout, 0);
 	  ctx->timeout_changed = false;
 	}
+      if ( ctx->async_cb_pending == 0 )
+	t = -1;
+      else
+	t = 0;
       dspd_mutex_unlock(&ctx->loop_lock);
-
-      ret = epoll_wait(ctx->epfd, ctx->events, ctx->max_fd, -1);
+      ret = epoll_wait(ctx->epfd, ctx->events, ctx->max_fd, t);
       if ( ret < 0 )
 	{
 	  if ( errno != EINTR )
@@ -361,6 +364,23 @@ static void *cbpoll_thread(void *p)
 	      continue;
 	    }
 	}
+      if ( ctx->async_cb_pending )
+	{
+	  struct cbpoll_fd *f;
+	  size_t n = ctx->async_cb_pending;
+	  ctx->async_cb_pending = 0;
+	  for ( i = 0; i < n; i++ )
+	    {
+	      f = &ctx->fdata[i];
+	      if ( (f->flags & CBPOLLFD_FLAG_CALLBACK) && f->ops != NULL && f->ops->async_cb != NULL )
+		{
+		  f->flags &= ~CBPOLLFD_FLAG_CALLBACK;
+		  f->ops->async_cb(f->data, ctx, i, f->fd);
+		}
+	    }
+	 
+	}
+
       if ( ctx->wq.overflow.msg.callback )
 	{
 	  ctx->wq.overflow.msg.callback(ctx,
@@ -2028,5 +2048,13 @@ int32_t cbpoll_set_pcmcli_timer_callbacks(struct cbpoll_ctx *cbpoll,
     return -ENOMEM;
   dspd_pcmcli_set_timer_callbacks(pcm, &pcmcli_cbtimer_ops, cbt);
   return 0;
+}
+
+void cbpoll_set_async_cb(struct cbpoll_ctx *context, size_t index)
+{
+  DSPD_ASSERT(index < context->max_fd);
+  if ( context->async_cb_pending <= index )
+    context->async_cb_pending = index + 1UL;
+  context->fdata[index].flags |= CBPOLLFD_FLAG_CALLBACK;
 }
 

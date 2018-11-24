@@ -534,13 +534,13 @@ int32_t alsahw_pcm_status(void *handle, const struct dspd_pcm_status **status, b
     {
       if ( hwsync == false && 
 	   hdl->xfer < hdl->params.fragsize &&
-	   hdl->xfer < (hdl->params.bufsize/2) &&
+	   hdl->xfer < hdl->i_hbuf_threshold &&
 	   (hdl->params.bufsize-hdl->status.fill) > hdl->hlatency &&
 	   hdl->started != 0 &&
 	   hdl->status.space > 0 &&
 	   hdl->xfer < hdl->hlatency &&
 	   hdl->status.appl_ptr > hdl->params.min_latency &&
-	   hdl->vbufsize > (hdl->min_dma * 2) )
+	   hdl->vbufsize > hdl->i_vbuf_threshold )
 	{
 	  //Don't interpolate an xrun state.  The timer might be wrong so
 	  //check the real hardware.  If the timer is always right then this
@@ -2174,7 +2174,7 @@ static int alsahw_open(const struct dspd_drv_params *params,
 
   bufsize = params->bufsize;
   fragsize = params->fragsize;
-
+  
 
   hbuf->params.stream = params->stream;
 
@@ -2222,6 +2222,7 @@ static int alsahw_open(const struct dspd_drv_params *params,
   if ( ret < 0 )
     goto out;
   hbuf->params.bufsize = ret;
+  hbuf->i_hbuf_threshold = hbuf->params.bufsize;
 
   ret = alsahw_set_fragsize(hbuf->handle, hwp, fragsize);
   if ( ret < 0 )
@@ -2264,6 +2265,8 @@ static int alsahw_open(const struct dspd_drv_params *params,
     hbuf->min_dma = hbuf->params.fragsize;
   else
     hbuf->min_dma = hbuf->min_dma_bytes / hbuf->frame_size;
+
+  hbuf->i_vbuf_threshold = hbuf->min_dma * 2UL;
 
   hbuf->stream = params->stream;
 

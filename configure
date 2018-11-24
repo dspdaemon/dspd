@@ -60,7 +60,7 @@ function read_list {
 
 function create_links {
     cd "$1"
-    find . | grep -v '~$' | read_list "$1" "$2"
+    find . | grep -v '\.git' | grep -v '~$' | read_list "$1" "$2"
     return 0
 }
 function printsrc {
