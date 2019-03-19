@@ -667,7 +667,11 @@ int32_t dspd_pcmcli_stream_avail(struct dspd_pcmcli_stream *stream, uint64_t *hw
 		*hwptr = MAX(stream->hw_ptr, (stream->appl_ptr - l));
 	      if ( appl_ptr )
 		*appl_ptr = i;
-	      ret = stream->params.bufsize - l;
+	      if ( l == 0 && stream->no_xrun == false && stream->state == PCMCS_STATE_RUNNING )
+		ret = -EPIPE;
+	      else
+		ret = stream->params.bufsize - l;
+	      
 	    } else if ( stream->stream_flags & DSPD_PCM_SBIT_CAPTURE )
 	    {
 	      stream->hw_ptr += i - stream->last_hw_ptr;
@@ -717,7 +721,7 @@ int32_t dspd_pcmcli_stream_check_xrun(struct dspd_pcmcli_stream *stream)
 	  ret = 0;
 	}
     }
-  if ( ret == -EPIPE && stream->write_size < stream->params.bufsize && stream->no_xrun == false )
+  /*if ( ret == -EPIPE && stream->write_size < stream->params.bufsize && stream->no_xrun == false )
     {
       //Catch the somewhat likely initial xrun caused by apps starting too early.
       //For example, SDL sets ALSA start threshold to 1 and fragments to 2 then writes
@@ -742,7 +746,7 @@ int32_t dspd_pcmcli_stream_check_xrun(struct dspd_pcmcli_stream *stream)
 	    }
 	}
       ret = 0;
-    }
+      }*/
   return ret;
 }
 

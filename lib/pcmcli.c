@@ -2068,8 +2068,8 @@ int32_t dspd_pcmcli_set_poll_threshold(struct dspd_pcmcli *client, size_t frames
 int32_t dspd_pcmcli_set_no_xrun(struct dspd_pcmcli *client, bool no_xrun)
 {
   client->no_xrun = no_xrun;
-  client->playback.stream.no_xrun = true;
-  client->capture.stream.no_xrun = true;
+  client->playback.stream.no_xrun = no_xrun;
+  client->capture.stream.no_xrun = no_xrun;
   return 0;
 }
 
