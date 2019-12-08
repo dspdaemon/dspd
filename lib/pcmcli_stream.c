@@ -78,9 +78,9 @@ int32_t dspd_pcmcli_stream_attach(struct dspd_pcmcli_stream *stream,
 				  const struct dspd_shm_map *map)
 {
   struct dspd_shm_addr addr;
-  int32_t ret;
-  const struct pcm_conv *conv;
-  size_t channels;
+  int32_t ret = 0;
+  const struct pcm_conv *conv = NULL;
+  size_t channels = 0;
   if ( ! (params->stream & stream->stream_flags) )
     {
       ret = -EINVAL;
@@ -95,6 +95,9 @@ int32_t dspd_pcmcli_stream_attach(struct dspd_pcmcli_stream *stream,
 	  if ( ((params->stream & DSPD_PCM_SBIT_PLAYBACK) && conv->tofloat32 == NULL) ||
 	       ((params->stream & DSPD_PCM_SBIT_CAPTURE) && conv->fromfloat32 == NULL) )
 	    return -EINVAL;
+	} else
+	{
+	  return -EINVAL;
 	}
       if ( params->xflags & DSPD_CLI_XFLAG_FULLDUPLEX_CHANNELS )
 	{
@@ -263,10 +266,10 @@ int32_t dspd_pcmcli_stream_status(struct dspd_pcmcli_stream *stream,
 				  bool hwsync)
 		    
 {
-  struct dspd_pcm_status *s;
+  struct dspd_pcm_status *s = NULL;
   int32_t ret = 0;
-  uint64_t d;
-  uint64_t hw, appl;
+  uint64_t d = 0;
+  uint64_t hw = 0, appl = 0;
   if ( stream->state >= PCMCS_STATE_PREPARED )
     {
       if ( hwsync == true || stream->got_status == false )
@@ -647,7 +650,7 @@ int32_t dspd_pcmcli_stream_forward(struct dspd_pcmcli_stream *stream, uint64_t *
 int32_t dspd_pcmcli_stream_avail(struct dspd_pcmcli_stream *stream, uint64_t *hwptr, uint64_t *appl_ptr)
 {
   int32_t ret = 0;
-  uint32_t i, o, l;
+  uint32_t i = 0, o = 0, l = 0;
   if ( stream->state < PCMCS_STATE_PREPARED )
     {
       ret = -EBADFD;

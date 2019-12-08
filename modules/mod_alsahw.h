@@ -114,6 +114,10 @@ struct alsahw_handle {
   uintptr_t i_hbuf_threshold;
   
 
+  struct dspd_scheduler *sched;
+  volatile int32_t       recover_result;
+  volatile int32_t       prepare_result;
+
 };
 
 struct alsahw_ctldata;

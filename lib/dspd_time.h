@@ -60,4 +60,38 @@ int64_t dspd_intrp_set(struct dspd_intrp *i,
 dspd_time_t dspd_intrp_frames(struct dspd_intrp *i, int64_t frames);
 dspd_time_t dspd_intrp_time(struct dspd_intrp *i, dspd_time_t time);
 uint64_t dspd_intrp_used(struct dspd_intrp *i, dspd_time_t time);
+
+struct dspd_dtimer;
+struct dspd_dtimer_event;
+typedef void (*dspd_dtimer_cb_t)(struct dspd_dtimer *timer, struct dspd_dtimer_event *event);
+struct dspd_dtimer_event {
+  //Callback for when timer expires.  It is safe to free the event or insert it again.
+  //Inserted events will run during the next timer tick at the earliest.
+  dspd_dtimer_cb_t callback;
+  void *user_data;
+  struct dspd_dtimer *timer;
+  dspd_time_t timeout;   //Time when timer should fire
+  dspd_time_t deadline;  //Latest time when timer should fire (set to timeout if not sure)
+                         //This is more of a priority than a real deadline.
+  struct dspd_dtimer_event *prev, *next;
+};
+
+struct dspd_dtimer {
+  struct dspd_dtimer_event *pending;
+  struct dspd_dtimer_event *added;
+  dspd_time_t                 timeout;
+  dspd_time_t                 now;
+  bool                        dispatch;
+};
+
+void dspd_dtimer_remove(struct dspd_dtimer_event *evt);
+void dspd_dtimer_dispatch(struct dspd_dtimer *timer);
+void dspd_dtimer_insert(struct dspd_dtimer *timer, struct dspd_dtimer_event *evt);
+int32_t dspd_dtimer_fire(struct dspd_dtimer_event *evt);
+bool dspd_dtimer_set_time(struct dspd_dtimer *timer, dspd_time_t now);
+int32_t dspd_dtimer_new(struct dspd_dtimer **tmr, dspd_time_t now);
+void dspd_dtimer_delete(struct dspd_dtimer *tmr);
+
+
+
 #endif

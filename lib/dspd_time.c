@@ -398,3 +398,197 @@ void dspd_intrp_reset2(struct dspd_intrp *i, uint32_t rate)
   if ( rate )
     i->sample_time = 1000000000 / rate;
 }
+
+
+int32_t dspd_dtimer_new(struct dspd_dtimer **tmr, dspd_time_t now)
+{
+  struct dspd_dtimer *t;
+  int32_t ret = -ENOMEM;
+  t = calloc(1, sizeof(*t));
+  if ( t )
+    {
+      ret = 0;
+      t->timeout = UINT64_MAX;
+      t->now = now;
+      *tmr = t;
+    }
+  return ret;
+}
+
+void dspd_dtimer_delete(struct dspd_dtimer *tmr)
+{
+  if ( tmr )
+    {
+      assert(tmr->added == NULL);
+      while ( tmr->pending )
+	dspd_dtimer_remove(tmr->pending);
+      free(tmr);
+    }
+}
+
+bool dspd_dtimer_set_time(struct dspd_dtimer *timer, dspd_time_t now)
+{
+  bool ret = false;
+  timer->now = now;
+  if ( timer->pending != NULL && timer->pending->timeout <= now )
+    ret = true;
+  return ret;
+}
+
+
+void dspd_dtimer_dispatch(struct dspd_dtimer *timer)
+{
+  struct dspd_dtimer_event *evt, *next;
+  volatile dspd_dtimer_cb_t callback;
+  timer->dispatch = true;
+  next = timer->pending;
+  while ( next )
+    {
+      evt = next;
+      next = evt->next;
+      if ( evt->timeout <= timer->now )
+	{
+	  //Timers are already ordered from earliest to latest deadline
+	  callback = evt->callback;
+	  dspd_dtimer_remove(evt);
+	  callback(timer, evt);
+	} else 
+	{
+	  //Timers are in order, so this is the earliest next timeout
+	  break;
+	}
+    }
+  timer->dispatch = false;
+  next = timer->added;
+  while ( next )
+    {
+      evt = next;
+      next = evt->next;
+      evt->next = NULL;
+      dspd_dtimer_insert(timer, evt);
+    }
+  if ( timer->pending )
+    timer->timeout = timer->pending->timeout;
+  else
+    timer->timeout = UINT64_MAX;
+  timer->added = NULL;
+}
+
+void dspd_dtimer_remove(struct dspd_dtimer_event *evt)
+{
+  if ( evt->prev )
+    {
+      evt->prev->next = evt->next;
+    } else if ( evt->timer != NULL )
+    {
+      if ( evt == evt->timer->pending )
+	{
+	  evt->timer->pending = evt->next;
+	  if ( evt->timer->pending )
+	    evt->timer->timeout = evt->timer->pending->timeout;
+	}
+    }
+  if ( evt->next )
+    evt->next->prev = evt->prev;
+  evt->prev = NULL;
+  evt->next = NULL;
+  evt->timer = NULL;
+}
+
+
+static void insert_before(struct dspd_dtimer_event *evt, struct dspd_dtimer_event *item)
+{
+  evt->next = item;
+  evt->prev = item->prev;
+  item->prev = evt;
+  if ( evt->prev )
+    evt->prev->next = evt;
+  else
+    evt->timer->pending = evt;
+}
+
+static void insert_after(struct dspd_dtimer_event *evt, struct dspd_dtimer_event *item)
+{
+  evt->next = item->next;
+  evt->prev = item;
+  item->next = evt;
+  if ( evt->next )
+    evt->next->prev = evt;
+}
+
+
+void dspd_dtimer_insert(struct dspd_dtimer *timer, struct dspd_dtimer_event *evt)
+{
+  struct dspd_dtimer_event *e, *first = NULL, *last = NULL, *next = NULL, *end = NULL;
+  dspd_dtimer_remove(evt);
+  evt->timer = timer;
+  if ( timer->dispatch )
+    {
+      //Don't bother with prev since it won't be used
+      evt->next = timer->added;
+      timer->added = evt;
+    } else
+    {
+      for ( e = timer->pending; e; e = e->next )
+	{
+	  if ( e->timeout == evt->timeout )
+	    {
+	      //Have a timeout of same value
+	      first = e;
+	      
+	      //A later deadline means we got our target
+	      if ( e->deadline > evt->deadline )
+		{
+		  next = e;
+		  break;
+		}
+	    } else if ( e->timeout > evt->timeout )
+	    {
+	      last = e;
+	      break;
+	    } else
+	    {
+	      end = e;
+	    }
+	}
+      if ( next )
+	{
+	  //This timeout comes before a later deadline
+	  insert_before(evt, next); 
+	} else if ( first )
+	{
+	  //Deadline is <= evt->deadline
+	  insert_after(evt, first);
+	} else if ( last )
+	{
+	  //This timeout comes before a later timeout 
+	  insert_before(evt, last);
+	} else if ( end )
+	{
+	  //All timeouts are earlier
+	  end->next = evt;
+	  evt->prev = end;
+	} else
+	{
+	  //No events pending
+	  timer->pending = evt;
+	}
+      timer->timeout = timer->pending->timeout;
+    }
+}
+
+int32_t dspd_dtimer_fire(struct dspd_dtimer_event *evt)
+{
+  int32_t ret = -EINVAL;
+  struct dspd_dtimer *t;
+  if ( evt->timer )
+    {
+      t = evt->timer;
+      dspd_dtimer_remove(evt);
+      evt->timeout = evt->timer->now;
+      dspd_dtimer_insert(t, evt);
+    }
+  return ret;
+}
+
+

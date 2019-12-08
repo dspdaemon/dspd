@@ -380,7 +380,7 @@ intptr_t alsahw_pcm_mmap_commit(void *handle,
   return ret;
 }
 
-int32_t alsahw_pcm_recover(void *handle)
+static int32_t _alsahw_pcm_recover(void *handle)
 {
   struct alsahw_handle *hdl = handle;
   if ( hdl->err == -ESTRPIPE )
@@ -407,6 +407,35 @@ int32_t alsahw_pcm_recover(void *handle)
     }
   return hdl->err;
 }
+
+
+static void recover_cb(struct dspd_scheduler *sch, void *arg, uint64_t data)
+{
+  struct alsahw_handle *hdl = arg;
+  int ret = _alsahw_pcm_recover(hdl);
+  dspd_store_uint32((volatile uint32_t*)&hdl->recover_result, ret);
+  dspd_sched_trigger(sch);
+}
+
+int32_t alsahw_pcm_recover(void *handle)
+{
+  struct alsahw_handle *hdl = handle;
+  int32_t ret = dspd_load_uint32((volatile uint32_t*)&hdl->recover_result);
+  if ( ret != DSPD_PCMDRV_IO_PENDING )
+    {
+      dspd_store_uint32((volatile uint32_t*)&hdl->recover_result, DSPD_PCMDRV_IO_PENDING);
+      if ( ! dspd_sched_queue_work(hdl->sched, recover_cb, hdl, 0ULL) )
+	{
+	  dspd_store_uint32((volatile uint32_t*)&hdl->recover_result, 0);
+	  ret = _alsahw_pcm_recover(hdl);
+	} else
+	{
+	  ret = DSPD_PCMDRV_IO_PENDING;
+	}
+    }
+  return ret;
+}
+
 
 int32_t alsahw_pcm_start(void *handle)
 {
@@ -446,7 +475,7 @@ int32_t alsahw_pcm_drop(void *handle)
   return hdl->err;
 }
 
-int32_t alsahw_pcm_prepare(void *handle)
+static int32_t _alsahw_pcm_prepare(void *handle)
 {
   struct alsahw_handle *hdl = handle;
   int ret;
@@ -455,6 +484,33 @@ int32_t alsahw_pcm_prepare(void *handle)
   alsahw_reset(hdl);
   return ret;
 }
+static void prepare_cb(struct dspd_scheduler *sch, void *arg, uint64_t data)
+{
+  struct alsahw_handle *hdl = arg;
+  int ret = _alsahw_pcm_prepare(hdl);
+  dspd_store_uint32((volatile uint32_t*)&hdl->prepare_result, ret);
+  dspd_sched_trigger(sch);
+}
+
+int32_t alsahw_pcm_prepare(void *handle)
+{
+  struct alsahw_handle *hdl = handle;
+  int32_t ret = dspd_load_uint32((volatile uint32_t*)&hdl->prepare_result);
+  if ( ret != DSPD_PCMDRV_IO_PENDING )
+    {
+      dspd_store_uint32((volatile uint32_t*)&hdl->prepare_result, DSPD_PCMDRV_IO_PENDING);
+      if ( ! dspd_sched_queue_work(hdl->sched, prepare_cb, hdl, 0ULL) )
+	{
+	  dspd_store_uint32((volatile uint32_t*)&hdl->prepare_result, 0);
+	  ret = _alsahw_pcm_prepare(hdl);
+	} else
+	{
+	  ret = DSPD_PCMDRV_IO_PENDING;
+	}
+    }
+  return ret;
+}
+
 
 /*
   This saves a lot of CPU when it works.  On a ESS Allegro PCI with 512 frames latency
@@ -1993,6 +2049,43 @@ static int32_t alsahw_get_chmap(void *handle, struct dspd_pcm_chmap *map)
   return 0;
 }
 
+static int32_t alsahw_io_pending(void *handle, int32_t pending)
+{
+  struct alsahw_handle *hdl = handle;
+  int32_t result = pending;
+  int32_t recover = dspd_load_uint32((volatile uint32_t*)&hdl->recover_result);
+  int32_t prepare = dspd_load_uint32((volatile uint32_t*)&hdl->prepare_result);
+  if ( result & DSPD_PCMDRV_RECOVER_PENDING )
+    {
+      if ( recover <= 0 )
+	{
+	  result |= DSPD_PCMDRV_RECOVER_COMPLETE;
+	  result &= ~DSPD_PCMDRV_RECOVER_PENDING;
+	}
+    } else
+    {
+      result &= ~DSPD_PCMDRV_RECOVER_COMPLETE;
+    }
+  if ( result & DSPD_PCMDRV_PREPARE_PENDING )
+    {
+       if ( prepare <= 0 )
+	{
+	  result |= DSPD_PCMDRV_PREPARE_COMPLETE;
+	  result &= ~DSPD_PCMDRV_PREPARE_PENDING;
+	}
+    } else
+    {
+      result &= ~DSPD_PCMDRV_PREPARE_COMPLETE;
+    }
+  return result;
+}
+
+static void alsahw_set_scheduler(void *handle, struct dspd_scheduler *scheduler)
+{
+  struct alsahw_handle *hdl = handle;
+  hdl->sched = scheduler;
+}
+
 
 static const struct dspd_pcmdrv_ops alsa_mmap_read_ops = {
   .mmap_begin = alsahw_pcm_mmap_read_begin,
@@ -2018,6 +2111,8 @@ static const struct dspd_pcmdrv_ops alsa_mmap_read_ops = {
   .set_stream_index = set_stream_index,
   .get_chmap = alsahw_get_chmap,
   .adjust_pointer = alsahw_pcm_adjust_pointer,
+  .set_scheduler = alsahw_set_scheduler,
+  .io_pending = alsahw_io_pending,
 };
 static const struct dspd_pcmdrv_ops alsa_read_ops = {
   .mmap_begin = alsahw_pcm_read_begin,
@@ -2042,6 +2137,8 @@ static const struct dspd_pcmdrv_ops alsa_read_ops = {
   .set_stream_index = set_stream_index,
   .get_chmap = alsahw_get_chmap,
   .adjust_pointer = alsahw_pcm_adjust_pointer,
+  .set_scheduler = alsahw_set_scheduler,
+  .io_pending = alsahw_io_pending,
 };
 
 static const struct dspd_pcmdrv_ops alsa_mmap_write_ops = {
@@ -2068,6 +2165,8 @@ static const struct dspd_pcmdrv_ops alsa_mmap_write_ops = {
   .set_stream_index = set_stream_index,
   .get_chmap = alsahw_get_chmap,
   .adjust_pointer = alsahw_pcm_adjust_pointer,
+  .set_scheduler = alsahw_set_scheduler,
+  .io_pending = alsahw_io_pending,
 };
 
 static const struct dspd_pcmdrv_ops alsa_write_ops = {
@@ -2093,6 +2192,8 @@ static const struct dspd_pcmdrv_ops alsa_write_ops = {
   .set_stream_index = set_stream_index,
   .get_chmap = alsahw_get_chmap,
   .adjust_pointer = alsahw_pcm_adjust_pointer,
+  .set_scheduler = alsahw_set_scheduler,
+  .io_pending = alsahw_io_pending,
 };
 
 static uint32_t get_min_frags(time_t sample_time, unsigned int min_dma)
@@ -2133,6 +2234,8 @@ static int alsahw_open(const struct dspd_drv_params *params,
       ret = -errno;
       goto out;
     }
+  
+
   hbuf->hotplug_event_id = eid;
   ret = snd_pcm_status_malloc(&hbuf->alsa_status);
   if ( ret )
@@ -2855,11 +2958,7 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 	}
       err = dspd_daemon_vctrl_register(&info);
       if ( err < 0 )
-	{
-	  dspd_log(0, "Could not register virtual control: error %d", err);
-	  if ( err == -ENOSYS )
-	    err = 0;
-	}
+	dspd_log(0, "Could not register virtual control: error %d", err);
     } else
     {
 
@@ -2908,11 +3007,7 @@ static int alsahw_add(void *arg, const struct dspd_dict *device)
 
       err = dspd_daemon_vctrl_register(&info);
       if ( err < 0 )
-	{
-	  dspd_log(0, "Could not register virtual control: error %d", err);
-	  if ( err == -ENOSYS )
-	    err = 0;
-	}
+	dspd_log(0, "Could not register virtual control: error %d", err);
     }
   if ( ret > 0 && register_eid == true )
     {

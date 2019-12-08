@@ -2,6 +2,7 @@
 #define _DSPD_DAEMON_H_
 #include "wq.h"
 #include "vctrl.h"
+#include "thread.h"
 
 //pci,usb,etc.
 #define DSPD_HOTPLUG_BUSNAME "bus"
@@ -171,6 +172,8 @@ struct dspd_daemon_ctx {
 
   struct cbpoll_ctx *main_thread_loop_context;
   
+  struct dspd_scheduler *rtio_sched;
+  dspd_thread_t          rtio_thread;
 };
 
 
@@ -239,4 +242,5 @@ int dspd_daemon_set_ipc_perm(const char *path);
 int dspd_daemon_set_ipc_perm_fd(int fd);
 int dspd_daemon_set_thread_nice(int tid, int thread_type);
 void dspd_daemon_set_thread_schedparam(int tid, int thread_type);
+bool dspd_daemon_have_sched(int32_t policy);
 #endif

@@ -618,11 +618,6 @@ static void set_priority(const char *priority, int32_t *curr)
 
 
 
-static bool have_sched_iso(void)
-{
-  return sched_get_priority_max(SCHED_ISO) >= 0
-    && sched_get_priority_min(SCHED_ISO) >= 0;
-}
 
 int dspd_setpriority(int which, int who, int prio, int *result)
 {
@@ -820,6 +815,77 @@ static struct dspd_dict *generate_modules_list(void)
   return dict;
 }
 
+bool dspd_daemon_have_sched(int32_t policy)
+{
+  return sched_get_priority_max(policy) >= 0;
+}
+
+static int32_t start_io_thread(struct dspd_daemon_ctx *ctx)
+{
+  int32_t ret = -ENOMEM;
+  struct dspd_sched_params sp;
+  struct dspd_threadattr attr = { .init = false };
+  memset(&sp, 0, sizeof(sp));
+  sp.flags = DSPD_SCHED_MASTER | DSPD_SCHED_WORKQ | DSPD_SCHED_SIGBUS | DSPD_SCHED_SIGXCPU;
+  if ( dspd_dctx.rtio_policy == SCHED_DEADLINE )
+    sp.flags |= DSPD_SCHED_SCHEDDL;
+  sp.nslaves = DSPD_MAX_OBJECTS;
+  sp.nfds = DSPD_MAX_OBJECTS * 4;
+  sp.nmsgs = DSPD_MAX_OBJECTS * 2;
+  sp.thread_name = "dspd-rtio";
+ 
+  ctx->rtio_sched = dspd_sched_new(NULL, NULL, &sp);
+  if ( ! ctx->rtio_sched )
+    goto out;
+
+
+  ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED | DSPD_THREADATTR_RTIO);
+  if ( ret != 0 )
+    {
+      ret *= -1;
+      goto out;
+    }
+
+  ret = dspd_thread_create(&ctx->rtio_thread,
+			   &attr,
+			   dspd_sched_run,
+			   ctx->rtio_sched);
+  if ( ret != 0 )
+    {
+      if ( ret == EPERM )
+	{
+	  dspd_log(0, "Retrying RTIO thread creation without realtime priority");
+	  dspd_threadattr_destroy(&attr);
+
+	  ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED);
+	  if ( ret == 0 )
+	    ret = dspd_thread_create(&ctx->rtio_thread,
+				     &attr,
+				     dspd_sched_run,
+				     ctx->rtio_sched);
+	}
+      if ( ret )
+	{
+	  dspd_log(0, "Failed to create RTIO thread");
+	  ret *= -1;
+	  goto out;
+	}
+    } else
+    {
+      dspd_log(0, "Created RTIO thread");
+    }
+  
+ out:
+  if ( ret < 0 )
+    {
+      dspd_sched_delete(ctx->rtio_sched);
+      ctx->rtio_sched = NULL;
+    }
+  dspd_threadattr_destroy(&attr);
+  return ret;
+
+}
+
 int dspd_daemon_init(int argc, char **argv)
 {
   int ret = -ENOMEM;
@@ -833,6 +899,7 @@ int dspd_daemon_init(int argc, char **argv)
   char *pwbuf = NULL;
   ssize_t pwsize = sysconf(_SC_GETPW_R_SIZE_MAX);
   struct rlimit rl;
+  bool single_io_thread = true;
   if ( pwsize == -1 )
     pwsize = 16384;
   if ( ! tmp )
@@ -848,7 +915,7 @@ int dspd_daemon_init(int argc, char **argv)
   dspd_dctx.gid = getgid();
   dspd_dctx.ipc_mode = 0660;
   
-  if ( have_sched_iso() )
+  if ( dspd_daemon_have_sched(SCHED_ISO) )
     {
       dspd_dctx.rtio_policy = SCHED_ISO;
       dspd_dctx.rtsvc_policy = SCHED_ISO;
@@ -1008,6 +1075,37 @@ int dspd_daemon_init(int argc, char **argv)
     {
       if ( value )
 	set_priority(value, &dspd_dctx.rtsvc_priority);
+    }
+  if ( dspd_dict_find_value(dcfg, "multithreaded_devices", &value) )
+    {
+      if ( value )
+	single_io_thread = !atoi(value);
+    }
+
+
+  //The SCHED_DEADLINE and SCHED_ISO policies are safer than SCHED_RR and SCHED_FIFO.
+  //If a safe policy is specified and it isn't available then try another safe policy.
+  if ( ! dspd_daemon_have_sched(dspd_dctx.rtio_policy) )
+    {
+      if ( dspd_dctx.rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_DEADLINE) )
+	{
+	  dspd_dctx.rtio_priority = 0;
+	  dspd_dctx.rtio_policy = SCHED_DEADLINE;
+	} else if ( dspd_dctx.rtio_policy == SCHED_DEADLINE && dspd_daemon_have_sched(SCHED_ISO) )
+	{
+	  dspd_dctx.rtio_priority = 1;
+	  dspd_dctx.rtio_policy = SCHED_ISO;
+	}
+    }
+
+  if ( ! dspd_daemon_have_sched(dspd_dctx.rtsvc_policy) )
+    {
+      if ( dspd_dctx.rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_RR) )
+	{
+	  dspd_dctx.rtio_policy = SCHED_RR;
+	  dspd_dctx.rtio_priority = 1;
+	}
+
     }
 
   rl.rlim_cur = MAX(dspd_dctx.rtsvc_priority, dspd_dctx.rtio_priority);
@@ -1271,6 +1369,14 @@ int dspd_daemon_init(int argc, char **argv)
   if ( ret < 0 )
     goto out;
 
+  if ( single_io_thread )
+    {
+      ret = start_io_thread(&dspd_dctx);
+      if ( ret < 0 )
+	goto out;
+    }
+  
+  
 
   ret = 0;
   
@@ -1474,10 +1580,11 @@ int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits, int32_t *play
 
 static void remove_device(struct dspd_hotplug *hotplug, uint64_t event_id, const char *hwname)
 {
-  struct dspd_hotplug_devname *dev, **prev = &hotplug->names;
+  struct dspd_hotplug_devname *dev, **prev;
   bool found;
   do {
     found = false;
+    prev = &hotplug->names;
     for ( dev = hotplug->names; dev; dev = dev->next )
       {
 	if ( dev->event_id == event_id && strcmp(dev->hwname, hwname) == 0 )
@@ -2476,13 +2583,18 @@ int dspd_daemon_threadattr_init(void *attr, size_t size, int flags)
       pthread_attr_setschedpolicy(&a->attr, SCHED_OTHER);
       if ( flags & DSPD_THREADATTR_RTIO )
 	{
-	  policy = dspd_dctx.rtio_policy;
 	  if ( dspd_dctx.rtio_policy != SCHED_DEADLINE )
 	    {
 	      param.sched_priority = dspd_dctx.rtio_priority;
-	      if ( pthread_attr_setschedpolicy(&a->attr, dspd_dctx.rtio_policy) == 0 )
-		pthread_attr_setschedparam(&a->attr, &param);
+	      policy = dspd_dctx.rtio_policy;
+	    } else
+	    {
+	      param.sched_priority = dspd_dctx.rtsvc_priority;
+	      policy = dspd_dctx.rtsvc_policy;
 	    }
+	  if ( pthread_attr_setschedpolicy(&a->attr, policy) == 0 )
+	    pthread_attr_setschedparam(&a->attr, &param);
+	    
 	}
       if ( flags & DSPD_THREADATTR_RTSVC )
 	{

@@ -71,6 +71,10 @@ struct dspd_dev_lock_req {
   int64_t  cookie;
 };
 
+//Some functions may be optionally asynchronous.
+#define DSPD_PCMDRV_IO_PENDING EINPROGRESS
+
+struct dspd_scheduler;
 struct dspd_pcmdrv_ops {
   /*
     Map a buffer area.
@@ -217,6 +221,11 @@ struct dspd_pcmdrv_ops {
    */
   intptr_t (*adjust_pointer)(void *handle, intptr_t frames);
   
+  int32_t (*io_pending)(void *handle, int32_t pending);
+
+  void (*set_scheduler)(void *handle, struct dspd_scheduler *scheduler);
+
+  
 };
 
 
@@ -275,6 +284,13 @@ struct dspd_pcmdev_stream {
   size_t                           requested_latency;
   dspd_time_t                      early_cycle;
   struct dspd_pcm_device          *dev;
+
+#define DSPD_PCMDRV_RECOVER_PENDING  (1U<<0U)
+#define DSPD_PCMDRV_RECOVER_COMPLETE (1U<<1U)
+#define DSPD_PCMDRV_PREPARE_PENDING  (1U<<2U)
+#define DSPD_PCMDRV_PREPARE_COMPLETE (1U<<3U)
+#define DSPD_PCMDRV_IO_ERROR         (1U<<31U)
+  int32_t io_pending;
 };
 
 #define DSPD_CBIT_PRESENT (1<<2)

@@ -33,4 +33,5 @@
 #include "dspdaio.h"
 #include "pcmcli.h"
 #include "ctlcli.h"
+#include "dspdtls.h"
 #endif

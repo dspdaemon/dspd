@@ -107,10 +107,14 @@ static inline bool dspd_tmperr(int err)
 #define dspd_fatal_err(_e) (!dspd_tmperr(_e))
 bool dspd_devname_cmp(const char *devname, const char *str);
 
-
+#ifdef __GNUC__
+#define DSPD_ATTRIBUTE_NORETURN __attribute__((noreturn))
+#else
+#define DSPD_ATTRIBUTE_NORETURN
+#endif
 
 void dspd_enable_assert_log(void);
-void _dspd_assert(const char *expr, const char *file, unsigned int line);
+DSPD_ATTRIBUTE_NORETURN void _dspd_assert(const char *expr, const char *file, unsigned int line);
 #define DSPD_ASSERT(e) ((void) ((e) ? ((void)0) : _dspd_assert (#e, __FILE__, __LINE__)))
 
 static inline ssize_t dspd_read(int32_t fd, void *buf, size_t len)

@@ -244,12 +244,13 @@ int dspd_load_modules(struct dspd_module_list **l,
 	{
 	  dspd_log(0, "Initializing module: %s", m->callbacks->desc);
 	  ret = m->callbacks->init(list->daemon_ctx, &m->context);
-	  m = NULL;
 	  if ( ret )
 	    {
 	      dspd_log(0, "Error %d while initializing %s", ret, m->callbacks->desc);
+	      m = NULL;
 	      goto out;
 	    }
+	  m = NULL;
 	  list->lastinit = curr;
 	}
     }

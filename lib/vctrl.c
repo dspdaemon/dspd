@@ -299,9 +299,9 @@ static void vctrl_set_value(struct dspd_vctrl_list *list,
 			    float value,
 			    const char *name)
 {
-  bool changed;
-  struct dspd_vctrl *ctrl;
-  int32_t val;
+  bool changed = false;
+  struct dspd_vctrl *ctrl = NULL;
+  int32_t val = 0;
   if ( stream < ARRAY_SIZE(list->ctrl_pointers) )
     {
       if ( list->ctrl_pointers[stream] )

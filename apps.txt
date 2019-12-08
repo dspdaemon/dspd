@@ -1,4 +1,5 @@
-The following client applications were tested and are known to work well.
+The following client applications were tested and are known to work well
+using the APIs listed to route audio through dspd.
 This means no lagging sound effects or A/V sync issues or distortions.
 
 Quake 3              (SDL/OSS)
@@ -13,7 +14,7 @@ Mozilla Seamonkey    (ALSA)
 Firefox              (ALSA)
 Chromium Browser     (ALSA)
 Chromium BSU         (OSS)
-google-chrome	     (ALSA)
+Google Chrome	     (ALSA)
 KDE 4.10.5           (ALSA)
 aplay/arecord        (ALSA)
 ossplay              (OSS)
@@ -23,6 +24,7 @@ fluidsynth   	     (ALSA,OSS)
 d2x-rebirth	     (ALSA)
 d1x-rebirth	     (ALSA)
 ossxmix              (OSS)
+dhwem3		     (ALSA)
 
 The following applications mostly work:
 

@@ -892,7 +892,7 @@ ssize_t dspd_pcmcli_read_frames(struct dspd_pcmcli *client,
 				  void *data,
 				  size_t frames)
 {
-  ssize_t ret;
+  ssize_t ret = 0;
   size_t offset;
   bool waited = false;
   uint32_t wtime;
@@ -1496,6 +1496,7 @@ int32_t dspd_pcmcli_set_hwparams(struct dspd_pcmcli *client,
 	}
     }
 
+  //fprintf(stderr, "PFD=%d %d\n", pfd, dup(pfd));
   if ( ret == 0 )
     {
       if ( client->streams & DSPD_PCM_SBIT_PLAYBACK )
@@ -1790,13 +1791,11 @@ int32_t dspd_pcmcli_set_swparams(struct dspd_pcmcli *client,
 
 int32_t dspd_pcmcli_get_swparams(struct dspd_pcmcli *client, struct dspd_rclient_swparams *swparams)
 {
-  int32_t ret;
+  int32_t ret = -EBADFD;
   if ( client->state == PCMCLI_STATE_SETUP )
     {
       *swparams = client->swparams;
-    } else
-    {
-      ret = -EBADFD;
+      ret = 0;
     }
   return ret;
 }
@@ -1949,7 +1948,8 @@ int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t fl
 	  ret = dspd_pcmcli_stream_set_constant_latency(&client->playback.stream, client->constant_latency);
 	  if ( ret == 0 && (flags & DSPD_PCMCLI_BYTE_MODE) )
 	    {
-	      client->playback.frame_buf = calloc(DSPD_CHMAP_LAST, sizeof(uint64_t));
+	      //make ccc-analyzer happy: plain old sizeof(uint64_t) is an operator size mismatch
+	      client->playback.frame_buf = calloc(DSPD_CHMAP_LAST, sizeof(uint64_t) * sizeof(char));
 	      if ( ! client->playback.frame_buf )
 		ret = -ENOMEM;
 	      
@@ -1966,7 +1966,7 @@ int32_t dspd_pcmcli_init(struct dspd_pcmcli *client, int32_t streams, int32_t fl
 	  DSPD_ASSERT(client->capture.stream.stream_flags == DSPD_PCM_SBIT_CAPTURE);
 	  if ( flags & DSPD_PCMCLI_BYTE_MODE )
 	    {
-	      client->capture.frame_buf = calloc(DSPD_CHMAP_LAST, sizeof(uint64_t));
+	      client->capture.frame_buf = calloc(DSPD_CHMAP_LAST, sizeof(uint64_t) * sizeof(char));
 	      if ( ! client->capture.frame_buf )
 		ret = -ENOMEM;
 	    }

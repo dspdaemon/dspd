@@ -75,14 +75,13 @@ struct dspd_pcm_device {
   volatile intptr_t current_client;
   int32_t  key;
 
-  sigjmp_buf sbh_env, sbh_except;
   volatile int current_exception, exc_client;
   volatile AO_t error;
 
   volatile AO_t irq_count, ack_count;
   volatile bool reset_scheduler, idle;
   struct sched_param sched_param;
-  int sched_policy;
+  //  int sched_policy;
   int32_t mq[2];
   
 #ifndef DSPD_HAVE_ATOMIC_INT64
@@ -104,10 +103,14 @@ struct dspd_pcm_device {
   bool    must_unlock;
   uint8_t lock_mask[DSPD_MASK_SIZE];
   size_t  lock_count;
+
+  uintptr_t  pxferlen_hint, cxferlen_hint;
+
+  bool must_spin;
 };
 
 #define DSPD_DEV_USE_TLS
-static int stream_recover_fcn(struct dspd_pcmdev_stream *stream);
+static int _stream_recover_fcn(struct dspd_pcmdev_stream *stream);
 static int stream_prepare(struct dspd_pcmdev_stream *stream);
 static int32_t dspd_pcmdev_connect(void *dev, int32_t client);
 static int32_t dspd_pcmdev_disconnect(void *dev, int32_t client);
@@ -120,8 +123,8 @@ static void alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32_
 static void schedule_fullduplex_wake(void *data);
 static void schedule_capture_wake(void *data);
 static void schedule_playback_wake(void *data);
-static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *reltime);
-static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *reltime);
+static bool schedule_capture_sleep(void *data, uint64_t *abstime, uint64_t *deadline, int32_t *reltime);
+static bool schedule_playback_sleep(void *data, uint64_t *abstime, uint64_t *deadline, int32_t *reltime);
 static void schedule_timer_event(void *data);
 static void schedule_trigger_event(void *data);
 static int32_t dspd_dev_client_settrigger(struct dspd_pcm_device *dev, uint32_t client, uint32_t bits, bool now);
@@ -132,10 +135,50 @@ static void dspd_dev_set_stream_volume(struct dspd_pcm_device *dev,
 static float dspd_dev_get_stream_volume(struct dspd_pcm_device *dev,
 					int32_t stream);
 static void incr_intr_count(struct dspd_pcm_device *dev);
+static void dev_thread_destructor(struct dspd_scheduler *sch, void *arg);
+static void dev_started(void *user_data);
+
+
 int32_t dspd_dev_get_slot(void *dev)
 {
   struct dspd_pcm_device *d = dev;
   return d->key;
+}
+
+
+static bool check_io(struct dspd_pcm_device *dev, struct dspd_pcmdev_stream *stream)
+{
+  bool busy = false;
+  int32_t oldmask = stream->io_pending, newmask;
+  if ( oldmask )
+    {
+      //Find out what the driver has pending.
+      newmask = stream->ops->io_pending(stream->handle, oldmask);
+
+      //Handle completion
+      if ( oldmask & DSPD_PCMDRV_PREPARE_PENDING )
+	{
+	  if ( newmask & DSPD_PCMDRV_PREPARE_COMPLETE )
+	    {
+	      stream->running = true;
+	      newmask &= ~DSPD_PCMDRV_PREPARE_COMPLETE;
+	    }
+	}
+      if ( oldmask & DSPD_PCMDRV_RECOVER_PENDING )
+	{
+	  if ( newmask & DSPD_PCMDRV_RECOVER_COMPLETE )
+	    {
+	      stream->running = true;
+	      newmask &= ~DSPD_PCMDRV_RECOVER_COMPLETE;
+	    }
+	}
+      if ( newmask & DSPD_PCMDRV_IO_ERROR )
+	dspd_sched_abort(dev->sched);
+      stream->io_pending = newmask;
+      //The stream is busy if the device has io pending.
+      busy = !!(stream->io_pending & (~DSPD_PCMDRV_IO_ERROR));
+    }
+  return busy;
 }
 
 static void set_idle(struct dspd_pcm_device *dev)
@@ -144,19 +187,20 @@ static void set_idle(struct dspd_pcm_device *dev)
   if ( dev->reset_scheduler )
     {
       dev->reset_scheduler = false;
-      pthread_setschedparam(pthread_self(), dev->sched_policy, &dev->sched_param);
+      //pthread_setschedparam(pthread_self(), dev->sched_policy, &dev->sched_param);
     }
+  dspd_sched_set_latency(dev->sched, UINT64_MAX);
 }
 
-static int stream_recover_print(struct dspd_pcmdev_stream *s, const char *fcn, int line)
+static int _stream_recover_print(struct dspd_pcmdev_stream *s, const char *fcn, int line)
 {
   // fprintf(stderr, "RECOVERY ON %s:%d\n", fcn, line);
   if ( dspd_dctx.debug )
     fprintf(stderr, "RECOVERY ON %s:%d\n", fcn, line);
-  return stream_recover_fcn(s);
+  return _stream_recover_fcn(s);
 }
 
-#define stream_recover(_s) stream_recover_print(_s, __FUNCTION__, __LINE__)
+#define stream_recover(_s) _stream_recover_print(_s, __FUNCTION__, __LINE__)
 
 
 static void dspd_dev_set_config(struct dspd_pcm_device *dev, uint32_t config)
@@ -291,8 +335,6 @@ static void dspd_dev_config_set_latency(struct dspd_pcm_device *dev, uint32_t *c
 	break;
     }
 
-  // DSPD_ASSERT(latency != 32);
-  //fprintf(stderr, "SETL %d FROM %d\n", i, latency);
 
   //Use only first 5 bits.
   (*config) &= ~0x1F; 
@@ -654,6 +696,7 @@ void dspd_sync_reg(struct dspd_pcm_device *dev)
   uint32_t latency, count;
   float volume;
   size_t l;
+  int32_t ret;
   if ( config != dev->current_config )
     {
       latency = dspd_dev_config_get_latency(dev, &config);
@@ -673,6 +716,7 @@ void dspd_sync_reg(struct dspd_pcm_device *dev)
 	      else
 		l = latency;
 	      dev->playback.latency = dev->playback.ops->set_latency(dev->playback.handle, l, latency);
+	      dspd_sched_set_latency(dev->sched, dev->playback.latency * dev->playback.sample_time); 
 	    }
 	  count = dspd_dev_config_get_stream_count(dev, &config, DSPD_PCM_STREAM_PLAYBACK);
 	  if ( count > 0 && dev->playback.streams == 0 )
@@ -681,9 +725,11 @@ void dspd_sync_reg(struct dspd_pcm_device *dev)
 		{
 		  if ( stream_prepare(&dev->playback) != 0 )
 		    {
-		      if ( stream_recover(&dev->playback) < 0 )
-			dspd_scheduler_abort(dev->sched);
-		      else
+		      ret = stream_recover(&dev->playback);
+		      
+		      if ( ret < 0 )
+			dspd_sched_abort(dev->sched);
+		      else if ( ret != DSPD_PCMDRV_IO_PENDING )
 			dev->playback.running = true;
 		    } else
 		    {
@@ -709,11 +755,13 @@ void dspd_sync_reg(struct dspd_pcm_device *dev)
 		   {
 		     dev->capture.latency = latency;
 		     dev->capture.ops->set_latency(dev->capture.handle, latency, latency);
+		     dspd_sched_set_latency(dev->sched, dev->capture.latency * dev->capture.sample_time);
 		   }
 	       } else
 	       {
 		 dev->capture.latency = latency;
-		 dev->capture.ops->set_latency(dev->capture.handle, latency, latency);
+		 dev->capture.latency = dev->capture.ops->set_latency(dev->capture.handle, latency, latency);
+		 dspd_sched_set_latency(dev->sched, dev->capture.latency * dev->capture.sample_time);
 	       }
 	   } 
 	  count = dspd_dev_config_get_stream_count(dev, &config, DSPD_PCM_STREAM_CAPTURE);
@@ -723,9 +771,10 @@ void dspd_sync_reg(struct dspd_pcm_device *dev)
 		{
 		  if ( stream_prepare(&dev->capture) != 0 )
 		    {
-		      if ( stream_recover(&dev->capture) != 0 )
-			dspd_scheduler_abort(dev->sched);
-		      else
+		      ret = stream_recover(&dev->capture);
+		      if ( ret < 0 )
+			dspd_sched_abort(dev->sched);
+		      else if ( ret != DSPD_PCMDRV_IO_PENDING )
 			dev->capture.running = true;
 		    } else
 		    {
@@ -801,7 +850,7 @@ static void schedule_timer_event(void *data)
 	  dev->playback.status = NULL;
 	  ret = stream_recover(&dev->playback);
 	  if ( ret < 0 )
-	    dspd_scheduler_abort(dev->sched);
+	    dspd_sched_abort(dev->sched);
 	} else
 	{
 	  if ( dev->playback.status->tstamp )
@@ -823,7 +872,7 @@ static void schedule_timer_event(void *data)
 	  dev->capture.started = 0;
 	  ret = stream_recover(&dev->capture);
 	  if ( ret < 0 )
-	    dspd_scheduler_abort(dev->sched);
+	    dspd_sched_abort(dev->sched);
 	} 
     }
   dev->trigger = true;
@@ -857,8 +906,9 @@ static void schedule_timer_event(void *data)
 #define FILLTIME_RANGE (FILLTIME_MAX-FILLTIME_MIN)
 #define FILLTIME_FRACT (FILLTIME_RANGE/100)
 //Sleeping for too long and running long computations to catch up
-//is bad for multitasking.  Who cares about power if the whole damn
-//system except for audio stutters?
+//is bad for multitasking.  A thread somewhere might lag causing
+//multimedia glitches or other annoying issues.  Maybe that thread
+//is what is feeding this one audio data?
 #define SLEEPTIME_MAX (500000*1000)
 static uint64_t get_sleep_reltime(uint64_t filltime, bool reset)
 {
@@ -886,18 +936,32 @@ static uint64_t get_sleep_reltime(uint64_t filltime, bool reset)
   return ret;
 }
 
-static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *reltime)
+
+
+static bool schedule_playback_sleep(void *data, uint64_t *abstime, uint64_t *deadline, int32_t *reltime)
 {
   struct dspd_pcm_device *dev = data;
   uint64_t f;
   uint64_t sleep_frames;
+  uint64_t rt;
+  *deadline = UINT64_MAX;
   dev->idle = false;
-
+  if ( dev->playback.io_pending )
+    {
+      if ( check_io(dev, &dev->playback) )
+	{
+	  *abstime = UINT64_MAX;
+	  *reltime = DSPD_SCHED_STOP;
+	  *deadline = UINT64_MAX;
+	  return true;
+	}
+    }
+  
   if ( dev->wakeup_count )
     {
       dev->wakeup_count--;
       if ( dev->wakeup_count == 0 )
-	dspd_scheduler_set_fd_event(dev->sched, dev->mq[0], POLLIN);
+	dspd_sched_set_fd_event(dev->sched, dev->mq[0], POLLIN);
     }
   
   if ( ! dev->capture.ops )
@@ -908,6 +972,16 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
       dev->playback.check_status = 1;
       *reltime = DSPD_SCHED_SPIN;
       *abstime = UINT64_MAX;
+      if ( dev->playback.requested_latency > 0 )
+	*deadline = dev->playback.requested_latency * dev->playback.sample_time;
+      else
+	*deadline = dev->playback.latency * dev->playback.sample_time;
+    } else if ( dev->must_spin )
+    {
+      *reltime = DSPD_SCHED_SPIN;
+      *abstime = UINT64_MAX;
+      *deadline = dev->playback.latency * dev->playback.sample_time;
+      dev->must_spin = false;
     } else if ( dev->playback.status )
     {
       /*
@@ -971,7 +1045,10 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
 
       f *= (1000000000 / dev->playback.params.rate);
 
-      *abstime = dev->playback.status->tstamp + get_sleep_reltime(f, dev->playback.check_status);
+      rt = get_sleep_reltime(f, dev->playback.check_status);
+
+      *abstime = dev->playback.status->tstamp + rt;
+      *deadline = dev->playback.status->fill;
       dev->playback.next_wakeup = *abstime;
       *reltime = DSPD_SCHED_WAIT;
       dev->playback.check_status = 0;
@@ -980,10 +1057,12 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, int32_t *relt
     {
       *reltime = DSPD_SCHED_SPIN;
       *abstime = UINT64_MAX;
+      *deadline = dev->playback.latency * dev->playback.sample_time;
     } else
     {
       *reltime = DSPD_SCHED_STOP;
       *abstime = UINT64_MAX;
+      *deadline = UINT64_MAX;
       set_idle(dev);
     }
   return true;
@@ -1478,35 +1557,14 @@ static void _alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32
 
 static void alert_one_client(struct dspd_pcm_device *dev, int32_t client, int32_t error)
 {
-  if ( error == EFAULT )
-    {
-      //Can't double fault.  Allowing this increases the chances and severity of glitches
-      _alert_one_client(dev, client, error);
-    } else
-    {
-      dev->current_exception = error;
-      if ( sigsetjmp(dev->sbh_except, SIGBUS) == 1 )
-	_alert_one_client(dev, client, -1);
-      else
-	_alert_one_client(dev, client, error);
-      dev->current_exception = 0;
-    }
+  dev->current_exception = error;
+  _alert_one_client(dev, client, error);
+  dev->current_exception = 0;
 }
 		       
 static void alert_all_clients(struct dspd_pcm_device *dev, int32_t error)
 {
-  int i;
-  dev->current_exception = error;
-  if ( sigsetjmp(dev->sbh_except, SIGBUS) == 1 )
-    {
-      i = dev->exc_client;
-      _alert_one_client(dev, i, -1);
-      i++;
-    } else
-    {
-      i = 0;
-    }
-
+  int i = 0;
   while ( i < DSPD_MAX_OBJECTS )
     {
       dev->exc_client = i;
@@ -1634,6 +1692,8 @@ static bool process_clients_once(struct dspd_pcm_device *dev, uint32_t ops)
 #endif
 	}
     }
+
+
   if ( dev->must_unlock )
     dev->lock_count = 0;
   return err;
@@ -1641,17 +1701,24 @@ static bool process_clients_once(struct dspd_pcm_device *dev, uint32_t ops)
 
 static int stream_prepare(struct dspd_pcmdev_stream *stream)
 {
-  stream->cycle.start_count++;
-  if ( stream->cycle.start_count == 0 )
-    stream->cycle.start_count++;
-  if ( stream->glitch && dspd_get_glitch_correction() == DSPD_GHCN_AUTO )
-    stream->glitch = false;
-  return stream->ops->prepare(stream->handle);
+  int32_t ret = DSPD_PCMDRV_IO_PENDING;
+  if ( ! (stream->io_pending & DSPD_PCMDRV_PREPARE_PENDING) )
+    {
+      stream->cycle.start_count++;
+      if ( stream->cycle.start_count == 0 )
+	stream->cycle.start_count++;
+      if ( stream->glitch && dspd_get_glitch_correction() == DSPD_GHCN_AUTO )
+	stream->glitch = false;
+      ret = stream->ops->prepare(stream->handle);
+      if ( ret == DSPD_PCMDRV_IO_PENDING )
+	stream->io_pending |= DSPD_PCMDRV_PREPARE_PENDING;
+    }
+  return ret;
 }
 
 
 
-static int stream_recover_fcn(struct dspd_pcmdev_stream *stream)
+static int _stream_recover_fcn(struct dspd_pcmdev_stream *stream)
 {
   unlock_all_clients(stream->dev);
   stream->started = false;
@@ -1681,9 +1748,15 @@ static int stream_recover_fcn(struct dspd_pcmdev_stream *stream)
 	    }
 	}
     }
-
-  ret = stream->ops->recover(stream->handle);
-
+  if ( ! (stream->io_pending & DSPD_PCMDRV_RECOVER_PENDING) )
+    {
+      ret = stream->ops->recover(stream->handle);
+      if ( ret == DSPD_PCMDRV_IO_PENDING )
+	stream->io_pending |= DSPD_PCMDRV_RECOVER_PENDING;
+    } else
+    {
+      ret = DSPD_PCMDRV_IO_PENDING;
+    }
   return ret;
 }
 
@@ -1755,7 +1828,7 @@ static bool device_playback_cycle(struct dspd_pcm_device *dev, uintptr_t frames)
     {
       if ( stream_recover(&dev->playback) < 0 )
 	{
-	  dspd_scheduler_abort(dev->sched);
+	  dspd_sched_abort(dev->sched);
 	  return false;
 	}
     }
@@ -1827,7 +1900,7 @@ static void schedule_playback_wake(void *userdata)
   uintptr_t len, count, i, l, written = 0, total, n;
   uint16_t revents;
   if ( AO_load(&dev->error) != 0 )
-    dspd_scheduler_abort(dev->sched);
+    dspd_sched_abort(dev->sched);
 
   dev->trigger = false; //If it triggered then that was processed already.
   dspd_sync_reg(dev);
@@ -1845,7 +1918,7 @@ static void schedule_playback_wake(void *userdata)
 	  ret = stream_recover(&dev->playback);
 	  if ( ret < 0 )
 	    {
-	      dspd_scheduler_abort(dev->sched);
+	      dspd_sched_abort(dev->sched);
 	      return;
 	    }
 	}
@@ -1883,7 +1956,15 @@ static void schedule_playback_wake(void *userdata)
       if ( dev->playback.status->space > 0 )
 	{
 	  dev->playback.early_cycle = UINT64_MAX;
-	  count = get_io_cycle_count(dev->playback.status->fill, dev->playback.status->space);
+	  if ( dev->playback.status->space > dev->pxferlen_hint )
+	    {
+	      n = dev->pxferlen_hint;
+	      dev->must_spin = true;
+	    } else
+	    {
+	      n = dev->playback.status->space;
+	    }
+	  count = get_io_cycle_count(dev->playback.status->fill, n);
 	  if ( count == 1 )
 	    {
 	      //Write it all
@@ -1984,7 +2065,7 @@ static void schedule_playback_wake(void *userdata)
 	    {
 	      if ( stream_drop(&dev->playback) < 0 )
 		{
-		  dspd_scheduler_abort(dev->sched);
+		  dspd_sched_abort(dev->sched);
 		} else if ( dev->playback.glitch )
 		{
 		  if ( dspd_get_glitch_correction() == DSPD_GHCN_AUTO )
@@ -1998,19 +2079,34 @@ static void schedule_playback_wake(void *userdata)
  out:
   ret = stream_recover(&dev->playback);
   if ( ret < 0 )
-    dspd_scheduler_abort(dev->playback.handle);
+    dspd_sched_abort(dev->playback.handle);
   DSPD_ASSERT(dev->must_unlock == true);
   return;
 }
 
-static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *reltime)
+static bool schedule_capture_sleep(void *data, uint64_t *abstime, uint64_t *deadline, int32_t *reltime)
 {
   struct dspd_pcm_device *dev = data;
   uint64_t f;
   bool ret = true;
   dev->idle = false;
+  *deadline = UINT64_MAX;
+  if ( dev->capture.io_pending )
+    {
+      if ( check_io(dev, &dev->capture) )
+	{
+	  //Nothing to do until io is complete
+	  *abstime = UINT64_MAX;
+	  *reltime = DSPD_SCHED_STOP;
+	  *deadline = UINT64_MAX;
+	  return true;
+	}
+    }
+
   if ( ! dev->playback.ops )
     dspd_sync_reg(dev);
+
+  //dev->must_spin isn't used here because capture already handles the case where data is purposely left over
   if ( dev->capture.status )
     {
       //A latency change may not be applied until the buffer level
@@ -2024,7 +2120,7 @@ static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *relti
 	  dev->capture.latency = dev->current_latency;
 	  dev->capture.ops->set_latency(dev->capture.handle, dev->capture.latency, dev->capture.latency);
 	}
-	
+      *deadline = dev->capture.status->space * dev->capture.sample_time;
       if ( dev->capture.status->fill > 0 )
 	{
 	  *abstime = dev->capture.status->tstamp;
@@ -2032,21 +2128,22 @@ static bool schedule_capture_sleep(void *data, uint64_t *abstime, int32_t *relti
 	  ret = false;
 	} else
 	{
-	  f = dev->capture.latency * (1000000000 / dev->capture.params.rate);
-	  *abstime = dev->capture.status->tstamp + (f / 2);
+	  f = dev->capture.latency * dev->capture.sample_time;
+	  *abstime = dev->capture.status->tstamp + (f / 2ULL);
 	  *reltime = DSPD_SCHED_WAIT;
 	}
     } else if ( dev->capture.running )
     {
       *reltime = DSPD_SCHED_SPIN;
       *abstime = UINT64_MAX;
+      *deadline = dev->capture.latency * dev->capture.sample_time;
     } else
     {
       *reltime = DSPD_SCHED_STOP;
       *abstime = UINT64_MAX;
+      *deadline = UINT64_MAX;
       set_idle(dev);
     }
- 
   return ret;
 }
 static void schedule_capture_wake(void *data)
@@ -2054,13 +2151,12 @@ static void schedule_capture_wake(void *data)
   struct dspd_pcm_device *dev = data;
   int32_t ret;
   if ( AO_load(&dev->error) != 0 )
-    dspd_scheduler_abort(dev->sched);
+    dspd_sched_abort(dev->sched);
 
   dev->trigger = false; //If it triggered then that was processed already.
   dspd_sync_reg(dev);
   if ( ! dev->playback.ops )
     incr_intr_count(dev);
-
   if ( dev->capture.running )
     {
       if ( dev->capture.status == NULL )
@@ -2071,7 +2167,7 @@ static void schedule_capture_wake(void *data)
 	      if ( ret < 0 )
 		{
 		  if ( stream_recover(&dev->capture) < 0 )
-		    dspd_scheduler_abort(dev->sched);
+		    dspd_sched_abort(dev->sched);
 		  return;
 		} else
 		{
@@ -2082,7 +2178,7 @@ static void schedule_capture_wake(void *data)
 	  if ( ret < 0 )
 	    {
 	      if ( stream_recover(&dev->capture) < 0 )
-		dspd_scheduler_abort(dev->sched);
+		dspd_sched_abort(dev->sched);
 	      return;
 	    }
 	}
@@ -2090,6 +2186,10 @@ static void schedule_capture_wake(void *data)
 	dev->capture.cycle.len = dev->capture.status->fill;
       else
 	dev->capture.cycle.len = dev->capture.latency;
+      
+      //Don't xfer too much, otherwise long running computations might make other devices have glitches.
+      if ( dev->capture.cycle.len > dev->cxferlen_hint )
+	dev->capture.cycle.len = dev->cxferlen_hint;
 
       ret = dev->capture.ops->mmap_begin(dev->capture.handle,
 					 (void**)&dev->capture.cycle.addr,
@@ -2100,7 +2200,7 @@ static void schedule_capture_wake(void *data)
 	  if ( ret != -EAGAIN )
 	    {
 	      if ( stream_recover(&dev->capture) < 0 )
-		dspd_scheduler_abort(dev->sched);
+		dspd_sched_abort(dev->sched);
 	    }
 	  return;
 	}
@@ -2116,7 +2216,7 @@ static void schedule_capture_wake(void *data)
       if ( ret < 0 )
 	{
 	  if ( stream_recover(&dev->capture) < 0 )
-	    dspd_scheduler_abort(dev->sched);
+	    dspd_sched_abort(dev->sched);
 	} else 
 	{
 	  if ( dev->capture.stop_threshold > 0 )
@@ -2126,282 +2226,61 @@ static void schedule_capture_wake(void *data)
 	       dev->capture.started != 0 )
 	    {
 	      if ( stream_drop(&dev->capture) < 0 )
-		dspd_scheduler_abort(dev->sched);
+		dspd_sched_abort(dev->sched);
 	    }
 	}
     }
   return;
 }
 
-
-
-#ifndef DSPD_DEV_USE_TLS
-/*
-  This one works if SYS_gettid is signal safe.  It should work
-  because the mutex is only locked when writing to the list and
-  that happens in a context where a SIGBUS should be fatal.
-
-  The slot is only freed from inside the thread that created it so
-  no two slots will have the same thread id.
-
-*/
-struct dev_tls_slot {
-  int   thread;
-  void *context;
-};
-//There only needs to be enough slots to have 1 for each object.
-static pthread_mutex_t dev_tls_mutex = PTHREAD_MUTEX_INITIALIZER;
-struct dev_tls_slot devtls[DSPD_MAX_OBJECTS];
-
-static void dspd_pcm_device_register_tls(void *current_device)
+struct dspd_pcm_device *dspd_pcm_device_get_context(void)
 {
-  int tid = syscall(SYS_gettid);
-  size_t i;
-  pthread_mutex_lock(&dev_tls_mutex);
-  for ( i = 0; i < DSPD_MAX_OBJECTS; i++ )
-    {
-      if ( devtls[i].thread == 0 )
-	{
-	  devtls[i].thread = tid;
-	  devtls[i].context = current_device;
-	  break;
-	}
-    }
-  pthread_mutex_unlock(&dev_tls_mutex);
+  struct dspd_scheduler *sched = dspd_sched_get();
+  struct dspd_pcm_device *dev = NULL;
+  if ( sched )
+    dev = sched->udata;
+  return dev;
 }
-static void dspd_pcm_device_unregister_tls(void)
+
+static void dev_thread_destructor(struct dspd_scheduler *sch, void *arg)
 {
-  int tid = syscall(SYS_gettid);
-  size_t i;
-  pthread_mutex_lock(&dev_tls_mutex);
-  for ( i = 0; i < DSPD_MAX_OBJECTS; i++ )
-    {
-      if ( devtls[i].thread == tid )
-	{
-	  devtls[i].thread = 0;
-	  devtls[i].context = NULL;
-	  break;
-	}
-    }
-  pthread_mutex_unlock(&dev_tls_mutex);
-}
-static void *dspd_pcm_device_get_context(void)
-{
-  int tid = syscall(SYS_gettid);
-  size_t i;
-  void *ret = NULL;
-  for ( i = 0; i < DSPD_MAX_OBJECTS; i++ )
-    {
-      if ( devtls[i].thread == tid )
-	{
-	  ret = devtls[i].context;
-	  break;
-	}
-    }
-  return ret;
-}
-#else
-/*
-  This one works if TLS is at least partially signal safe.  It must be safe
-  to read a variable from a signal handler but writing to the variable (actually  just initializing it) does not have to be thread safe.
-*/
-static __thread void *devtls;
-static void dspd_pcm_device_register_tls(void *current_device)
-{
-  devtls = current_device;
-}
-static void dspd_pcm_device_unregister_tls(void)
-{
-  devtls = NULL;
-}
-static void *dspd_pcm_device_get_context(void)
-{
-  return devtls;
-}
-#endif
-
-static void sigxcpu_handler(int sig, siginfo_t *signinfo, void *context)
-{
-  //Drop realtime priority.  Realtime priority will be picked up again when the thread goes idle.
-  //If it doesn't go idle, then there is a bug somewhere and someone will be able to kill the process
-  //without rebooting.
-  struct sched_param param = { 0 };
-
-  struct timespec req, rem;
- 
-
-  struct dspd_pcm_device *dev = dspd_pcm_device_get_context();
-  if ( dev )
-    {
-      if ( dev->idle )
-	{
-	  req.tv_sec = 0;
-	  req.tv_nsec = 1000000;
-	  nanosleep(&req, &rem);
-	} else
-	{
-	  dev->reset_scheduler = true;
-	  sched_setscheduler(dspd_gettid(), SCHED_OTHER, &param);
-	}
-    } else
-    {
-      //sched_setscheduler isn't technically supposed to be used in a signal handler, but it seems to work
-      //and I can't think of any reason why it would not work.
-      sched_setscheduler(dspd_gettid(), SCHED_OTHER, &param);
-    }
-}
-  
-static void sigbus_handler(int sig, siginfo_t *signinfo, void *context)
-{
-  struct dspd_pcm_device *dev = dspd_pcm_device_get_context();
-  if ( dev->current_exception )
-    siglongjmp(dev->sbh_except, 1);
-
-  DSPD_ASSERT(dev);
-  DSPD_ASSERT(dev->current_client >= 0);
-  siglongjmp(dev->sbh_env, 1);
-}
-static void *dspd_dev_thread(void *arg)
-{
-  struct dspd_scheduler *sched = arg;
-  struct sigaction act;
-
-  struct dspd_pcm_device *dev = sched->udata;
-  char name[32];
-  struct rlimit rl, old;
-  sprintf(name, "dspd-io-%d", dev->key);
-  set_thread_name(name);
-  
-  /*
-    SCHED_DEADLINE is really a natural fit for dspd.  dspd was meant to be preempted so it
-    tries to perform some minimal amount of io before the kernel gets a chance to preempt it.
-    In theory, SCHED_DEADLINE will make those preemptions more predictable.  It is likely that
-    some more work needs done to ensure that it works well on all systems.  For now, it will
-    ask for some parameters that will generally work well with a small number of devices on
-    a system with a fast CPU (or two).  
-
-    The preemption trick actually seems to work so well that it usually won't underrun with even
-    a 2-4ms of latency with SCHED_OTHER and priority (nice) 0.
-    
-   */
-  if ( dev->sched_policy == SCHED_DEADLINE )
-    {
-      if ( dspd_sched_enable_deadline(dev->sched) )
-	{
-	  dspd_sched_set_timebase(dev->sched, 
-				  1000000000 / MAX(dev->playback.params.rate,dev->capture.params.rate));
-	  struct sched_param sp = { 0 };
-	  uint32_t l = MAX(dev->playback.params.max_latency, dev->capture.params.max_latency);
-	  sched_setscheduler(dspd_gettid(), 6, &sp);
-	  dspd_sched_set_deadline_hint(dev->sched, 
-				       l / 2,
-				       l);
-	} else
-	{
-	  
-	}
-    } else
-    {  
-      if ( pthread_getschedparam(pthread_self(), &dev->sched_policy, &dev->sched_param) == 0 &&
-	   (dev->sched_policy == SCHED_RR || dev->sched_policy == SCHED_FIFO) )
-	{
-	  /*
-	    The idea is to make sure SIGXCPU is delivered to this thread and not some other thread.
-	    It actually does work in testing and should be reasonably expected to since Linux threads
-	    are really just another process sharing address space.
-	  */
-	  rl.rlim_cur = 50000;
-	  rl.rlim_max = 100000;
-	  prlimit(dspd_gettid(), RLIMIT_RTTIME, &rl, &old);
-	  memset(&act, 0, sizeof(act));
-	  act.sa_sigaction = sigxcpu_handler;
-	  act.sa_flags = SA_SIGINFO;
-	  sigaction(SIGXCPU, &act, NULL);
-	}
-    }
-  dspd_daemon_set_thread_nice(-1, DSPD_THREADATTR_RTIO);
-
-  dspd_pcm_device_register_tls(dev);
-  memset(&act, 0, sizeof(act));
-  act.sa_sigaction = sigbus_handler;
-  act.sa_flags = SA_SIGINFO;
-  sigaction(SIGBUS, &act, NULL);
-  
-  
-
-  if ( sigsetjmp(dev->sbh_env, SIGBUS) == 1 )
-    {
-      if ( dev->current_client >= 0 )
-	{
-	  uint32_t refcnt;
-	  uint64_t slotid = dspd_slist_id(dev->list, dev->current_client); //get slot id while we have a reference
-	  dspd_client_srv_unlock(dev->list, dev->current_client); //Still locked from earlier
-	  dspd_slist_entry_wrlock(dev->list, dev->current_client); //This lock must be taken first
-	  //Try to get a reference count
-	  refcnt = dspd_slist_ref(dev->list, dev->current_client);
-	  if ( refcnt <= 1 )
-	    dspd_slist_unref(dev->list, dev->current_client);
-	  dspd_slist_entry_rw_unlock(dev->list, dev->current_client);
-
-	  if ( refcnt > 1 )
-	    {
-	      /*
-		At this point the device either owns the client or the trigger
-		bits should not be set because the slot is either empty or belongs
-		to something else.
-	      */
-	      if ( dspd_slist_id(dev->list, dev->current_client) == slotid )
-		{
-		  /*
-		    The slot is still the one we think it is.
-		  */
-		  dspd_dev_lock(dev);
-		  dspd_dev_client_settrigger(dev, dev->current_client, 0, 0);
-		  dspd_dev_unlock(dev);
-		}
-	      //This is a good place to call shutdown(client_sock, SHUT_RDWR).
-	      //Anyone who causes a SIGBUS needs kicked off, even at the cost of
-	      //increasing the chances of a glitch.
-	      alert_one_client(dev, dev->current_client, EFAULT);
-	      dspd_slist_entry_wrlock(dev->list, dev->current_client);
-	      dspd_slist_unref(dev->list, dev->current_client);
-	      dspd_slist_entry_rw_unlock(dev->list, dev->current_client);
-	    }
-	}
-      unlock_all_clients(dev);
-    }
-  
-  
-  dspd_scheduler_run(arg);
-
-  //Drop realtime priority
+   //Drop realtime priority
   struct sched_param param;
+  struct dspd_pcm_device *dev = arg;
+
+  dspd_sched_stop_workq(sch);
+
   memset(&param, 0, sizeof(param));
   param.sched_priority = 0;
-  pthread_setschedparam(dev->iothread.thread, SCHED_OTHER, &param);
-  
-
-  
+  if ( dev->iothread.init )
+    pthread_setschedparam(dev->iothread.thread, SCHED_OTHER, &param);
+ 
 
   AO_store(&dev->error, ENODEV);
   unlock_all_clients(dev);
   alert_all_clients(dev, ENODEV);
-
-  dspd_pcm_device_unregister_tls();
+  
 
   const char *devname = NULL;
   if ( dev->playback.handle )
     devname = dev->playback.params.name;
   else if ( dev->capture.handle )
     devname = dev->capture.params.name;
-  dspd_log(0, "Device thread %s (%s) exiting.  refcount=%d", name, devname, dspd_slist_refcnt(dspd_dctx.objects, dev->key));
+  dspd_log(0, "Device thread %s exiting.  refcount=%d", devname, dspd_slist_refcnt(dspd_dctx.objects, dev->key));
 
   dspd_daemon_unref(dev->key);
-
-  
-
-  return NULL;
 }
+  
+static void dev_started(void *user_data)
+{
+  struct dspd_pcm_device *dev = user_data;
+  struct dspd_scheduler *sched = dev->sched;
+  if ( ! (sched->flags & DSPD_SCHED_SLAVE) )
+    dspd_daemon_set_thread_nice(-1, DSPD_THREADATTR_RTIO);
+    
+}
+
+
 
 static void incr_intr_count(struct dspd_pcm_device *dev)
 {
@@ -2427,15 +2306,16 @@ static void schedule_fullduplex_wake(void *data)
   incr_intr_count(data);
 }
 
-static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, int32_t *reltime)
+static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, uint64_t *deadline, int32_t *reltime)
 {
   bool ret = 0;
-  uint64_t p_abstime, c_abstime; int32_t p_reltime, c_reltime;
+  uint64_t p_abstime, c_abstime, p_deadline, c_deadline; 
+  int32_t p_reltime, c_reltime;
   struct dspd_pcm_device *dev = data;
   dev->idle = false;
   dspd_sync_reg(dev);
-  ret |= schedule_playback_sleep(data, &p_abstime, &p_reltime);
-  ret |= schedule_capture_sleep(data, &c_abstime, &c_reltime);
+  ret |= schedule_playback_sleep(data, &p_abstime, &p_deadline, &p_reltime);
+  ret |= schedule_capture_sleep(data, &c_abstime, &c_deadline, &c_reltime);
   /*
     Relative timeouts aren't actually used right now, so only SPIN, WAIT, and STOP
     must be handled.
@@ -2443,6 +2323,11 @@ static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, int32_t *re
     Only handle SPIN if a stream should be running (streams are connected or they were recently connecting
     and it is waiting to shut off).
   */
+  if ( c_deadline > p_deadline )
+    *deadline = p_deadline;
+  else
+    *deadline = c_deadline;
+
   if ( (p_reltime == DSPD_SCHED_SPIN && (dev->playback.streams > 0 || dev->playback.stop_threshold > 0))
        || (c_reltime == DSPD_SCHED_SPIN && (dev->capture.streams > 0 || dev->capture.stop_threshold > 0)))
     {
@@ -2476,25 +2361,96 @@ static bool schedule_fullduplex_sleep(void *data, uint64_t *abstime, int32_t *re
   return ret;
 }
 
+static void schedule_sigbus_handler(void *data)
+{
+  struct dspd_pcm_device *dev = data;
+  if ( dev->current_client >= 0 )
+    {
+      uint32_t refcnt;
+      uint64_t slotid = dspd_slist_id(dev->list, dev->current_client); //get slot id while we have a reference
+      dspd_client_srv_unlock(dev->list, dev->current_client); //Still locked from earlier
+      dspd_slist_entry_wrlock(dev->list, dev->current_client); //This lock must be taken first
+      //Try to get a reference count
+      refcnt = dspd_slist_ref(dev->list, dev->current_client);
+      if ( refcnt <= 1 )
+	dspd_slist_unref(dev->list, dev->current_client);
+      dspd_slist_entry_rw_unlock(dev->list, dev->current_client);
+
+      if ( refcnt > 1 )
+	{
+	  /*
+	    At this point the device either owns the client or the trigger
+	    bits should not be set because the slot is either empty or belongs
+	    to something else.
+	  */
+	  if ( dspd_slist_id(dev->list, dev->current_client) == slotid )
+	    {
+	      /*
+		The slot is still the one we think it is.
+	      */
+	      dspd_dev_lock(dev);
+	      dspd_dev_client_settrigger(dev, dev->current_client, 0, 0);
+	      dspd_dev_unlock(dev);
+	    }
+	  //This is a good place to call shutdown(client_sock, SHUT_RDWR).
+	  //Anyone who causes a SIGBUS needs kicked off, even at the cost of
+	  //increasing the chances of a glitch.
+	  alert_one_client(dev, dev->current_client, EFAULT);
+	  dspd_slist_entry_wrlock(dev->list, dev->current_client);
+	  dspd_slist_unref(dev->list, dev->current_client);
+	  dspd_slist_entry_rw_unlock(dev->list, dev->current_client);
+	}
+    }
+  unlock_all_clients(dev);
+}
+
+static void dev_latency_changed(void *udata, dspd_time_t latency)
+{
+  struct dspd_pcm_device *dev = udata;
+  if ( latency == UINT64_MAX )
+    {
+      dev->pxferlen_hint = UINTPTR_MAX;
+      dev->cxferlen_hint = UINTPTR_MAX;
+    } else
+    {
+      if ( dev->playback.sample_time )
+	dev->pxferlen_hint = latency / dev->playback.sample_time;
+      if ( dev->capture.sample_time )
+	dev->cxferlen_hint = latency / dev->capture.sample_time;
+    }
+}
+
 static const struct dspd_scheduler_ops playback_ops = {
+  .started = dev_started,
   .wake = schedule_playback_wake,
   .sleep = schedule_playback_sleep,
   .timer_event = schedule_timer_event,
   .trigger_event = schedule_trigger_event,
+  .sigbus = schedule_sigbus_handler,
+  .destructor = dev_thread_destructor,
+  .setlatency = dev_latency_changed,
 };
 
 static const struct dspd_scheduler_ops capture_ops = {
+  .started = dev_started,
   .wake = schedule_capture_wake,
   .sleep = schedule_capture_sleep,
   .timer_event = schedule_timer_event,
   .trigger_event = schedule_trigger_event,
+  .sigbus = schedule_sigbus_handler,
+  .destructor = dev_thread_destructor,
+  .setlatency = dev_latency_changed,
 };
 
 static const struct dspd_scheduler_ops fullduplex_ops = {
+  .started = dev_started,
   .wake = schedule_fullduplex_wake,
   .sleep = schedule_fullduplex_sleep,
   .timer_event = schedule_timer_event,
   .trigger_event = schedule_trigger_event,
+  .sigbus = schedule_sigbus_handler,
+  .destructor = dev_thread_destructor,
+  .setlatency = dev_latency_changed,
 };
 
 static const struct dspd_pcmdev_ops device_ops = {
@@ -2595,7 +2551,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
       dev->wakeup_count += 2;
       (void)mq_receive(dev->mq[0], (char*)&event, sizeof(event), &prio);
       if ( dev->wakeup_count > 2 )
-	dspd_scheduler_set_fd_event(dev->sched, fd, 0);
+	dspd_sched_set_fd_event(dev->sched, fd, 0);
       goto out;
     }
 
@@ -2636,7 +2592,7 @@ static void dspd_dev_mq_event(void *udata, int32_t fd, void *fdata, uint32_t eve
       dev->playback.status = NULL;
       ret = stream_recover(&dev->playback);
       if ( ret < 0 )
-	dspd_scheduler_abort(dev->sched);
+	dspd_sched_abort(dev->sched);
     }
  
   /*
@@ -2660,7 +2616,7 @@ int32_t dspd_pcm_device_new(void **dev,
   void *h;
   dspd_time_t t;
   bool fullduplex;
- 
+  char name[32UL] = { 0 };
   devptr = calloc(1, sizeof(struct dspd_pcm_device));
   if ( ! devptr )
     return -errno;
@@ -2671,6 +2627,8 @@ int32_t dspd_pcm_device_new(void **dev,
   devptr->playback.dev = devptr;
   devptr->capture.dev = devptr;
   devptr->must_unlock = true;
+  devptr->pxferlen_hint = UINTPTR_MAX;
+  devptr->cxferlen_hint = UINTPTR_MAX;
   if ( list )
     {
       dspd_slist_wrlock(list);
@@ -2750,7 +2708,6 @@ int32_t dspd_pcm_device_new(void **dev,
       ret = sptr->ops->get_params(h, &sptr->params);
       if ( ret != 0 )
 	goto out;
-
       sptr->handle = h;
       sptr->volume = 1.0;
       sptr->sample_time = 1000000000 / sptr->params.rate;
@@ -2806,25 +2763,64 @@ int32_t dspd_pcm_device_new(void **dev,
       sptr->intrp.maxdiff = sptr->sample_time / 10;
       dspd_dev_set_stream_volume(devptr, DSPD_PCM_STREAM_CAPTURE, 1.0);
     }
+
+  struct dspd_sched_params schedparams;
+  memset(&schedparams, 0, sizeof(schedparams));
+
+  //Have single io thread
+  if ( dspd_dctx.rtio_sched )
+    {
+      schedparams.flags |= DSPD_SCHED_SLAVE;
+      //Enable async io so devices don't block each other and cause glitches.
+      schedparams.flags |= DSPD_SCHED_WORKQ;
+    }
   
+  if ( ! (schedparams.flags & DSPD_SCHED_SLAVE) )
+    {
+      schedparams.flags |= DSPD_SCHED_SIGBUS;
+      schedparams.flags |= DSPD_SCHED_SIGXCPU;
+    }
+
+  schedparams.nmsgs = 2;
+  schedparams.nfds = 1;
+  
+  
+  snprintf(name, sizeof(name), "dspd-io-%d", devptr->key);
+  schedparams.thread_name = name;
+
+
   s = params->stream & (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE);
   if ( s == DSPD_PCM_SBIT_PLAYBACK )
     {
-      devptr->sched = dspd_scheduler_new(&playback_ops, devptr, devptr->playback.nfds+1);
+      schedparams.nfds += devptr->playback.nfds;
+      schedparams.nmsgs++;
+      devptr->sched = dspd_sched_new(&playback_ops, devptr, &schedparams);
     } else if ( s == DSPD_PCM_SBIT_CAPTURE )
     {
-      devptr->sched = dspd_scheduler_new(&capture_ops, devptr, devptr->capture.nfds+1);
+      schedparams.nmsgs++;
+      schedparams.nfds += devptr->capture.nfds;
+      devptr->sched = dspd_sched_new(&capture_ops, devptr, &schedparams);
     } else
     {
-      devptr->sched = dspd_scheduler_new(&fullduplex_ops, devptr, devptr->playback.nfds+devptr->capture.nfds+1);
+      schedparams.nmsgs += 2;
+      schedparams.nfds += devptr->playback.nfds+devptr->capture.nfds;
+      devptr->sched = dspd_sched_new(&fullduplex_ops, devptr, &schedparams);
     }
-    
+  schedparams.nmsgs += schedparams.nfds;
+  schedparams.nmsgs *= 2;
+
   if ( ! devptr->sched )
     goto out;
   
+  
+  if ( devptr->playback.ops && devptr->playback.ops->set_scheduler )
+    devptr->playback.ops->set_scheduler(devptr->playback.handle, devptr->sched);
+  if ( devptr->capture.ops && devptr->capture.ops->set_scheduler )
+    devptr->capture.ops->set_scheduler(devptr->capture.handle, devptr->sched);
+  
   if ( devptr->mq[0] >= 0 )
     {
-      ret = dspd_scheduler_add_fd(devptr->sched, devptr->mq[0], POLLIN, devptr, dspd_dev_mq_event);
+      ret = dspd_sched_add_fd(devptr->sched, devptr->mq[0], POLLIN, devptr, dspd_dev_mq_event);
       if ( ret != 0 )
 	{
 	  ret *= -1;
@@ -2840,45 +2836,58 @@ int32_t dspd_pcm_device_new(void **dev,
     }
 #endif
 
-  ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED | DSPD_THREADATTR_RTIO);
-  if ( ret != 0 )
-    {
-      ret *= -1;
-      goto out;
-    }
+  
+
+ 
   
   devptr->arg = params->arg;
   devptr->current_client = -1;
-  devptr->sched_policy = dspd_dctx.rtio_policy;
-  devptr->sched_param.sched_priority = dspd_dctx.rtio_priority;
-  ret = dspd_thread_create(&devptr->iothread,
-			   &attr,
-			   dspd_dev_thread,
-			   devptr->sched);
-  if ( ret != 0 )
+
+  if ( ! (devptr->sched->flags & DSPD_SCHED_SLAVE) )
     {
-      if ( ret == EPERM )
+      
+      ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED | DSPD_THREADATTR_RTIO);
+      if ( ret != 0 )
 	{
-	  dspd_log(0, "Retrying RTIO thread creation without realtime priority");
-	  dspd_threadattr_destroy(&attr);
-	  ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED);
-	  if ( ret == 0 )
-	    ret = dspd_thread_create(&devptr->iothread,
-				     &attr,
-				     dspd_dev_thread,
-				     devptr->sched);
-	}
-      if ( ret )
-	{
-	  dspd_log(0, "Failed to create RTIO thread for device %ld", (long)index);
 	  ret *= -1;
 	  goto out;
 	}
+
+      //devptr->sched_policy = dspd_dctx.rtio_policy;
+      //devptr->sched_param.sched_priority = dspd_dctx.rtio_priority;
+      ret = dspd_thread_create(&devptr->iothread,
+			       &attr,
+			       dspd_sched_run,
+			       devptr->sched);
+      if ( ret != 0 )
+	{
+	  if ( ret == EPERM )
+	    {
+	      dspd_log(0, "Retrying RTIO thread creation without realtime priority");
+	      dspd_threadattr_destroy(&attr);
+	      ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED);
+	      if ( ret == 0 )
+		ret = dspd_thread_create(&devptr->iothread,
+					 &attr,
+					 dspd_sched_run,
+					 devptr->sched);
+	    }
+	  if ( ret )
+	    {
+	      dspd_log(0, "Failed to create RTIO thread for device %ld", (long)index);
+	      ret *= -1;
+	      goto out;
+	    }
+	} else
+	{
+	  dspd_log(0, "Created RTIO thread for device %ld", (long)index);
+	}
     } else
     {
-      dspd_log(0, "Created RTIO thread for device %ld", (long)index);
+      ret = dspd_sched_send_slave(dspd_dctx.rtio_sched, devptr->sched);
+      if ( ret < 0 )
+	goto out;
     }
-  
   if ( list )
     {
       dspd_slist_entry_set_pointers(list, 
@@ -2895,6 +2904,8 @@ int32_t dspd_pcm_device_new(void **dev,
     }
   dspd_threadattr_destroy(&attr);
   *dev = devptr;
+
+
   return index;
 
  out:
@@ -2917,7 +2928,7 @@ void dspd_pcm_device_delete(struct dspd_pcm_device *dev)
 void dspd_pcm_device_delete_ex(struct dspd_pcm_device *dev, bool closedev)
 {
   DSPD_ASSERT(dev);
-  dspd_scheduler_abort(dev->sched);
+  dspd_sched_abort(dev->sched);
   dspd_sched_trigger(dev->sched);
   dspd_mutex_destroy(&dev->reg_lock);
 #ifndef DSPD_HAVE_ATOMIC_INT64
@@ -2941,7 +2952,7 @@ void dspd_pcm_device_delete_ex(struct dspd_pcm_device *dev, bool closedev)
       dev->capture.ops->destructor(dev->capture.handle);
     }
   if ( dev->sched )
-    dspd_scheduler_delete(dev->sched);
+    dspd_sched_delete(dev->sched);
   free(dev);
   return ;
 }
@@ -3102,13 +3113,11 @@ static int32_t server_connect(struct dspd_rctx *context,
 			&br);
   if ( ret == 0 && br == sizeof(cparams) && cparams.channels != 0 )
     {
-      //fprintf(stderr, "CHECK\n");
       latency = cparams.latency;
       if ( stream_compatible(&cparams, &dev->playback.params) )
 	sbits |= DSPD_PCM_SBIT_PLAYBACK;
       else
 	return dspd_req_reply_err(context, 0, EINVAL);
-      //   fprintf(stderr, "OK\n");
     }
   memset(&cparams, 0, sizeof(cparams));
   stream = DSPD_PCM_SBIT_CAPTURE;

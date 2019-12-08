@@ -858,7 +858,6 @@ static int32_t ctrlm_mixer_elem_getrange(struct dspd_rctx *rctx,
 	      *r = ctl->range;
 	    }
 	}
-      r = outbuf;
     }
   if ( ret == 0 && br > 0 )
     ret = dspd_req_reply_buf(rctx, 0, outbuf, br);

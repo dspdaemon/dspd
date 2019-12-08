@@ -134,7 +134,7 @@ int alsahw_register_mixer_callback(struct alsahw_notifier *n,
 	  if ( curr->callback == cb && curr->arg == arg )
 	    {
 	      ret = -EEXIST;
-	      break;
+	      goto out;
 	    } 
 	  next = &curr->next;
 	}
@@ -149,6 +149,7 @@ int alsahw_register_mixer_callback(struct alsahw_notifier *n,
 	  ret = -ENOMEM;
 	}
     }
+ out:
   dspd_mutex_unlock(&n->notify_lock);
   return ret;
 }
