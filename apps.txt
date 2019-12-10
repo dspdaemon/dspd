@@ -24,7 +24,7 @@ fluidsynth   	     (ALSA,OSS)
 d2x-rebirth	     (ALSA)
 d1x-rebirth	     (ALSA)
 ossxmix              (OSS)
-dhwem3		     (ALSA)
+dhewm3		     (ALSA)
 
 The following applications mostly work:
 

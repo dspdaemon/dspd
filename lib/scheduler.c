@@ -1484,7 +1484,7 @@ static void update_dl_latency(struct dspd_scheduler *sch, bool idle)
       attr.sched_period = l * 10UL; //10ms period
       attr.sched_runtime = l;  //1ms run time
       attr.sched_deadline = l * 2ULL; //2ms deadline
-      l2 = attr.sched_period;
+      l2 = UINT64_MAX;
     }
   if ( dspd_sched_setattr(sch->tid, &attr, 0) == 0 )
     sch->dl_latency = l2;
