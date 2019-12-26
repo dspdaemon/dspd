@@ -2933,7 +2933,6 @@ static int client_fd_event(void *data,
   struct ss_cctx *cli = data;
   if ( revents & (POLLERR|POLLNVAL|POLLHUP|POLLRDHUP) )
       return -1;
-  
   if ( revents & POLLIN )
     {
       ret = dspd_req_recv(cli->req_ctx);

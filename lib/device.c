@@ -137,7 +137,7 @@ static float dspd_dev_get_stream_volume(struct dspd_pcm_device *dev,
 static void incr_intr_count(struct dspd_pcm_device *dev);
 static void dev_thread_destructor(struct dspd_scheduler *sch, void *arg);
 static void dev_started(void *user_data);
-
+static void unlock_all_clients(struct dspd_pcm_device *dev);
 
 int32_t dspd_dev_get_slot(void *dev)
 {
@@ -946,6 +946,7 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, uint64_t *dea
   uint64_t rt;
   *deadline = UINT64_MAX;
   dev->idle = false;
+
   if ( dev->playback.io_pending )
     {
       if ( check_io(dev, &dev->playback) )
@@ -1052,7 +1053,6 @@ static bool schedule_playback_sleep(void *data, uint64_t *abstime, uint64_t *dea
       dev->playback.next_wakeup = *abstime;
       *reltime = DSPD_SCHED_WAIT;
       dev->playback.check_status = 0;
-
     } else if ( dev->playback.running )
     {
       *reltime = DSPD_SCHED_SPIN;
@@ -2011,7 +2011,14 @@ static void schedule_playback_wake(void *userdata)
 		  dev->must_unlock = n >= total;
 #endif
 		  if ( ! device_playback_cycle(dev, len) )
-		    break;
+		    {
+#ifdef ENABLE_LOCK_OPTIMIZATION
+		      //might happen for an error state
+		      if ( dev->lock_count > 0 )
+			unlock_all_clients(dev);
+#endif
+		      break;
+		    }
 		  if ( ! dev->playback.status )
 		    break;
 		  written = n;
@@ -2030,22 +2037,29 @@ static void schedule_playback_wake(void *userdata)
 		      break;
 		    }
 		}
-		
-		
 	    } else
 	    {
 	      dev->playback.cycle.remaining = dev->playback.status->space;
 	      n = count - 1;
+	      total = dev->playback.status->space;
 	      for ( i = 0; i < count; i++ )
 		{
 		  written += len;
 #ifdef ENABLE_LOCK_OPTIMIZATION
-		  dev->must_unlock = i == n;
+		  dev->must_unlock = i == n || written >= total;
 #else
 		  (void)n;
 #endif
 		  if ( ! device_playback_cycle(dev, len) )
-		    break;
+		    {
+#ifdef ENABLE_LOCK_OPTIMIZATION
+		      //might happen for an error state
+		      if ( dev->lock_count > 0 )
+			unlock_all_clients(dev);
+#endif
+		      break;
+		    }
+		  
 		  if ( dev->playback.status )
 		    {
 		      len *= 2;
@@ -2059,6 +2073,10 @@ static void schedule_playback_wake(void *userdata)
 		    }
 		}
 	    }
+#ifdef ENABLE_LOCK_OPTIMIZATION	  
+	  if ( dev->must_unlock == false && dev->lock_count > 0 ) //unlikely
+	    unlock_all_clients(dev);
+#endif
 	  if ( dev->playback.stop_threshold > 0 && 
 	       dev->playback.stop_count >= dev->playback.stop_threshold &&
 	       dev->playback.started != 0 )

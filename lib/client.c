@@ -2777,7 +2777,6 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
     streams &= ~DSPD_PCM_SBIT_CAPTURE;
 
 
-
   old = cli->trigger;
 
   

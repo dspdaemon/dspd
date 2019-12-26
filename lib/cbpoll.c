@@ -516,7 +516,7 @@ static void *async_work_thread(void *p)
       set_thread_name("dspdcbpoll-wq");
     }
 
-    
+  
   while ( AO_load(&ctx->abort) == 0 )
     {
       //Wait for incoming data
