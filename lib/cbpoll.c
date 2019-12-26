@@ -465,6 +465,10 @@ static void *cbpoll_thread(void *p)
 	}
 
     }
+  dspd_mutex_lock(&ctx->wq.lock);
+  dspd_cond_signal(&ctx->wq.cond);
+  dspd_mutex_unlock(&ctx->wq.lock);
+
   dspd_thread_join(&ctx->wq.thread, NULL);
 
 
@@ -1061,19 +1065,33 @@ int32_t cbpoll_run(struct cbpoll_ctx *ctx)
   return ret * -1;
 }
 
+void cbpoll_abort(struct cbpoll_ctx *ctx, bool wait)
+{
+  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
+  if ( ctx->thread.init )
+    {
+      if ( AO_load(&ctx->abort) == 0 )
+	{
+	  AO_store(&ctx->abort, 1);
+	  evt.fd = -1;
+	  evt.index = -1;
+	  evt.stream = -1;
+	  evt.msg = 0;
+	  evt.arg = 0;
+	  cbpoll_send_event(ctx, &evt);
+	}
+      if ( wait )
+	dspd_thread_join(&ctx->thread, NULL);
+    }
+}
 
 void cbpoll_destroy(struct cbpoll_ctx *ctx)
 {
-  struct cbpoll_msg evt = { .len = sizeof(struct cbpoll_msg) };
-  AO_store(&ctx->abort, 1);
-  evt.fd = -1;
-  evt.index = -1;
-  evt.stream = -1;
-  evt.msg = 0;
-  evt.arg = 0;
-  cbpoll_send_event(ctx, &evt);
-  dspd_thread_join(&ctx->thread, NULL);
-  destroy(ctx);
+  if ( ctx )
+    {
+      cbpoll_abort(ctx, true);
+      destroy(ctx);
+    }
 }
 
 void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,

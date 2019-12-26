@@ -7,6 +7,10 @@
 #include "../lib/daemon.h"
 
 
+static void sighup_handler(int signal, siginfo_t *info, void *context)
+{
+  dspd_daemon_abort(&dspd_dctx);
+}
 
 
 
@@ -16,7 +20,9 @@ int main(int argc, char **argv)
   size_t i;
   int ret = 0;
   char *buf, *p;
-
+  struct sigaction act = {
+    .sa_sigaction = sighup_handler,
+  };
   //Find the absolute path so module path lookups relative to the executable location
   //will work.
   if ( argv[0][0] != '/' )
@@ -35,13 +41,14 @@ int main(int argc, char **argv)
 	  free(buf);
 	}
     }
-
+  
   signal(SIGPIPE, SIG_IGN);
-  if ( (ret = dspd_daemon_init(argc, argv)) < 0 )
+  if ( (ret = dspd_daemon_init(&dspd_dctx, argc, argv)) < 0 )
     {
       fprintf(stderr, "Error %d while initializing daemon\n", ret);
       return 1;
     }
+  sigaction(SIGHUP, &act, NULL);
   dspd_time_init();
   dspd_enable_assert_log();
 

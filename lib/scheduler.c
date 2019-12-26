@@ -954,7 +954,7 @@ static bool dspd_sched_run_slave_once(struct dspd_scheduler *sch)
 	sch->ops->started(sch->udata);
       goto sleep_now;
     }
-  if ( ! sch->abort )
+  if ( ! AO_load(&sch->abort) )
     {
       sch->activate_flags = 0;
       process_fds(sch, sch->injected_events);
@@ -988,12 +988,12 @@ static bool dspd_sched_run_slave_once(struct dspd_scheduler *sch)
     }
   if ( ret < 0 )
     {
-      sch->abort = 1;
+      AO_store(&sch->abort, 1);
       if ( sch->ops->abort )
 	sch->ops->abort(sch->udata, ECANCELED);
       sch->dead = true;
     }
-  return sch->abort == 0;
+  return AO_load(&sch->abort) == 0;
 }
 
 static void sigbus_handler(int sig, siginfo_t *signinfo, void *context)
@@ -1041,7 +1041,7 @@ void *dspd_sched_run(void *arg)
   if ( err )
     {
       errno = -err;
-      sch->abort = 1;
+      AO_store(&sch->abort, 1);
     }
   if ( sch->flags & DSPD_SCHED_SCHEDDL )
     update_dl_latency(sch, true);
@@ -1085,7 +1085,7 @@ void *dspd_sched_run(void *arg)
       sch->ops->started(sch->udata);
     }
 
-  while ( sch->abort == 0 )
+  while ( AO_load(&sch->abort) == 0 )
     {
       if ( sch->ops->sleep(sch->udata, &abstime, &deadline, &reltime) )
 	{
@@ -1120,7 +1120,7 @@ void *dspd_sched_run(void *arg)
       assert(sch->ops->wake);
       sch->ops->wake(sch->udata);
     }
-  if ( sch->abort )
+  if ( AO_load(&sch->abort) )
     ret = ECANCELED;
   else
     ret = errno;
@@ -1139,7 +1139,7 @@ void *dspd_sched_run(void *arg)
 void dspd_sched_abort(struct dspd_scheduler *sch)
 {
   if ( sch )
-    sch->abort = 1;
+    AO_store(&sch->abort, 1);
 }
 
 int32_t dspd_sched_add_slave(struct dspd_scheduler *master, struct dspd_scheduler *slave)

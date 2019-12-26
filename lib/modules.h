@@ -49,7 +49,7 @@ struct dspd_module_list {
   struct dspd_daemon_ctx *daemon_ctx;
   void             *lastinit;
 };
-void dspd_module_list_destroy(struct dspd_module_list *list);
+void dspd_module_list_delete(struct dspd_module_list *list);
 int dspd_load_modules(struct dspd_module_list **l,
 		      void *context,
 		      const char **files,

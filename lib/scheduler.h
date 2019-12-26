@@ -66,7 +66,7 @@ struct dspd_scheduler_ops {
 };
 
 struct dspd_scheduler {
-  int                   abort;
+  volatile AO_t         abort;
   int                   epfd;
   int                   eventfd;
   volatile AO_TS_t      eventfd_triggered;

@@ -267,12 +267,12 @@ int dspd_load_modules(struct dspd_module_list **l,
       free(m);
     }
   free(tmp);
-  dspd_module_list_destroy(list);
+  dspd_module_list_delete(list);
   return ret;
 }
 
 
-void dspd_module_list_destroy(struct dspd_module_list *list)
+void dspd_module_list_delete(struct dspd_module_list *list)
 {
   struct dspd_ll *curr, *prev = NULL;
   struct dspd_module *m;

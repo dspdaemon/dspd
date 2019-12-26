@@ -556,7 +556,7 @@ static int32_t dspd_daemon_obj_ctl(struct dspd_rctx *rctx,
 
 static int dspd_hotplug_init(struct dspd_daemon_ctx *ctx)
 {
-  int ret = pthread_mutex_init(&ctx->hotplug.lock, NULL);
+  int ret = dspd_mutex_init(&ctx->hotplug.lock, NULL);
   struct dspd_dict *dict;
   if ( ret )
     {
@@ -573,7 +573,6 @@ static int dspd_hotplug_init(struct dspd_daemon_ctx *ctx)
       ctx->hotplug.capture_search = dspd_dict_find_section(dspd_dctx.config, "DEFAULT_CAPTURE");
       if ( ctx->hotplug.capture_search == NULL )
 	ctx->hotplug.capture_search = dict;
-
     }
   return ret;
 }
@@ -886,10 +885,12 @@ static int32_t start_io_thread(struct dspd_daemon_ctx *ctx)
 
 }
 
-int dspd_daemon_init(int argc, char **argv)
+
+int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
 {
   int ret = -ENOMEM;
-  char *tmp = malloc(PATH_MAX);
+  const size_t tmplen = PATH_MAX+1UL;
+  char *tmp = malloc(tmplen);
   size_t len;
   ssize_t l;
   char *p, *value;
@@ -904,56 +905,57 @@ int dspd_daemon_init(int argc, char **argv)
     pwsize = 16384;
   if ( ! tmp )
     return -ENOMEM;
- 
-  dspd_dctx.argc = argc;
-  dspd_dctx.argv = argv;
+  memset(ctx, 0, sizeof(*ctx));
 
-  dspd_dctx.rtio_priority = -1;
-  dspd_dctx.rtsvc_priority = -1;
-  dspd_dctx.glitch_correction = -1;
-  dspd_dctx.uid = getuid();
-  dspd_dctx.gid = getgid();
-  dspd_dctx.ipc_mode = 0660;
+  ctx->argc = argc;
+  ctx->argv = argv;
+
+  ctx->rtio_priority = -1;
+  ctx->rtsvc_priority = -1;
+  ctx->glitch_correction = -1;
+  ctx->uid = getuid();
+  ctx->gid = getgid();
+  ctx->ipc_mode = 0660;
   
   if ( dspd_daemon_have_sched(SCHED_ISO) )
     {
-      dspd_dctx.rtio_policy = SCHED_ISO;
-      dspd_dctx.rtsvc_policy = SCHED_ISO;
+      ctx->rtio_policy = SCHED_ISO;
+      ctx->rtsvc_policy = SCHED_ISO;
     } else
     {
-      dspd_dctx.rtio_policy = SCHED_FIFO;
-      dspd_dctx.rtsvc_policy = SCHED_RR;
+      ctx->rtio_policy = SCHED_FIFO;
+      ctx->rtsvc_policy = SCHED_RR;
     }
 
-  dspd_dctx.main_thread_loop_context = calloc(1, sizeof(*dspd_dctx.main_thread_loop_context));
-  if ( ! dspd_dctx.main_thread_loop_context )
+  ctx->main_thread_loop_context = calloc(1, sizeof(*ctx->main_thread_loop_context));
+  if ( ! ctx->main_thread_loop_context )
     {
       ret = -errno;
       goto out;
     }
 
-  if ( (ret = cbpoll_init(dspd_dctx.main_thread_loop_context, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_AIO_FIFO|CBPOLL_FLAG_CBTIMER, DSPD_MAX_OBJECTS * 4UL)) < 0 )
+  if ( (ret = cbpoll_init(ctx->main_thread_loop_context, CBPOLL_FLAG_TIMER|CBPOLL_FLAG_AIO_FIFO|CBPOLL_FLAG_CBTIMER, DSPD_MAX_OBJECTS * 4UL)) < 0 )
     goto out;
-  if ( (ret = cbpoll_set_name(dspd_dctx.main_thread_loop_context, "")) < 0 )
-    goto out;
-
-  if ( (ret = dspd_sglist_new(&dspd_dctx.syncgroups)) )
+  if ( (ret = cbpoll_set_name(ctx->main_thread_loop_context, "")) < 0 )
     goto out;
 
+  if ( (ret = dspd_sglist_new(&ctx->syncgroups)) )
+    goto out;
+  
 
-  dspd_dctx.args_list = dspd_parse_args(argc, argv);
-  if ( ! dspd_dctx.args_list )
+  ctx->args_list = dspd_parse_args(argc, argv);
+  if ( ! ctx->args_list )
     {
       ret = -ENOMEM;
       goto out;
     }
   val = NULL;
-  dspd_dict_find_value(dspd_dctx.args_list, "-D", (char**)&val);
+  dspd_dict_find_value(ctx->args_list, "-D", (char**)&val);
   if ( val )
-    dspd_dctx.debug = dspd_strtoidef(val, dspd_dctx.debug);
+    ctx->debug = dspd_strtoidef(val, ctx->debug);
 
 
-  l = readlink("/proc/self/exe", tmp, PATH_MAX-1);
+  l = readlink("/proc/self/exe", tmp, tmplen);
   if ( l < 0 )
     {
       ret = -errno;
@@ -966,45 +968,47 @@ int dspd_daemon_init(int argc, char **argv)
   len = strlen(p);
   memmove(tmp, p, len);
   tmp[len] = 0;
-  len++;
-  dspd_dctx.path = realloc(tmp, len);
-  if ( ! dspd_dctx.path )
-    dspd_dctx.path = tmp;
-  tmp = malloc(PATH_MAX);
-  if ( ! tmp )
+  ctx->path = strdup(tmp);
+  if ( ! ctx->path )
     {
-      ret = -errno;
+      ret = -ENOMEM;
       goto out;
     }
 
-  if ( dspd_dict_test_value(dspd_dctx.args_list, "-h", NULL) ||
-       dspd_dict_test_value(dspd_dctx.args_list, "-?", NULL) )
+  if ( dspd_dict_test_value(ctx->args_list, "-h", NULL) ||
+       dspd_dict_test_value(ctx->args_list, "-?", NULL) )
     {
-      free(tmp);
       print_usage();
-      return -1;
+      ret = -EUCLEAN;
+      goto out;
     }
-  if ( dspd_dict_test_value(dspd_dctx.args_list, "-b", NULL) )
+  if ( dspd_dict_test_value(ctx->args_list, "-b", NULL) )
     {
       if ( daemon(0, 0) < 0 )
-	return -1;
+	{
+	  ret = -errno;
+	  goto out;
+	}
     }
 
-  dspd_dctx.config = dspd_read_config("dspd", true);
-  if ( dspd_dctx.config == NULL && errno == ENOENT )
-    dspd_dctx.config = dspd_dict_new("dspd");
-  if ( ! dspd_dctx.config )
-    goto out;
+  ctx->config = dspd_read_config("dspd", true);
+  if ( ctx->config == NULL && errno == ENOENT )
+    ctx->config = dspd_dict_new("dspd");
+  if ( ! ctx->config )
+    {
+      ret = -ENOMEM;
+      goto out;
+    }
   
 
-  dcfg = dspd_dict_find_section(dspd_dctx.config, "DAEMON");
+  dcfg = dspd_dict_find_section(ctx->config, "DAEMON");
   if ( ! dcfg )
     goto noconfig;
 
   if ( dspd_dict_find_value(dcfg, "glitch_correction", &value) )
     {
       if ( value )
-	dspd_dctx.glitch_correction = get_gp(value);
+	ctx->glitch_correction = get_gp(value);
     }
 
   if ( dspd_dict_find_value(dcfg, "rtprio", &value) )
@@ -1015,10 +1019,10 @@ int dspd_daemon_init(int argc, char **argv)
 	  set_priority(value, &n);
 	  if ( n > 0 )
 	    {
-	      dspd_dctx.rtio_priority = n;
-	      dspd_dctx.rtsvc_priority = n;
-	      if ( dspd_dctx.rtsvc_priority > 1 )
-		dspd_dctx.rtsvc_priority--;
+	      ctx->rtio_priority = n;
+	      ctx->rtsvc_priority = n;
+	      if ( ctx->rtsvc_priority > 1 )
+		ctx->rtsvc_priority--;
 	    }
 	}
     }
@@ -1032,8 +1036,8 @@ int dspd_daemon_init(int argc, char **argv)
 	  set_policy(value, &n);
 	  if ( n > 0 )
 	    {
-	      dspd_dctx.rtio_policy = n;
-	      dspd_dctx.rtsvc_policy = n;
+	      ctx->rtio_policy = n;
+	      ctx->rtsvc_policy = n;
 	    }
 	}
     }
@@ -1045,7 +1049,7 @@ int dspd_daemon_init(int argc, char **argv)
 	  set_priority(value, &n);
 	  if ( n != INT32_MIN && n < 0 )
 	    {
-	      dspd_dctx.priority = ret;
+	      ctx->priority = ret;
 	      rl.rlim_cur = 20 + n;
 	      rl.rlim_max = rl.rlim_cur;
 	      setrlimit(RLIMIT_NICE, &rl);
@@ -1057,24 +1061,24 @@ int dspd_daemon_init(int argc, char **argv)
   if ( dspd_dict_find_value(dcfg, "rtio_policy", &value) )
     {
       if ( value )
-	set_policy(value, &dspd_dctx.rtio_policy);
+	set_policy(value, &ctx->rtio_policy);
     }
 
   if ( dspd_dict_find_value(dcfg, "rtio_priority", &value) )
     {
       if ( value )
-	set_priority(value, &dspd_dctx.rtio_priority);
+	set_priority(value, &ctx->rtio_priority);
     }
 
   if ( dspd_dict_find_value(dcfg, "rtsvc_policy", &value) )
     {
       if ( value )
-	set_policy(value, &dspd_dctx.rtsvc_policy);
+	set_policy(value, &ctx->rtsvc_policy);
     }
   if ( dspd_dict_find_value(dcfg, "rtsvc_priority", &value) )
     {
       if ( value )
-	set_priority(value, &dspd_dctx.rtsvc_priority);
+	set_priority(value, &ctx->rtsvc_priority);
     }
   if ( dspd_dict_find_value(dcfg, "multithreaded_devices", &value) )
     {
@@ -1085,30 +1089,30 @@ int dspd_daemon_init(int argc, char **argv)
 
   //The SCHED_DEADLINE and SCHED_ISO policies are safer than SCHED_RR and SCHED_FIFO.
   //If a safe policy is specified and it isn't available then try another safe policy.
-  if ( ! dspd_daemon_have_sched(dspd_dctx.rtio_policy) )
+  if ( ! dspd_daemon_have_sched(ctx->rtio_policy) )
     {
-      if ( dspd_dctx.rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_DEADLINE) )
+      if ( ctx->rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_DEADLINE) )
 	{
-	  dspd_dctx.rtio_priority = 0;
-	  dspd_dctx.rtio_policy = SCHED_DEADLINE;
-	} else if ( dspd_dctx.rtio_policy == SCHED_DEADLINE && dspd_daemon_have_sched(SCHED_ISO) )
+	  ctx->rtio_priority = 0;
+	  ctx->rtio_policy = SCHED_DEADLINE;
+	} else if ( ctx->rtio_policy == SCHED_DEADLINE && dspd_daemon_have_sched(SCHED_ISO) )
 	{
-	  dspd_dctx.rtio_priority = 1;
-	  dspd_dctx.rtio_policy = SCHED_ISO;
+	  ctx->rtio_priority = 1;
+	  ctx->rtio_policy = SCHED_ISO;
 	}
     }
 
-  if ( ! dspd_daemon_have_sched(dspd_dctx.rtsvc_policy) )
+  if ( ! dspd_daemon_have_sched(ctx->rtsvc_policy) )
     {
-      if ( dspd_dctx.rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_RR) )
+      if ( ctx->rtio_policy == SCHED_ISO && dspd_daemon_have_sched(SCHED_RR) )
 	{
-	  dspd_dctx.rtio_policy = SCHED_RR;
-	  dspd_dctx.rtio_priority = 1;
+	  ctx->rtio_policy = SCHED_RR;
+	  ctx->rtio_priority = 1;
 	}
 
     }
 
-  rl.rlim_cur = MAX(dspd_dctx.rtsvc_priority, dspd_dctx.rtio_priority);
+  rl.rlim_cur = MAX(ctx->rtsvc_priority, ctx->rtio_priority);
   if ( rl.rlim_cur )
     {
       rl.rlim_max = rl.rlim_cur;
@@ -1136,15 +1140,14 @@ int dspd_daemon_init(int argc, char **argv)
 	    } else
 	    {
 	      ret = -errno;
-	      perror("getpwnam_r");
 	      goto out;
 	    }
 	} else
 	{
-	  dspd_dctx.uid = pres->pw_uid;
-	  dspd_dctx.gid = pres->pw_gid;
-	  dspd_dctx.user = strdup(value);
-	  if ( ! dspd_dctx.user )
+	  ctx->uid = pres->pw_uid;
+	  ctx->gid = pres->pw_gid;
+	  ctx->user = strdup(value);
+	  if ( ! ctx->user )
 	    {
 	      ret = -errno;
 	      goto out;
@@ -1170,29 +1173,26 @@ int dspd_daemon_init(int argc, char **argv)
 	    }
 	} else
 	{
-	  dspd_dctx.gid = gres->gr_gid;
+	  ctx->gid = gres->gr_gid;
 	}
     }
-  if ( dspd_dctx.uid == 0 && dspd_dctx.gid == 0 )
-    dspd_dctx.ipc_mode = 0666;
+  if ( ctx->uid == 0 && ctx->gid == 0 )
+    ctx->ipc_mode = 0666;
 
   if ( dspd_dict_find_value(dcfg, "ipc_mode", &value) )
     {
       int32_t m;
       ret = dspd_strtoi32(value, &m, 8);
       if ( ret < 0 )
-	{
-	  fprintf(stderr, "Invalid mode - %s\n", value);
-	  goto out;
-	}
-      dspd_dctx.ipc_mode = m;
+	goto out;
+      ctx->ipc_mode = m;
     }
   
-  if ( (dspd_dctx.rtsvc_policy == SCHED_RR ||
-	dspd_dctx.rtsvc_policy == SCHED_FIFO ||
-	dspd_dctx.rtio_policy == SCHED_RR ||
-	dspd_dctx.rtio_policy == SCHED_FIFO) &&
-       dspd_dctx.uid > 0 )
+  if ( (ctx->rtsvc_policy == SCHED_RR ||
+	ctx->rtsvc_policy == SCHED_FIFO ||
+	ctx->rtio_policy == SCHED_RR ||
+	ctx->rtio_policy == SCHED_FIFO) &&
+       ctx->uid > 0 )
     {
       ret = set_caps();
       if ( ret < 0 )
@@ -1201,14 +1201,14 @@ int dspd_daemon_init(int argc, char **argv)
 
  noconfig:
   if ( dcfg == NULL )
-    dspd_dctx.ipc_mode = 0666;
-  if ( dspd_dctx.uid == 0 )
+    ctx->ipc_mode = 0666;
+  if ( ctx->uid == 0 )
     dspd_log(0, "WARNING: Running as root.  This is not recommended.");
     
 
   if ( dcfg != NULL && dspd_dict_find_value(dcfg, "modules", &value) != 0 )
     {
-      dspd_dctx.modules_dir = strdup(value);
+      ctx->modules_dir = strdup(value);
     } else
     {
       p = realpath(argv[0], tmp);
@@ -1222,8 +1222,8 @@ int dspd_daemon_init(int argc, char **argv)
 	      if ( p != NULL )
 		{
 		  strcpy(p, "/lib"LIBSUFFIX"/dspd");
-		  dspd_dctx.modules_dir = strdup(tmp);
-		  if ( ! dspd_dctx.modules_dir )
+		  ctx->modules_dir = strdup(tmp);
+		  if ( ! ctx->modules_dir )
 		    {
 		      ret = -ENOMEM;
 		      goto out;
@@ -1233,11 +1233,11 @@ int dspd_daemon_init(int argc, char **argv)
 	}
     }
   
-  DSPD_ASSERT(dspd_dctx.modules_dir != NULL);
-  if ( ! dspd_dict_find_section(dspd_dctx.config, "MODULES") )
+  DSPD_ASSERT(ctx->modules_dir != NULL);
+  if ( ! dspd_dict_find_section(ctx->config, "MODULES") )
     {
       struct dspd_dict *curr;
-      for ( curr = dspd_dctx.config; curr; curr = curr->next )
+      for ( curr = ctx->config; curr; curr = curr->next )
 	{
 	  if ( curr->next == NULL )
 	    {
@@ -1255,31 +1255,31 @@ int dspd_daemon_init(int argc, char **argv)
     half of maximum priority and device io threads have higher priority than
     other threads that are in the hot path between the client and io thread.
   */
-  if ( dspd_dctx.rtio_priority == -1 )
+  if ( ctx->rtio_priority == -1 )
     {
-      mnf = sched_get_priority_min(dspd_dctx.rtio_policy);
-      mxf = sched_get_priority_max(dspd_dctx.rtio_policy);
+      mnf = sched_get_priority_min(ctx->rtio_policy);
+      mxf = sched_get_priority_max(ctx->rtio_policy);
       if ( mnf < 0 || mxf < 0 )
 	{
-
+	  ret = -EINVAL;
 	  goto out;
 	}
       pf = mxf - mnf;
       if ( pf > 1 )
 	pf /= 2;
       pf += mnf;
-      dspd_dctx.rtio_priority = pf;
+      ctx->rtio_priority = pf;
     } else
     {
-      mxf = sched_get_priority_max(dspd_dctx.rtio_policy);
-      if ( dspd_dctx.rtio_priority > mxf )
-	dspd_dctx.rtio_priority = mxf;
+      mxf = sched_get_priority_max(ctx->rtio_policy);
+      if ( ctx->rtio_priority > mxf )
+	ctx->rtio_priority = mxf;
     }
 
-  if ( dspd_dctx.rtsvc_priority == -1 )
+  if ( ctx->rtsvc_priority == -1 )
     {
-      mnr = sched_get_priority_min(dspd_dctx.rtsvc_policy);
-      mxr = sched_get_priority_max(dspd_dctx.rtsvc_policy);
+      mnr = sched_get_priority_min(ctx->rtsvc_policy);
+      mxr = sched_get_priority_max(ctx->rtsvc_policy);
       if ( mnr < 0 || mxr < 0 )
 	{
 	  ret = errno;
@@ -1293,79 +1293,76 @@ int dspd_daemon_init(int argc, char **argv)
 	    pr /= 2;
 	  pr += mnr;
 	}
-      dspd_dctx.rtsvc_priority = pr;
+      ctx->rtsvc_priority = pr;
     } else 
     {
-      mxr = sched_get_priority_max(dspd_dctx.rtio_policy);
-      if ( dspd_dctx.rtsvc_priority > mxr )
-	dspd_dctx.rtsvc_priority = mxr;
+      mxr = sched_get_priority_max(ctx->rtio_policy);
+      if ( ctx->rtsvc_priority > mxr )
+	ctx->rtsvc_priority = mxr;
     }
 
-  if ( dspd_dctx.glitch_correction == -1 )
-    dspd_dctx.glitch_correction = DSPD_GHCN_OFF;
+  if ( ctx->glitch_correction == -1 )
+    ctx->glitch_correction = DSPD_GHCN_OFF;
 
 
   dspd_log(0, "Set scheduler (policy,priority): rtio=(%d,%d) rtsvc=(%d,%d)",
-	   dspd_dctx.rtio_policy, dspd_dctx.rtio_priority,
-	   dspd_dctx.rtsvc_policy, dspd_dctx.rtsvc_priority);
-  dspd_log(0, "Glitch correction policy is %d", dspd_dctx.glitch_correction);
+	   ctx->rtio_policy, ctx->rtio_priority,
+	   ctx->rtsvc_policy, ctx->rtsvc_priority);
+  dspd_log(0, "Glitch correction policy is %d", ctx->glitch_correction);
 
   ret = dspd_hotplug_init(&dspd_dctx);
   if ( ret )
     goto out;
-  dspd_dctx.objects = dspd_slist_new(DSPD_MAX_OBJECTS);
-  if ( ! dspd_dctx.objects )
+  ctx->objects = dspd_slist_new(DSPD_MAX_OBJECTS);
+  if ( ! ctx->objects )
     {
       ret = -ENOMEM;
       goto out;
     }
-  DSPD_ASSERT(dspd_dctx.objects != NULL);
+  DSPD_ASSERT(ctx->objects != NULL);
   
 
-  dspd_slist_entry_set_used(dspd_dctx.objects, 0, true);
-  dspd_slist_entry_set_pointers(dspd_dctx.objects,
+  dspd_slist_entry_set_used(ctx->objects, 0, true);
+  dspd_slist_entry_set_pointers(ctx->objects,
 			   0,
 			   &dspd_dctx,
 			   NULL,
 			   NULL);
-  dspd_slist_ref(dspd_dctx.objects, 0);
-  dspd_slist_set_ctl(dspd_dctx.objects,
+  dspd_slist_ref(ctx->objects, 0);
+  dspd_slist_set_ctl(ctx->objects,
 		     0,
 		     dspd_daemon_obj_ctl);
-  dspd_dctx.ctl_ops = &daemon_rcb;
-  dspd_dctx.magic = DSPD_OBJ_TYPE_DAEMON_CTX;
+  ctx->ctl_ops = &daemon_rcb;
+  ctx->magic = DSPD_OBJ_TYPE_DAEMON_CTX;
   
  
 
-  /*tmp = malloc(PATH_MAX);
-  if ( ! tmp )
-  goto out;*/
-  if ( dspd_dctx.modules_dir == NULL )
+  if ( ctx->modules_dir == NULL )
     {
       if ( readlink("/proc/self/exe", tmp, PATH_MAX) > 0 &&
 	   (p = strrchr(tmp, '/')))
 	{
 	  *p = 0;
 	  strcat(p, "/../lib"LIBSUFFIX"/dspd");
-	  dspd_dctx.modules_dir = strdup(tmp);
+	  ctx->modules_dir = strdup(tmp);
 	  tmp = NULL;
 	} else
 	{
 	  
 	  if ( sizeof(void*) == 8 )
-	    dspd_dctx.modules_dir = strdup("/usr/lib64/dspd");
+	    ctx->modules_dir = strdup("/usr/lib64/dspd");
 	  else
-	    dspd_dctx.modules_dir = strdup("/usr/lib/dspd");
+	    ctx->modules_dir = strdup("/usr/lib/dspd");
 	}
-      if ( ! dspd_dctx.modules_dir )
+      if ( ! ctx->modules_dir )
 	{
 	  ret = -ENOMEM;
 	  goto out;
 	}
     }
-  dspd_log(0, "Modules directory is '%s'", dspd_dctx.modules_dir);
+  dspd_log(0, "Modules directory is '%s'", ctx->modules_dir);
   
-  ret = dspd_vctrl_list_new(&dspd_dctx.vctrl);
+  ret = dspd_vctrl_list_new(&ctx->vctrl);
   if ( ret < 0 )
     goto out;
 
@@ -1384,12 +1381,59 @@ int dspd_daemon_init(int argc, char **argv)
  out:
   free(tmp);
   free(pwbuf);
-  if ( ret != 0 )
-    {
-      //This is where cleanup should happen.
-      //It isn't implemented yet because the daemon just exits and everything gets cleaned up anyway.
-    }
+  if ( ret < 0 )
+    dspd_daemon_destroy(ctx);
   return ret;
+}
+
+static void shutdown_threads(struct dspd_daemon_ctx *ctx)
+{
+  if ( ctx->rtio_sched )
+    {
+      dspd_sched_abort(ctx->rtio_sched);
+      dspd_sched_trigger(ctx->rtio_sched);
+      dspd_thread_join(&ctx->rtio_thread, NULL);
+    }
+  if ( ctx->main_thread_loop_context )
+    cbpoll_abort(ctx->main_thread_loop_context, true);
+}
+static void free_buffers(struct dspd_daemon_ctx *ctx)
+{
+  struct dspd_ll *cur, *prev;
+  ctx->argv = NULL;
+  free(ctx->path);
+  dspd_slist_delete(ctx->objects); ctx->objects = NULL;
+
+  prev = NULL;
+  for ( cur = ctx->startup_callbacks; cur; cur = cur->next )
+    {
+      free(cur->pointer); cur->pointer = NULL;
+      free(prev);
+      prev = cur;
+    }
+  free(prev);
+  ctx->startup_callbacks = NULL;
+  ctx->ctl_ops = NULL;
+  dspd_dict_free(ctx->args_list); ctx->args_list = NULL;
+  dspd_dict_free(ctx->config); ctx->config = NULL;
+  free(ctx->modules_dir); ctx->modules_dir = NULL;
+  dspd_sglist_delete(ctx->syncgroups); ctx->syncgroups = NULL;
+  free(ctx->user); ctx->user = NULL;
+  dspd_vctrl_list_delete(ctx->vctrl); ctx->vctrl = NULL;
+  cbpoll_destroy(ctx->main_thread_loop_context); ctx->main_thread_loop_context = NULL;
+  dspd_sched_delete(ctx->rtio_sched); ctx->rtio_sched = NULL;
+}
+
+
+void dspd_daemon_destroy(struct dspd_daemon_ctx *ctx)
+{
+  dspd_daemon_hotplug_shutdown(ctx);
+  dspd_daemon_hotplug_remove(NULL, NULL);
+  shutdown_threads(ctx);
+  dspd_module_list_delete(ctx->modules);
+  ctx->modules = NULL;
+  ctx->aio_handler_ctx = NULL;
+  free_buffers(ctx);
 }
 
 
@@ -1416,7 +1460,12 @@ int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
   struct dspd_ll *last;
   int ret = 0;
   struct dspd_hotplug_handler *h = NULL, *lh;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
+  if ( dspd_dctx.hotplug.shutdown )
+    {
+      ret = -ESHUTDOWN;
+      goto out;
+    }
   last = dspd_daemon_hotplug_last(callbacks, arg);
   if ( ! last )
     {
@@ -1444,13 +1493,13 @@ int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
     }
   h->callbacks = callbacks;
   h->arg = arg;
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 
  out:
   ret = -errno;
   free(h);
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
 
@@ -1460,7 +1509,7 @@ int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
   struct dspd_ll *curr;
   struct dspd_hotplug_handler *h;
   int ret = -ENOENT;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   for ( curr = dspd_dctx.hotplug.handlers; curr; curr = curr->next )
     {
       h = curr->pointer;
@@ -1474,7 +1523,7 @@ int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
 	  break;
 	}
     }
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
 
@@ -1483,7 +1532,7 @@ int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits, int32_t *play
   struct dspd_hotplug_devname *dev;
   int32_t ret = -ENOENT, s, pslot = -1, cslot = -1;
   uint64_t p_eid = 0, c_eid = 0;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   if ( playback )
     *playback = -1;
   if ( capture )
@@ -1574,7 +1623,7 @@ int32_t dspd_daemon_ref_by_name(const char *hwname, int32_t sbits, int32_t *play
     }
 
  out:
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
 
@@ -1739,7 +1788,12 @@ int dspd_daemon_hotplug_add(const struct dspd_dict *dict)
   int r, score = -1;
   struct dspd_dict *kvs = NULL, *c, *prev;
   struct dspd_kvpair *p;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
+  if ( dspd_dctx.hotplug.shutdown )
+    {
+      ret = -ESHUTDOWN;
+      goto out;
+    }
   if ( check_duplicates(dict) )
     {
       ret = -EEXIST;
@@ -1808,8 +1862,15 @@ int dspd_daemon_hotplug_add(const struct dspd_dict *dict)
     dspd_hotplug_updatedefault(kvs);
 
  out:
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
+}
+
+void dspd_daemon_hotplug_shutdown(struct dspd_daemon_ctx *ctx)
+{
+  dspd_mutex_lock(&ctx->hotplug.lock);
+  ctx->hotplug.shutdown = true;
+  dspd_mutex_unlock(&ctx->hotplug.lock);
 }
 
 /*
@@ -1827,7 +1888,7 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
   struct dspd_ll *l;
   struct dspd_hotplug_handler *h;
   int r;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   curr = dspd_dctx.hotplug.devices;
   do { 
     for ( ; curr; curr = curr->next )
@@ -1840,6 +1901,9 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
 	  {
 	    if ( check_key(curr, DSPD_HOTPLUG_DEVNAME, name) )
 	      break;
+	  } else if ( dspd_dctx.hotplug.shutdown == true )
+	  {
+	    break;
 	  }
       }
     if ( curr )
@@ -1889,7 +1953,7 @@ int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name)
 
   
   dspd_hotplug_updatedefault(NULL);
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
 
@@ -1898,7 +1962,7 @@ int dspd_hotplug_delete(const struct dspd_dict *dict)
 {
   int ret = -ENOENT;
   struct dspd_dict *curr;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   for ( curr = dspd_dctx.hotplug.devices; curr; curr = curr->next )
     {
       if ( dspd_dict_compare(dict, curr) )
@@ -1914,7 +1978,7 @@ int dspd_hotplug_delete(const struct dspd_dict *dict)
 	  break;
 	}
     }
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   return ret;
 }
 
@@ -2253,7 +2317,11 @@ int dspd_daemon_run(void)
   return ret;
 }
 
-
+void dspd_daemon_abort(struct dspd_daemon_ctx *ctx)
+{
+  if ( ctx->main_thread_loop_context )
+    cbpoll_abort(ctx->main_thread_loop_context, false);
+}
 
   
 int32_t dspd_daemon_ref(uint32_t stream, uint32_t flags)
@@ -2394,7 +2462,7 @@ static int32_t drh_get_defaultdev(struct dspd_rctx         *context,
   int32_t streams = *(int32_t*)inbuf;
   int32_t dev, ret;
   uint64_t fdev;
-  pthread_mutex_lock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   streams &= (DSPD_PCM_SBIT_PLAYBACK|DSPD_PCM_SBIT_CAPTURE);
   if ( streams == DSPD_PCM_SBIT_PLAYBACK )
     {
@@ -2417,7 +2485,7 @@ static int32_t drh_get_defaultdev(struct dspd_rctx         *context,
     {
       dev = -1;
     }
-  pthread_mutex_unlock(&dspd_dctx.hotplug.lock);
+  dspd_mutex_unlock(&dspd_dctx.hotplug.lock);
   if ( streams == 0 && outbufsize == sizeof(fdev) )
     ret = dspd_req_reply_buf(context, 0, &fdev, sizeof(fdev));
   else

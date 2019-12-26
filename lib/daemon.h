@@ -94,7 +94,7 @@ struct dspd_hotplug_devname {
 };
 
 struct dspd_hotplug {
-  pthread_mutex_t     lock;
+  dspd_mutex_t     lock;
   uint32_t            device_count;
   struct dspd_dict *devices;
   struct dspd_ll     *handlers;
@@ -102,7 +102,7 @@ struct dspd_hotplug {
   int32_t                 default_capture;
   struct dspd_hotplug_devname *names;
   struct dspd_dict *playback_search, *capture_search;
-
+  bool shutdown;
 };
 
 struct dspd_startup_callback {
@@ -140,8 +140,6 @@ struct dspd_daemon_ctx {
   int32_t rtsvc_policy;
   int32_t rtsvc_priority;
   int32_t priority;
-  //struct dspd_kvpair default_device;
-  //struct dspd_dict *default_dev_info;
 
   int glitch_correction;
 
@@ -178,8 +176,9 @@ struct dspd_daemon_ctx {
 
 
 extern struct dspd_daemon_ctx dspd_dctx;
-int dspd_daemon_init(int argc, char **argv);
-
+int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv);
+void dspd_daemon_destroy(struct dspd_daemon_ctx *ctx);
+void dspd_daemon_abort(struct dspd_daemon_ctx *ctx);
 int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
 				 void *arg);
 int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
@@ -187,6 +186,7 @@ int dspd_daemon_hotplug_unregister(const struct dspd_hotplug_cb *callbacks,
 uint64_t dspd_daemon_hotplug_event_id(char buf[32UL]);
 int dspd_daemon_hotplug_add(const struct dspd_dict *dict);
 int dspd_daemon_hotplug_remove(const struct dspd_dict *dict, const char *name);
+void dspd_daemon_hotplug_shutdown(struct dspd_daemon_ctx *ctx);
 int dspd_hotplug_delete(const struct dspd_dict *dict);
 int dspd_daemon_get_config(const struct dspd_dict *sect,
 			   struct dspd_drv_params *params);

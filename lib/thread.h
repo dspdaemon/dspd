@@ -11,7 +11,7 @@
   mutex", etc.
 
   Each of these objects is considered uninitialized if zeroed with memset, calloc, etc.
-  It is probably safe to cast pointers to them to pthread objects since the underlying
+  It is safe to cast pointers to them to pthread objects since the underlying
   pthread object is the first member of the struct.  Various dspd_ macros and inlines
   are defined, but accessing the struct directly should be encouraged since this is not
   meant to be a big bloated internal thread API.

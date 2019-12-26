@@ -202,6 +202,7 @@ int32_t cbpoll_init(struct cbpoll_ctx *ctx,
 int32_t cbpoll_set_name(struct cbpoll_ctx *ctx, const char *threadname);
 int32_t cbpoll_start(struct cbpoll_ctx *ctx);
 int32_t cbpoll_run(struct cbpoll_ctx *ctx);
+void cbpoll_abort(struct cbpoll_ctx *ctx, bool wait);
 void cbpoll_destroy(struct cbpoll_ctx *ctx);
 void cbpoll_close_fd(struct cbpoll_ctx *ctx, int index);
 void cbpoll_set_callbacks(struct cbpoll_ctx *ctx,
