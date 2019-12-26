@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/eventfd.h>
 #include <alsa/asoundlib.h>
 #include "../lib/sslib.h"
 #include "../lib/daemon.h"
@@ -100,6 +101,7 @@ struct hotplug_ctx {
   bool fullduplex;
   char *pcmprefix;
   char *ctlprefix;
+  int32_t eventfd; //for aborting the udev thread
 };
 
 
@@ -494,8 +496,11 @@ static bool udev_uevent(struct hotplug_ctx *ctx)
 static void *udev_thread(void *p)
 {
   struct hotplug_ctx *ctx = p;
-  struct pollfd pfd;
+  struct pollfd pfd[2UL];
   int ret;
+  pfd[1].fd = ctx->eventfd;
+  pfd[1].events = POLLIN;
+  pfd[1].revents = 0;
   while ( ! AO_load(&ctx->abort) )
     {
       
@@ -505,25 +510,26 @@ static void *udev_thread(void *p)
 	  if ( ! ctx->connected )
 	    {
 	      if ( ! AO_load(&ctx->abort) )
-		usleep(250000);
+		poll(&pfd[1], 1, 500);
 	      continue;
 	    } else
 	    {
-	      pfd.fd = udev_monitor_get_fd(ctx->mon);
-	      pfd.events = POLLIN;
-	      pfd.revents = 0;
-	      if ( pfd.fd < 0 )
+	      pfd[0].fd = udev_monitor_get_fd(ctx->mon);
+	      pfd[0].events = POLLIN;
+	      pfd[0].revents = 0;
+	      if ( pfd[0].fd < 0 )
 		ctx->disconnect(ctx);
 	    }
 	}
       if ( ctx->connected )
 	{
-	  ret = poll(&pfd, 1, -1);
+	  
+	  ret = poll(pfd, 2, -1);
 	 
 	  if ( ret < 0 && errno != EAGAIN && errno != EINTR )
 	    {
 	      ctx->disconnect(ctx);
-	    } else if ( ret > 0 && (pfd.revents & POLLIN) )
+	    } else if ( ret > 0 && (pfd[0].revents & POLLIN) )
 	    {
 	      if ( ! ctx->uevent(ctx) )
 		ctx->disconnect(ctx);
@@ -543,7 +549,7 @@ static struct hotplug_ctx hpctx = {
   .uevent = udev_uevent,
   .connect = udev_connect,
   .disconnect = udev_disconnect,
-  
+  .eventfd = -1,
 };
 static void start_udev_thread(void *arg)
 {
@@ -556,11 +562,16 @@ static int udev_init(struct dspd_daemon_ctx *daemon, void **context)
   struct dspd_dict *cfg;
   char *p;
   hpctx.thread_result = -1;
-
+  hpctx.eventfd = eventfd(0, EFD_CLOEXEC|EFD_NONBLOCK);
+  if ( hpctx.eventfd < 0 )
+    return -errno;
+  
   cfg = dspd_read_config("mod_udev", true);
 
   if ( cfg )
     {
+      
+
       if ( dspd_dict_find_value(cfg, "nousb", &p) )
 	hpctx.nousb = !! atoi(p);
 	
@@ -588,9 +599,11 @@ static int udev_init(struct dspd_daemon_ctx *daemon, void **context)
 
 static void udev_close(struct dspd_daemon_ctx *daemon, void **context)
 {
+  int64_t val = 1LL;
   if ( hpctx.thread_result == 0 )
     {
       AO_store(&hpctx.abort, 1);
+      (void)write(hpctx.eventfd, &val, sizeof(val));
       pthread_join(hpctx.thread, NULL);
     }
 }

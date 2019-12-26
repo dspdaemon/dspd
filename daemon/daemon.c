@@ -72,5 +72,6 @@ int main(int argc, char **argv)
     }
   if ( ret == 0 )
     dspd_daemon_run();
+  dspd_daemon_destroy(&dspd_dctx);
   return ret == 0;
 }
