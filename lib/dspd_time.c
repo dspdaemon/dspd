@@ -592,3 +592,33 @@ int32_t dspd_dtimer_fire(struct dspd_dtimer_event *evt)
 }
 
 
+void dspd_dtimer_remove_tag(struct dspd_dtimer *tmr, uint64_t tag)
+{
+  bool found;
+  struct dspd_dtimer_event *evt;
+  do {
+    found = false;
+    for ( evt = tmr->pending; evt; evt = evt->next )
+      {
+	if ( evt->tag == tag )
+	  {
+	    found = true;
+	    dspd_dtimer_remove(evt);
+	    break;
+	  }
+      }
+  } while ( found );
+
+  do {
+    found = false;
+    for ( evt = tmr->added; evt; evt = evt->next )
+      {
+	if ( evt->tag == tag )
+	  {
+	    found = true;
+	    dspd_dtimer_remove(evt);
+	    break;
+	  }
+      }
+  } while ( found );
+}

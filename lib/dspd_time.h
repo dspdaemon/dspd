@@ -73,6 +73,7 @@ struct dspd_dtimer_event {
   dspd_time_t timeout;   //Time when timer should fire
   dspd_time_t deadline;  //Latest time when timer should fire (set to timeout if not sure)
                          //This is more of a priority than a real deadline.
+  uint64_t    tag;
   struct dspd_dtimer_event *prev, *next;
 };
 
@@ -92,6 +93,7 @@ bool dspd_dtimer_set_time(struct dspd_dtimer *timer, dspd_time_t now);
 int32_t dspd_dtimer_new(struct dspd_dtimer **tmr, dspd_time_t now);
 void dspd_dtimer_delete(struct dspd_dtimer *tmr);
 
+void dspd_dtimer_remove_tag(struct dspd_dtimer *tmr, uint64_t tag);
 
 
 #endif
