@@ -2527,14 +2527,15 @@ static int alsahw_open(const struct dspd_drv_params *params,
   else
     hbuf->channel_map->flags |= DSPD_PCM_SBIT_CAPTURE;
 
-  
 
-  //Close and reopen the device.  This is a workaround for no sound output with kernel 5.2.8 and
-  //alsa-lib 1.1.6.
-  snd_pcm_close(hbuf->handle); hbuf->handle = NULL;
-  ret = snd_pcm_open(&hbuf->handle, params->name, params->stream, SND_PCM_NONBLOCK);
-  if ( ret )
-    goto out;
+  //This seems to fix an issue with kernel version 5.2.8.
+  //There is no sound output unless something opens the device, plays a sound, and closes it.
+  //It is possible to close the handle and open it again for the same results, but this seems 
+  //to work just as well.
+
+  snd_pcm_prepare(hbuf->handle);
+  snd_pcm_reset(hbuf->handle);
+
   ret = snd_pcm_hw_params(hbuf->handle, hwp);
   if ( ret )
     goto out;
