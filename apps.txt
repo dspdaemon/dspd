@@ -25,6 +25,7 @@ d2x-rebirth	     (ALSA)
 d1x-rebirth	     (ALSA)
 ossxmix              (OSS)
 dhewm3		     (ALSA)
+apulse		     (ALSA)
 
 The following applications mostly work:
 

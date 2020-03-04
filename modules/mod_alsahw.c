@@ -1112,7 +1112,7 @@ static int get_min_cfg(snd_pcm_t *handle, snd_pcm_hw_params_t *hwp, struct alsah
   int d;
   memset(cfg, 0, sizeof(*cfg));
   ret = snd_pcm_hw_params_any(handle, hwp);
-  if ( ret )
+  if ( ret < 0 )
     return ret;
 
   //Only support interleaved MMAP for now.
@@ -2260,7 +2260,7 @@ static int alsahw_open(const struct dspd_drv_params *params,
   hbuf->min_dma_bytes = get_min_dma(&mincfg);
 
   ret = snd_pcm_hw_params_any(hbuf->handle, hwp);
-  if ( ret )
+  if ( ret < 0 )
     goto out;
 
 
