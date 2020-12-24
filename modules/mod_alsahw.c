@@ -533,7 +533,7 @@ static int32_t alsahw_pcm_status_intrp(struct alsahw_handle *handle)
      
       //calculate_playback_space(handle);
       handle->xfer += diff;
-      if ( handle->xfer >= (handle->hlatency / 2) )
+      if ( handle->xfer >= (handle->hlatency >> 1U) )
 	return -1;
       
       handle->status.space += diff;
@@ -550,7 +550,7 @@ static int32_t alsahw_pcm_status_intrp(struct alsahw_handle *handle)
       if ( f > handle->params.bufsize )
 	return -1;
       handle->xfer += diff;
-      if ( handle->xfer >= (handle->hlatency / 2) )
+      if ( handle->xfer >= (handle->hlatency >> 1U) )
 	return -1;
 
       handle->status.fill += diff;
