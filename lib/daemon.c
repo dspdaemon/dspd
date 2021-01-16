@@ -890,7 +890,7 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
 {
   int ret = -ENOMEM;
   const size_t tmplen = PATH_MAX+1UL;
-  char *tmp = malloc(tmplen);
+  char *tmp = calloc(1UL, tmplen);
   size_t len;
   ssize_t l;
   char *p, *value;
@@ -1119,7 +1119,7 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
       setrlimit(RLIMIT_RTPRIO, &rl);
     }
 
-  pwbuf = malloc(pwsize);
+  pwbuf = calloc(1UL, pwsize);
   if ( ! pwbuf )
     {
       ret = -errno;
@@ -1463,7 +1463,7 @@ int dspd_daemon_hotplug_register(const struct dspd_hotplug_cb *callbacks,
   dspd_mutex_lock(&dspd_dctx.hotplug.lock);
   if ( dspd_dctx.hotplug.shutdown )
     {
-      ret = -ESHUTDOWN;
+      errno = ESHUTDOWN;
       goto out;
     }
   last = dspd_daemon_hotplug_last(callbacks, arg);

@@ -1101,7 +1101,7 @@ int32_t dspd_ctlcli_new(struct dspd_ctl_client **cli,
 {
   struct dspd_ctl_client *c;
   int32_t ret;
-  c = malloc(dspd_ctlcli_sizeof());
+  c = calloc(1UL, dspd_ctlcli_sizeof());
   if ( c )
     {
       ret = dspd_ctlcli_init(c, max_io_hint, max_elem_hint);

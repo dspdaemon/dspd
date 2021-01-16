@@ -140,7 +140,7 @@ int32_t dspd_vctrl_list_new(struct dspd_vctrl_list **list)
 {
   struct dspd_vctrl_list *l;
   int32_t ret;
-  l = malloc(sizeof(*l));
+  l = calloc(1UL, sizeof(*l));
   if ( l )
     {
       ret = vctrl_init(l);

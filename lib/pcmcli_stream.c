@@ -193,7 +193,7 @@ void dspd_pcmcli_stream_destroy(struct dspd_pcmcli_stream *stream)
 
 int32_t dspd_pcmcli_stream_new(struct dspd_pcmcli_stream **stream, int32_t sbit)
 {
-  struct dspd_pcmcli_stream *c = malloc(sizeof(struct dspd_pcmcli_stream));
+  struct dspd_pcmcli_stream *c = calloc(1UL, sizeof(struct dspd_pcmcli_stream));
   int32_t ret = -ENOMEM;
   if ( c )
     {

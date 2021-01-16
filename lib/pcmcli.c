@@ -2019,7 +2019,7 @@ int32_t dspd_pcmcli_new(struct dspd_pcmcli **client, int32_t streams, int32_t fl
 {
   struct dspd_pcmcli *c;
   int32_t ret;
-  c = malloc(sizeof(*c));
+  c = calloc(1UL, sizeof(*c));
   if ( c != NULL )
     {
       ret = dspd_pcmcli_init(c, streams, flags);

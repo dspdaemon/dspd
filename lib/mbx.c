@@ -92,7 +92,7 @@ int dspd_mbx_new(struct dspd_mbx_header **mbx,
     s = dspd_mbx_bufsize(blocksize);
   else
     s = 0;
-  hdr = malloc(sizeof(*hdr)+s);
+  hdr = calloc(1UL, sizeof(*hdr)+s);
   if ( ! hdr )
     {
       err = -errno;

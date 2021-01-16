@@ -333,7 +333,7 @@ int dspd_fifo_new(struct dspd_fifo_header **fifo,
     s = dspd_fifo_bufsize(nmemb, size);
   else
     s = 0;
-  a = malloc(sizeof(*hdr)+s);
+  a = calloc(1UL, sizeof(*hdr)+s);
   if ( ! a )
     {
       err = -errno;

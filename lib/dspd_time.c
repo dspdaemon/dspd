@@ -150,7 +150,7 @@ int dspd_timer_new(struct dspd_timer **tmr)
 {
   int ret;
   DSPD_ASSERT(tmr);
-  *tmr = malloc(sizeof(struct dspd_timer));
+  *tmr = calloc(1UL, sizeof(struct dspd_timer));
   if ( ! *tmr )
     return -errno;
   ret = dspd_timer_init(*tmr);
@@ -585,7 +585,7 @@ int32_t dspd_dtimer_fire(struct dspd_dtimer_event *evt)
     {
       t = evt->timer;
       dspd_dtimer_remove(evt);
-      evt->timeout = evt->timer->now;
+      evt->timeout = t->now;
       dspd_dtimer_insert(t, evt);
     }
   return ret;

@@ -102,7 +102,7 @@ int dspd_load_modules(struct dspd_module_list **l,
   ret = dspd_module_list_new(&list);
   if ( ret )
     return ret;
-  tmp = malloc(PATH_MAX);
+  tmp = calloc(1UL, PATH_MAX);
   if ( ! tmp )
     {
       ret = -errno;
