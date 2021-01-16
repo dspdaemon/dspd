@@ -1,0 +1,5 @@
+KERNEL=="fuse", MODE="0666"
+KERNEL=="dsp*", MODE="0666"
+KERNEL=="cuse", MODE="0666"
+KERNEL=="mixer0", MODE="0666", SYMLINK+="mixer"
+KERNEL=="mixer*", MODE="0666"

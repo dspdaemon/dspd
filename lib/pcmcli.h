@@ -1,7 +1,10 @@
 #ifndef _DSPD_PCMCLI_H_
 #define _DSPD_PCMCLI_H_
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include "sslib.h"
