@@ -39,6 +39,7 @@ bool parse_dspd_args(char *str, struct dspd_sndio_params *params)
 	  switch(i)
 	    {
 	    case 0:
+	      free((void*)params->server_addr);
 	      params->server_addr = strdup(tok);
 	      if ( ! params->server_addr )
 		{
@@ -96,6 +97,7 @@ int main(int argc, char *argv[])
 	      ret = 1;
 	      goto out;
 	    }
+	  free((void*)params.net_addrs);
 	  params.net_addrs = strdup(optarg);
 	  break;
 	case 'D': //DSPD opts (server addr, disable unix, sys_server)

@@ -90,7 +90,7 @@ ssize_t socksrv_eq_realloc(struct socksrv_ctl_eq *eq, size_t min_events, size_t 
 	max_events = 2;
       if ( min_events < 2 )
 	min_events = 2;
-      ev = malloc(sizeof(*ev) * new_size);
+      ev = calloc(new_size, sizeof(*ev));
       if ( ev )
 	{
 	  for ( i = 0; i < len; i++ )

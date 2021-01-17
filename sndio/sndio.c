@@ -431,7 +431,7 @@ static struct cbpoll_client_hdr *client_create(struct cbpoll_ctx *ctx, struct cb
       if ( cli->pcm == NULL ||
 	   cbpoll_aio_new(srv->cbpoll, &cli->aio, NULL, cli->server->daemon, client_shutdown_cb, cli) < 0 )
 	{
-	  client_async_destructor(ctx, hdr);
+	  client_async_destructor(ctx, &cli->header);
 	  cli = NULL;
 	}
     }

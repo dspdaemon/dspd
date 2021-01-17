@@ -1182,8 +1182,11 @@ static int get_min_dma(struct alsahw_mcfg *cfg)
 static void destroy_ctl(struct alsahw_handle *hdl)
 {
   size_t i;
-  for ( i = 0; i < hdl->elements_count; i++ )
-    free(hdl->elements[i].sid);
+  if ( hdl->elements )
+    {
+      for ( i = 0; i < hdl->elements_count; i++ )
+	free(hdl->elements[i].sid);
+    }
   free(hdl->elements);
   hdl->elements = NULL;
   hdl->elements_count = 0;
@@ -2661,28 +2664,31 @@ static struct alsahw_mix_elem *get_alsahw_mix_elem(struct alsahw_handle *hdl, sn
   size_t i;
   const char *n1, *n2;
   struct alsahw_mix_elem *e;
-  for ( i = 0; i < hdl->elements_count; i++ )
+  if ( hdl->elements )
     {
-      e = &hdl->elements[i];
-      //Pointer values are the same.  This is most likely the correct one.
-      if ( e->elem == elem )
+      for ( i = 0; i < hdl->elements_count; i++ )
 	{
-	  if ( snd_mixer_selem_id_get_index(e->sid) == snd_mixer_selem_get_index(elem) )
+	  e = &hdl->elements[i];
+	  //Pointer values are the same.  This is most likely the correct one.
+	  if ( e->elem == elem )
 	    {
-	      n1 = snd_mixer_selem_id_get_name(e->sid);
-	      n2 = snd_mixer_selem_get_name(elem);
-	      if ( n1 && n2 && strcmp(n1, n2) == 0 )
-		return &hdl->elements[i];
+	      if ( snd_mixer_selem_id_get_index(e->sid) == snd_mixer_selem_get_index(elem) )
+		{
+		  n1 = snd_mixer_selem_id_get_name(e->sid);
+		  n2 = snd_mixer_selem_get_name(elem);
+		  if ( n1 && n2 && strcmp(n1, n2) == 0 )
+		    return &hdl->elements[i];
+		}
+	      //Probably won't get here but the specs don't make that clear
+	      break;
 	    }
-	  //Probably won't get here but the specs don't make that clear
-	  break;
 	}
-    }
-  //Find it with a memory safe reference
-  for ( i = 0; i < hdl->elements_count; i++ )
-    {
-      if ( snd_mixer_find_selem(hdl->mixer, hdl->elements[i].sid) == elem )
-	return &hdl->elements[i];
+      //Find it with a memory safe reference
+      for ( i = 0; i < hdl->elements_count; i++ )
+	{
+	  if ( snd_mixer_find_selem(hdl->mixer, hdl->elements[i].sid) == elem )
+	    return &hdl->elements[i];
+	}
     }
   return NULL;
 }

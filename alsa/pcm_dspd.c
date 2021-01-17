@@ -1311,6 +1311,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(dspd)
 	      if ( dspd->epollfd < 0 )
 		{
 		  ret = -errno;
+		  assert(ret < 0);
 		  goto out;
 		}
 	    }
