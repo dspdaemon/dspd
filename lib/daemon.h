@@ -172,6 +172,7 @@ struct dspd_daemon_ctx {
   
   struct dspd_scheduler *rtio_sched;
   dspd_thread_t          rtio_thread;
+  bool                   single_io_thread;
 };
 
 

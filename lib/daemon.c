@@ -654,33 +654,6 @@ static int get_gp(const char *value)
   return i;
 }
 
-/*
-static void *dummy(void *p)
-{
-  return NULL;
-}
-static bool is_rt(void)
-{
-  dspd_threadattr_t attr = { .init = 0 };
-  pthread_t thr;
-  int r;
-  //Must have a scheduling policy
-  if ( dspd_dctx.rtio_policy != SCHED_RR && 
-       dspd_dctx.rtio_policy != SCHED_FIFO &&
-       dspd_dctx.rtio_policy != SCHED_ISO &&
-       dspd_dctx.priority >= 0 )
-    return false;
-  //It must actually work
-  if ( dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_RTIO) != 0 )
-    return false;
-  r = pthread_create(&thr, (pthread_attr_t*)&attr, dummy, NULL);
-  if ( r == EPERM )
-    return false;
-  //It probably does work.  Nothing terrible will happen if this is wrong.
-  if ( r == 0 )
-    pthread_join(thr, NULL);
-  return true;
-  }*/
 
 static int set_caps(void)
 {
@@ -689,9 +662,15 @@ static int set_caps(void)
   if ( ! caps )
     return -ENOMEM;
   cap_value_t newcaps[2] = { CAP_SYS_NICE, CAP_IPC_LOCK };
-  cap_set_flag(caps, CAP_PERMITTED, 2, newcaps, CAP_SET);
-  cap_set_proc(caps);
-  prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
+
+  if ( cap_set_flag(caps, CAP_PERMITTED, 2, newcaps, CAP_SET) < 0 )
+    perror("cap_set_flag(CAP_PERMITTED)");
+  if ( cap_set_flag(caps, CAP_INHERITABLE, 2, newcaps, CAP_SET) < 0 )
+    perror("cap_set_flag(CAP_INHERITABLE)");
+  if ( cap_set_proc(caps) < 0 )
+    perror("cap_set_proc");
+  if ( prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) < 0 )
+    perror("prctl(PR_SET_KEEPCAPS)");
   cap_free(caps);
 #endif
   return 0;
@@ -707,13 +686,15 @@ static int reset_caps(void)
 	return -ENOMEM;
       cap_value_t newcaps[2] = { CAP_SYS_NICE, CAP_IPC_LOCK };
       cap_set_flag(caps, CAP_EFFECTIVE, 2, newcaps, CAP_SET);
-      cap_set_proc(caps);
+      if ( cap_set_proc(caps) < 0 )
+	perror("cap_set_proc");
       cap_free(caps);
       prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
     }
 #endif
   return 0;
 }
+
 
 int dspd_daemon_set_thread_nice(int tid, int thread_type)
 {
@@ -819,11 +800,16 @@ bool dspd_daemon_have_sched(int32_t policy)
   return sched_get_priority_max(policy) >= 0;
 }
 
+
+
+
+
 static int32_t start_io_thread(struct dspd_daemon_ctx *ctx)
 {
   int32_t ret = -ENOMEM;
   struct dspd_sched_params sp;
   struct dspd_threadattr attr = { .init = false };
+  
   memset(&sp, 0, sizeof(sp));
   sp.flags = DSPD_SCHED_MASTER | DSPD_SCHED_WORKQ | DSPD_SCHED_SIGBUS | DSPD_SCHED_SIGXCPU;
   if ( dspd_dctx.rtio_policy == SCHED_DEADLINE )
@@ -837,7 +823,9 @@ static int32_t start_io_thread(struct dspd_daemon_ctx *ctx)
   if ( ! ctx->rtio_sched )
     goto out;
 
+  
 
+  
   ret = dspd_daemon_threadattr_init(&attr, sizeof(attr), DSPD_THREADATTR_DETACHED | DSPD_THREADATTR_RTIO);
   if ( ret != 0 )
     {
@@ -849,6 +837,9 @@ static int32_t start_io_thread(struct dspd_daemon_ctx *ctx)
 			   &attr,
 			   dspd_sched_run,
 			   ctx->rtio_sched);
+
+  
+  
   if ( ret != 0 )
     {
       if ( ret == EPERM )
@@ -1085,7 +1076,7 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
       if ( value )
 	single_io_thread = !atoi(value);
     }
-
+  ctx->single_io_thread = single_io_thread;
 
   //The SCHED_DEADLINE and SCHED_ISO policies are safer than SCHED_RR and SCHED_FIFO.
   //If a safe policy is specified and it isn't available then try another safe policy.
@@ -1187,11 +1178,14 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
 	goto out;
       ctx->ipc_mode = m;
     }
+
+ 
   
   if ( (ctx->rtsvc_policy == SCHED_RR ||
 	ctx->rtsvc_policy == SCHED_FIFO ||
 	ctx->rtio_policy == SCHED_RR ||
-	ctx->rtio_policy == SCHED_FIFO) &&
+	ctx->rtio_policy == SCHED_FIFO ||
+	ctx->rtio_policy == SCHED_DEADLINE) &&
        ctx->uid > 0 )
     {
       ret = set_caps();
@@ -1199,6 +1193,8 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
 	goto out;
     }
 
+  
+  
  noconfig:
   if ( dcfg == NULL )
     ctx->ipc_mode = 0666;
@@ -1366,12 +1362,7 @@ int dspd_daemon_init(struct dspd_daemon_ctx *ctx, int argc, char **argv)
   if ( ret < 0 )
     goto out;
 
-  if ( single_io_thread )
-    {
-      ret = start_io_thread(&dspd_dctx);
-      if ( ret < 0 )
-	goto out;
-    }
+  
   
   
 
@@ -2278,6 +2269,8 @@ int dspd_daemon_run(void)
   if ( dspd_dctx.user )
     initgroups(dspd_dctx.user, dspd_dctx.gid);
 
+ 
+  
   if ( dspd_dctx.uid >= 0 )
     {
       if ( setuid(dspd_dctx.uid) < 0 )
@@ -2289,16 +2282,27 @@ int dspd_daemon_run(void)
   if ( dspd_dctx.gid >= 0 )
     setgid(dspd_dctx.gid);
 
-
-
+  
+  
 
   if ( (dspd_dctx.rtsvc_policy == SCHED_RR ||
 	dspd_dctx.rtsvc_policy == SCHED_FIFO ||
 	dspd_dctx.rtio_policy == SCHED_RR ||
-	dspd_dctx.rtio_policy == SCHED_FIFO) &&
+	dspd_dctx.rtio_policy == SCHED_FIFO ||
+	dspd_dctx.rtio_policy == SCHED_DEADLINE) &&
        dspd_dctx.uid > 0 )
     reset_caps();
 
+  
+  if ( dspd_dctx.single_io_thread )
+    {
+      ret = start_io_thread(&dspd_dctx);
+      if ( ret < 0 )
+	{
+	  dspd_log(0, "Could not start io thread");
+	  return ret;
+	}
+    }
   
   dspd_log(0, "Running startup commands...");
   for ( curr = dspd_dctx.startup_callbacks; curr; curr = curr->next )

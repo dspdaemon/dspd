@@ -541,6 +541,9 @@ struct dspd_scheduler *dspd_sched_new(const struct dspd_scheduler_ops *ops,
   sch->maxfds = 2 + params->nfds;
   sch->flags = params->flags;
   sch->latency = UINT64_MAX;
+  if ( sch->flags & DSPD_SCHED_SCHEDDL )
+    sch->sched_policy = SCHED_DEADLINE;
+  
   dspd_ts_clear(&sch->workq_tsval);
   if ( params->thread_name )
     {
@@ -1045,13 +1048,15 @@ void *dspd_sched_run(void *arg)
     }
   if ( sch->flags & DSPD_SCHED_SCHEDDL )
     update_dl_latency(sch, true);
-  
 
-  if ( pthread_getschedparam(pthread_self(), &sch->sched_policy, &sch->sched_param) != 0 )
+  sch->sched_policy = sched_getscheduler(dspd_gettid());
+  if ( sch->sched_policy < 0 )
     {
       sch->sched_policy = SCHED_OTHER;
       sch->sched_param.sched_priority = 0;
     }
+
+
   
   if ( sch->flags & DSPD_SCHED_SIGBUS )
     {
@@ -1469,7 +1474,7 @@ static void update_dl_latency(struct dspd_scheduler *sch, bool idle)
   attr.sched_policy = SCHED_DEADLINE;
   if ( ! idle )
     {
-      l = sch->latency / 4ULL;
+      l = sch->latency >> 2;
       if ( l < 1024 )
 	l = 1024;
       else if ( l > 250000000ULL )
