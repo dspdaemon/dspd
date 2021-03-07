@@ -915,6 +915,7 @@ static int32_t get_playback_status(void     *dev,
   struct dspd_client *cli = client;
   uint32_t len;
   const struct dspd_client_trigger_tstamp *ts;
+  struct dspd_client_trigger_tstamp _ts;
   dspd_time_t start_tstamp = 0; 
   bool start_valid = 0;
   if ( cli->playback.enabled )
@@ -967,7 +968,7 @@ static int32_t get_playback_status(void     *dev,
       
       if ( cli->playback.started == false )
 	{
-	  ts = dspd_mbx_acquire_read(cli->sync_start_tstamp, true);
+	  ts = dspd_mbx_read(cli->sync_start_tstamp, &_ts, sizeof(_ts));
 	  if ( ts )
 	    {
 	      if ( ts->streams & DSPD_PCM_SBIT_PLAYBACK )
@@ -1001,7 +1002,7 @@ static int32_t get_playback_status(void     *dev,
 		{
 		  cli->trigger_state.valid = false;
 		}
-	      dspd_mbx_release_read(cli->sync_start_tstamp, (void*)ts);
+	      //dspd_mbx_release_read(cli->sync_start_tstamp, (void*)ts);
 	    } else
 	    {
 	      cli->trigger_state.valid = false;
@@ -1145,6 +1146,7 @@ static void playback_xfer(void                            *dev,
   uint64_t start_count = cycle->start_count;
   uint32_t client_aptr;
   uint32_t rem;
+  int32_t mbxidx;
   client_hwptr = dspd_fifo_optr(&cli->playback.fifo);
   client_aptr = dspd_fifo_iptr(&cli->playback.fifo);
 
@@ -1232,7 +1234,7 @@ static void playback_xfer(void                            *dev,
 
 
 
-  cs = dspd_mbx_acquire_write(&cli->playback.mbx);
+  cs = dspd_mbx_write_lock(&cli->playback.mbx, &mbxidx);
   if ( cs )
     {
       //The client application pointer moved a certain amount.
@@ -1289,7 +1291,8 @@ static void playback_xfer(void                            *dev,
       
 
       cs->error = status->error;
-      dspd_mbx_release_write(&cli->playback.mbx, cs);
+      
+      dspd_mbx_write_unlock(&cli->playback.mbx, mbxidx);
       cli->playback.last_hw_tstamp = status->tstamp;
     }
 
@@ -1494,7 +1497,7 @@ static int32_t get_capture_status(void     *dev,
   dspd_time_t start_tstamp;
   bool start_valid = false;
   const struct dspd_client_trigger_tstamp *ts;
-  
+  struct dspd_client_trigger_tstamp _ts;
   if ( ! cli->capture.enabled )
     return -EAGAIN;
   if ( dspd_fifo_space(&cli->capture.fifo, &space) != 0 )
@@ -1503,7 +1506,7 @@ static int32_t get_capture_status(void     *dev,
     return -EAGAIN;
   if ( ! cli->capture.started )
     {
-      ts = dspd_mbx_acquire_read(cli->sync_start_tstamp, true);
+      ts = dspd_mbx_read(cli->sync_start_tstamp, &_ts, sizeof(_ts));
       if ( ts )
 	{
 	  if ( ts->streams & DSPD_PCM_SBIT_CAPTURE )
@@ -1537,7 +1540,7 @@ static int32_t get_capture_status(void     *dev,
 	    {
 	      cli->trigger_state.valid = false;
 	    }
-	  dspd_mbx_release_read(cli->sync_start_tstamp, (void*)ts);
+	  //dspd_mbx_release_read(cli->sync_start_tstamp, (void*)ts);
 	} else
 	{
 	  cli->trigger_state.valid = false;
@@ -1643,7 +1646,7 @@ static void capture_xfer(void                            *dev,
   uint32_t client_hwptr, client_aptr;
   bool do_src = cli->capture.params.rate != cli->capture_src.rate;
   uint32_t n, fill, space, total;
-
+  int32_t mbxidx;
   client_hwptr = dspd_fifo_iptr(&cli->capture.fifo);
   client_aptr = dspd_fifo_optr(&cli->capture.fifo);
   fill = client_hwptr - client_aptr;
@@ -1726,7 +1729,7 @@ static void capture_xfer(void                            *dev,
     return;
 
 
-  cs = dspd_mbx_acquire_write(&cli->capture.mbx);
+  cs = dspd_mbx_write_lock(&cli->capture.mbx, &mbxidx);
   if ( cs )
     {
       n = total - space;
@@ -1759,7 +1762,7 @@ static void capture_xfer(void                            *dev,
 	  cs->cycle_length = cycle->remaining;
 	}
       cs->error = status->error;
-      dspd_mbx_release_write(&cli->capture.mbx, cs);
+      dspd_mbx_write_unlock(&cli->capture.mbx, mbxidx);
       cli->capture.last_hw_tstamp = status->tstamp;
     }
   
@@ -2698,6 +2701,7 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
 {
   int32_t ret, old;
   struct dspd_client_trigger_tstamp *ts;
+  int32_t mbxidx;
   if ( ! cli->server_ops )
     return -EBADFD;
   dspd_mutex_lock(&cli->sync_start_lock);
@@ -2708,7 +2712,7 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
 
   old = cli->trigger;
 
-  ts = dspd_mbx_acquire_write(cli->sync_start_tstamp);
+  ts = dspd_mbx_write_lock(cli->sync_start_tstamp, &mbxidx);
 
   if ( ts )
     {
@@ -2721,7 +2725,7 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
       ts->streams = cli->trigger;
       ts->playback_tstamp = cli->playback.trigger_tstamp;
       ts->capture_tstamp = cli->capture.trigger_tstamp;
-      dspd_mbx_release_write(cli->sync_start_tstamp, ts);
+      dspd_mbx_write_unlock(cli->sync_start_tstamp, mbxidx);
     }
 
   ret = cli->server_ops->trigger(cli->server, (uint32_t)cli->index, cli->trigger);
@@ -2763,7 +2767,7 @@ static int32_t client_stop_now(struct dspd_client *cli, uint32_t streams, bool r
 //The "set" arg makes it like SNDCTL_DSP_SETTRIGGER
 static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp, uint32_t streams, dspd_time_t tslist[2], bool set)
 {
-  int32_t ret, old;
+  int32_t ret, old, mbxidx;
   struct dspd_client_trigger_tstamp *ts;
   if ( ! cli->server_ops )
     return -EBADFD;
@@ -2780,7 +2784,7 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
   old = cli->trigger;
 
   
-  ts = dspd_mbx_acquire_write(cli->sync_start_tstamp);
+  ts = dspd_mbx_write_lock(cli->sync_start_tstamp, &mbxidx);
   if ( ts )
     {
       if ( set )
@@ -2795,7 +2799,7 @@ static int32_t client_start_at_time(struct dspd_client *cli, dspd_time_t tstamp,
       ts->streams = cli->trigger;
       ts->playback_tstamp = cli->playback.trigger_tstamp;
       ts->capture_tstamp = cli->capture.trigger_tstamp;
-      dspd_mbx_release_write(cli->sync_start_tstamp, ts);
+      dspd_mbx_write_unlock(cli->sync_start_tstamp, mbxidx);
     }
   if ( cli->trigger != old )
     {
@@ -3058,7 +3062,7 @@ static int32_t client_change_route(struct dspd_rctx *context,
   bool reconnect;
   int32_t device = *(int32_t*)inbuf;
   dspd_time_t tslist[2] = { 0, 0 };
-  int32_t oldroute;
+  int32_t oldroute, mbxidx;
   dspd_slist_entry_wrlock(cli->list, cli->index);
   dspd_slist_entry_srvlock(cli->list, cli->index);
   if ( cli->playback.ready == false || cli->capture.ready == true || cli->device < 0 || cli->route_changed_cb == NULL || cli->mq_fd >= 0 )
@@ -3104,13 +3108,13 @@ static int32_t client_change_route(struct dspd_rctx *context,
 	{
 	  restart = true;
 	  cli->trigger &= ~DSPD_PCM_SBIT_PLAYBACK;
-	  ts = dspd_mbx_acquire_write(cli->sync_start_tstamp);
+	  ts = dspd_mbx_write_lock(cli->sync_start_tstamp, &mbxidx);
 	  if ( ts )
 	    {
 	      ts->streams = cli->trigger;
 	      cli->playback.trigger_tstamp = 0;
 	      ts->playback_tstamp = 0;
-	      dspd_mbx_release_write(cli->sync_start_tstamp, ts);
+	      dspd_mbx_write_unlock(cli->sync_start_tstamp, mbxidx);
 	    }
 	  cli->playback.last_hw = 0;
 	  cli->playback.curr_hw = 0;

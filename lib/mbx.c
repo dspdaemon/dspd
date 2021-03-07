@@ -28,6 +28,70 @@
 #include "mbx.h"
 #include "util.h"
 
+#define SL_BUSY 1U
+
+bool dspd_seqlock32_read_begin(const struct dspd_seqlock32 *lock, uint64_t *context)
+{
+  bool ret = false;
+  uint32_t seq = dspd_load_uint32(&lock->seq);
+  uint32_t ovl;
+  if ( ! (seq & SL_BUSY) )
+    {
+      ovl = dspd_load_uint32(&lock->overflow);
+      if ( dspd_load_uint32(&lock->seq) == seq )
+	{
+	  if ( dspd_load_uint32(&lock->overflow) == ovl )
+	    {
+	      (*context) = ovl;
+	      (*context) <<= 32U;
+	      (*context) |= seq;
+	      ret = true;
+	    }
+	}
+    }
+  return ret;
+}
+
+bool dspd_seqlock32_read_complete(const struct dspd_seqlock32 *lock, uint64_t context)
+{
+  uint64_t ctx;
+  bool ret = dspd_seqlock32_read_begin(lock, &ctx);
+  if ( ret == true )
+    ret = context == ctx;
+  return ret;
+}
+
+void dspd_seqlock32_write_lock(struct dspd_seqlock32 *lock)
+{
+  uint32_t seq = dspd_load_uint32(&lock->seq);
+  seq++;
+  if ( ! (seq & SL_BUSY) )
+    seq++; //the lock might be shared and the other side might have corrupted the memory
+  dspd_store_uint32(&lock->seq, seq);
+}
+
+void dspd_seqlock32_write_unlock(struct dspd_seqlock32 *lock)
+{
+  uint32_t seq = dspd_load_uint32(&lock->seq), o;
+  seq++;
+  if ( seq & SL_BUSY )
+    seq++; //fix corruption
+  if ( seq == 0U )
+    {
+      o = dspd_load_uint32(&lock->overflow);
+      o++;
+      dspd_store_uint32(&lock->overflow, o);
+    }
+  dspd_store_uint32(&lock->seq, seq);
+}
+
+void dspd_seqlock32_init(struct dspd_seqlock32 *lock)
+{
+  dspd_store_uint32(&lock->seq, UINT32_MAX);
+  dspd_store_uint32(&lock->overflow, 0U);
+  dspd_store_uint32(&lock->seq, 0U);
+}
+
 /*
   Calculate the size of a MBX data buffer.
 */
@@ -56,7 +120,7 @@ int dspd_mbx_init(struct dspd_mbx_header *mbx,
   DSPD_ASSERT(mbx->blocksize);
   mbx->flags |= DSPD_MBX_FLAG_INIT;
   for ( i = 0; i < DSPD_MBX_BLOCKS; i++ )
-    dspd_ts_clear(&mbx->data->locks[i].lock);
+    dspd_seqlock32_init(&mbx->data->locks[i]);
   DSPD_ASSERT(mbx->blocksize);
   dspd_mbx_reset(mbx);
   DSPD_ASSERT(mbx->blocksize);
@@ -124,112 +188,64 @@ void dspd_mbx_delete(struct dspd_mbx_header *mbx)
     }
 }
 
-/*
-  Lock mbx for reading.  Return value is address of the memory
-  block.  The lock argument should normally be 1 (true) otherwise
-  the buffer may be overwritten while it is being read.  The reason
-  this option exists is because the writer may need to read its own
-  memory blocks.
-*/
-void *dspd_mbx_acquire_read(struct dspd_mbx_header *mbx, int lock)
-{
-  int32_t idx, i;
-  void *addr = NULL;
-  for ( i = 0; i < DSPD_MBX_BLOCKS; i++ )
-    {
-      idx = dspd_load_uint32((uint32_t*)&mbx->data->index);
-      if ( idx >= 0 )
-	{
-	  idx %= 3; //Prevent out of bounds access
-	  if ( ! lock )
-	    {
-	      addr = &mbx->data->data[mbx->blocksize * idx];
-	    } else if ( dspd_test_and_set(&mbx->data->locks[idx].lock) != DSPD_TS_SET )
-	    {
-	      addr = &mbx->data->data[mbx->blocksize * idx];
-	      break;
-	    }
-	}
-    }
-  return addr;
-}
 
-/*
-  Release read buffer.  The 2nd argument (ptr) is the address
-  returned by dspd_mbx_acquire_read().
-*/
 
-void dspd_mbx_release_read(struct dspd_mbx_header *mbx, void *ptr)
-{
-  uintptr_t idx = ((uintptr_t)ptr - (uintptr_t)mbx->data) / mbx->blocksize;
-  dspd_ts_clear(&mbx->data->locks[idx].lock);
-}
 
 /*
   Lock buffer for writing.
 */
-void *dspd_mbx_acquire_write(struct dspd_mbx_header *mbx)
+void *dspd_mbx_write_lock(struct dspd_mbx_header *mbx, int32_t *idx)
 {
-  int32_t idx, i;
-  void *addr = NULL;
-  idx = (int32_t)dspd_load_uint32((uint32_t*)&mbx->data->index);
-  if ( idx < -1 ) //Prevent reading out of bounds
-    idx = 0;
-  for ( i = 0; i < (DSPD_MBX_BLOCKS*2); i++ )
-    {
-      idx++; 
-      idx %= DSPD_MBX_BLOCKS;
-
-      //Non-atomic read if possible
-      if ( dspd_ts_read(&mbx->data->locks[idx].lock) != DSPD_TS_SET )
-	{
-	  //Seems ok, so try test and set
-	  if ( dspd_test_and_set(&mbx->data->locks[idx].lock) != DSPD_TS_SET )
-	    {
-	      addr = &mbx->data->data[mbx->blocksize*idx];
-	      break;
-	    }
-	}
-    }
-  return addr;
+  int32_t i;
+  i = (int32_t)dspd_load_uint32((uint32_t*)&mbx->data->index);
+  if ( i < -1 ) //Prevent reading out of bounds
+    i = 0;
+  else
+    i = (unsigned)(i + 1) % DSPD_MBX_BLOCKS;
+  *idx = i;
+  dspd_seqlock32_write_lock(&mbx->data->locks[i]);
+  return &mbx->data->data[i * mbx->blocksize];
 }
 
 /*
   Release buffer locked for writing.
  */
-void dspd_mbx_release_write(struct dspd_mbx_header *mbx, void *ptr)
+void dspd_mbx_write_unlock(struct dspd_mbx_header *mbx, int32_t idx)
 {
-  uintptr_t idx = ((uintptr_t)ptr - (uintptr_t)mbx->data) / mbx->blocksize;
-  dspd_ts_clear(&mbx->data->locks[idx].lock);
+  dspd_seqlock32_write_unlock(&mbx->data->locks[idx]);
   dspd_store_uint32((uint32_t*)&mbx->data->index, (uint32_t)idx);
 }
+
+void *dspd_mbx_read(struct dspd_mbx_header *mbx, void *buf, size_t len)
+{
+  int32_t idx;
+  uint64_t ctx;
+  void *ret = NULL;
+  if ( len > 0UL )
+    {
+      if ( len > mbx->blocksize )
+	len = mbx->blocksize;
+      while ( (idx = dspd_load_uint32((uint32_t*)&mbx->data->index)) >= 0 )
+	{
+	  if ( dspd_seqlock32_read_begin(&mbx->data->locks[idx], &ctx) )
+	    {
+	      memcpy(buf, &mbx->data->data[idx * mbx->blocksize], len);
+	      if ( dspd_seqlock32_read_complete(&mbx->data->locks[idx], ctx) )
+		{
+		  ret = buf;
+		  break;
+		}
+	    }
+	}
+    }
+  return ret;
+}
+
 
 /*
   Mark mbx as having no data available for reading.
 */
 void dspd_mbx_reset(struct dspd_mbx_header *mbx)
 {
-  size_t complete, tries = 0, i;
-  struct dspd_mbx_data *d = mbx->data;
-  void *addr;
-  do {
-    if ( tries > 2 )
-      usleep(1);
-    complete = 1;
-    dspd_store_uint32((uint32_t*)&mbx->data->index, (uint32_t)-1);
-    for ( i = 0; i < DSPD_MBX_BLOCKS; i++ )
-      {
-	
-	if ( dspd_test_and_set(&d->locks[i].lock) != DSPD_TS_SET )
-	  {
-	    addr = &mbx->data->data[mbx->blocksize*i];
-	    memset(addr, 0, mbx->blocksize);
-	    dspd_ts_clear(&d->locks[i].lock);
-	  } else
-	  {
-	    complete = 0;
-	    tries++;
-	  }
-      }
-  } while ( complete == 0 );
+  dspd_store_uint32((uint32_t*)&mbx->data->index, (uint32_t)-1);
 }

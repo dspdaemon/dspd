@@ -266,7 +266,7 @@ int32_t dspd_pcmcli_stream_status(struct dspd_pcmcli_stream *stream,
 				  bool hwsync)
 		    
 {
-  struct dspd_pcm_status *s = NULL;
+  struct dspd_pcm_status *s = NULL, _s;
   int32_t ret = 0;
   uint64_t d = 0;
   uint64_t hw = 0, appl = 0;
@@ -274,11 +274,10 @@ int32_t dspd_pcmcli_stream_status(struct dspd_pcmcli_stream *stream,
     {
       if ( hwsync == true || stream->got_status == false )
 	{
-	  s = dspd_mbx_acquire_read(&stream->mbx, 1);
+	  s = dspd_mbx_read(&stream->mbx, &_s, sizeof(_s));
 	  if ( s )
 	    {
 	      memcpy(&stream->status, s, sizeof(*s));
-	      dspd_mbx_release_read(&stream->mbx, s);
 	      ret = s->error;
 	      stream->got_status = true;
 	    }

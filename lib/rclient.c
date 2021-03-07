@@ -1170,7 +1170,7 @@ int32_t dspd_rclient_get_error(struct dspd_rclient *client, int32_t stream)
 static int32_t dspd_rclient_status_ex(struct dspd_rclient *client, int32_t stream, struct dspd_pcmcli_status *status, bool hwsync)
 {
   int32_t ret;
-  struct dspd_pcm_status *s;
+  struct dspd_pcm_status *s, _s;
   struct dspd_client_stream *cs;
   struct dspd_intrp *intrp;
   uint32_t len;
@@ -1196,7 +1196,7 @@ static int32_t dspd_rclient_status_ex(struct dspd_rclient *client, int32_t strea
 	    {
 	      if ( ! hwsync )
 		goto have_status;
-	      s = dspd_mbx_acquire_read(&cs->mbx, 1);
+	      s = dspd_mbx_read(&cs->mbx, &_s, sizeof(_s));
 	      if ( s )
 		{
 		  dspd_intrp_set(intrp, s->tstamp, s->hw_ptr - cs->status.hw_ptr);
@@ -1208,7 +1208,7 @@ static int32_t dspd_rclient_status_ex(struct dspd_rclient *client, int32_t strea
 		  cs->status.space = s->space;
 		  cs->status.delay = s->delay;
 
-		  dspd_mbx_release_read(&cs->mbx, s);
+		  //dspd_mbx_release_read(&cs->mbx, s);
 		have_status:
 		  if ( status )
 		    {
