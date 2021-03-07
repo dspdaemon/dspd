@@ -227,6 +227,7 @@ void *dspd_mbx_read(struct dspd_mbx_header *mbx, void *buf, size_t len)
 	len = mbx->blocksize;
       while ( (idx = dspd_load_uint32((uint32_t*)&mbx->data->index)) >= 0 )
 	{
+	  idx %= DSPD_MBX_BLOCKS;
 	  if ( dspd_seqlock32_read_begin(&mbx->data->locks[idx], &ctx) )
 	    {
 	      memcpy(buf, &mbx->data->data[idx * mbx->blocksize], len);
