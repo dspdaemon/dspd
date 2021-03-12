@@ -3,6 +3,10 @@
 #include <atomic_ops.h>
 #include <stdint.h>
 
+#define dspd_wmb() AO_nop_write()
+#define dspd_rmb() AO_nop_read()
+#define dspd_mb() AO_nop_full()
+
 static inline int8_t dspd_test_bit(const uint8_t *mask, uintptr_t bit)
 {
   uintptr_t i = bit >> 3U;

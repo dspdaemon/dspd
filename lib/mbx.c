@@ -38,8 +38,10 @@ bool dspd_seqlock32_read_begin(const struct dspd_seqlock32 *lock, uint64_t *cont
   if ( ! (seq & SL_BUSY) )
     {
       ovl = dspd_load_uint32(&lock->overflow);
+      dspd_rmb();
       if ( dspd_load_uint32(&lock->seq) == seq )
 	{
+	  dspd_rmb();
 	  if ( dspd_load_uint32(&lock->overflow) == ovl )
 	    {
 	      (*context) = ovl;
@@ -68,11 +70,14 @@ void dspd_seqlock32_write_lock(struct dspd_seqlock32 *lock)
   if ( ! (seq & SL_BUSY) )
     seq++; //the lock might be shared and the other side might have corrupted the memory
   dspd_store_uint32(&lock->seq, seq);
+  dspd_wmb();
 }
 
 void dspd_seqlock32_write_unlock(struct dspd_seqlock32 *lock)
 {
-  uint32_t seq = dspd_load_uint32(&lock->seq), o;
+  uint32_t seq, o;
+  dspd_wmb();
+  seq = dspd_load_uint32(&lock->seq);
   seq++;
   if ( seq & SL_BUSY )
     seq++; //fix corruption
@@ -81,6 +86,7 @@ void dspd_seqlock32_write_unlock(struct dspd_seqlock32 *lock)
       o = dspd_load_uint32(&lock->overflow);
       o++;
       dspd_store_uint32(&lock->overflow, o);
+      dspd_wmb();
     }
   dspd_store_uint32(&lock->seq, seq);
 }
@@ -90,6 +96,7 @@ void dspd_seqlock32_init(struct dspd_seqlock32 *lock)
   dspd_store_uint32(&lock->seq, UINT32_MAX);
   dspd_store_uint32(&lock->overflow, 0U);
   dspd_store_uint32(&lock->seq, 0U);
+  dspd_mb();
 }
 
 /*
